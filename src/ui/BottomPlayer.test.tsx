@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 import { BottomPlayer, formatClock } from './BottomPlayer';
 import { playerStore } from '../state/stores/playerStore';
@@ -57,10 +57,21 @@ describe('<BottomPlayer/>', () => {
   });
 
   it('cycles the playback rate', () => {
+    const onRateChange = vi.fn();
     act(() => playerStore.getState().load(asset, timing));
-    const { getByRole } = render(<BottomPlayer />);
+    const { getByRole } = render(<BottomPlayer onRateChange={onRateChange} />);
     fireEvent.click(getByRole('button', { name: /再生速度/ }));
     expect(playerStore.getState().rate).not.toBe(1);
+    expect(onRateChange).toHaveBeenCalledWith(playerStore.getState().rate);
+  });
+
+  it('cycles the reading voice through the voice-switch control', () => {
+    const onVoiceChange = vi.fn();
+    act(() => playerStore.getState().load(asset, timing));
+    const { getByRole } = render(<BottomPlayer onVoiceChange={onVoiceChange} />);
+    fireEvent.click(getByRole('button', { name: /声を切り替え/ }));
+    expect(playerStore.getState().voiceId).toBe('Joanna');
+    expect(onVoiceChange).toHaveBeenCalledWith('Joanna');
   });
 
   it('degrades to an audio-preparing label while loading', () => {

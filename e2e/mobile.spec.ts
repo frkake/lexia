@@ -31,6 +31,7 @@ test.describe('mobile reading (iPhone / Safari engine)', () => {
 
     // Mobile header affordances (back + compact meta).
     await expect(page.getByRole('button', { name: '戻る' })).toBeVisible();
+    await expect(page.locator('.reading-layout')).toHaveCSS('flex-direction', 'column');
   });
 
   test('follow-along highlight tracks the playhead on WebKit', async ({ page }) => {

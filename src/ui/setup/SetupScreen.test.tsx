@@ -15,14 +15,14 @@ function renderScreen(props: Parameters<typeof SetupScreen>[0] = {}) {
 }
 
 describe('setupMissing()', () => {
-  it('reports both level and target words when neither is set', () => {
+  it('reports only the level when no setup choice is made', () => {
     const missing = setupMissing(undefined, []);
     expect(missing).toContain('レベル');
-    expect(missing.some((m) => m.includes('対象単語'))).toBe(true);
+    expect(missing.some((m) => m.includes('対象単語'))).toBe(false);
   });
 
-  it('reports nothing when level and at least one target word are present', () => {
-    expect(setupMissing('B2', ['mitigate'])).toEqual([]);
+  it('allows generation without target words once a level is selected', () => {
+    expect(setupMissing('B2', [])).toEqual([]);
   });
 });
 
@@ -35,14 +35,24 @@ describe('<SetupScreen/>', () => {
     expect(getByTestId('target-concede')).toBeTruthy();
   });
 
-  it('blocks generation and notifies missing requirements when unmet (2.7)', () => {
+  it('blocks generation and notifies the missing level when unmet (2.7)', () => {
     const onGenerate = vi.fn();
     const { getByText, getByRole } = renderScreen({ candidates: [], onGenerate });
     fireEvent.click(getByText('文章を生成する'));
     expect(onGenerate).not.toHaveBeenCalled();
     const alert = getByRole('alert');
     expect(alert.textContent).toContain('レベル');
-    expect(alert.textContent).toContain('対象単語');
+    expect(alert.textContent).not.toContain('対象単語');
+  });
+
+  it('emits a valid SetupConfig even when no target words are selected', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({ candidates: [], onGenerate });
+    fireEvent.click(getByTestId('level-B1'));
+    fireEvent.click(getByText('文章を生成する'));
+
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+    expect(onGenerate.mock.calls[0]![0].targetWordIds).toEqual([]);
   });
 
   it('emits a SetupConfig reflecting the selections when valid (2.3/2.6)', () => {
@@ -94,5 +104,16 @@ describe('<SetupScreen/>', () => {
 
     const cfg = onGenerate.mock.calls[0]![0];
     expect(cfg.targetWordIds).toContain('nuance');
+  });
+
+  it('shows generation progress and service errors', () => {
+    const { getByRole, getByText } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { level: 'B2' },
+      generating: true,
+      generationError: '生成サービスに接続できませんでした。',
+    });
+    expect(getByRole('button', { name: '生成しています…' }).getAttribute('aria-busy')).toBe('true');
+    expect(getByText('生成サービスに接続できませんでした。')).toBeTruthy();
   });
 });

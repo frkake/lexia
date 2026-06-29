@@ -43,9 +43,11 @@ export interface ReadingScreenProps {
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
   /** Reading-time recognition: a word tap is a lookup (RecallEventService, task 10.2). */
   onLookup?: (wordId: string) => void;
+  /** Reading-time recognition: learner finished the passage without looking up the rest. */
+  onCompleteReading?: () => void;
 }
 
-export function ReadingScreen({ passage, rail, renderWordDetail, onLookup }: ReadingScreenProps) {
+export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCompleteReading }: ReadingScreenProps) {
   const navigate = useNavigate();
   const sessionPassage = useSessionStore((s) => s.passage);
   const activeWordId = useSessionStore((s) => s.activeWordId);
@@ -113,13 +115,13 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup }: Rea
       </div>
 
       <div className="reading-layout" style={{ display: 'flex', background: colors.surfacePage }}>
-        <div style={{ flex: 1.9, minWidth: 0, padding: '46px 60px 40px', display: 'flex', justifyContent: 'center' }}>
+        <div className="reading-main" style={{ flex: 1.9, minWidth: 0, padding: '46px 60px 40px', display: 'flex', justifyContent: 'center' }}>
           <div style={{ maxWidth: 600, width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div className="reading-toolbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, letterSpacing: '.06em', color: colors.faint }}>
                 {metaLine}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div className="reading-toolbar-controls" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                 <TranslationModeToggle />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} aria-label="文字サイズ">
                   <button type="button" aria-label="文字を小さく" onClick={() => stepFont(-1)} style={sizeButtonStyle}>
@@ -132,12 +134,12 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup }: Rea
               </div>
             </div>
 
-            <h1 style={{ fontFamily: fonts.serifJp, fontSize: 34, fontWeight: 600, color: colors.ink, lineHeight: 1.25, margin: '0 0 24px' }}>
+            <h1 className="reading-title" style={{ fontFamily: fonts.serifJp, fontSize: 34, fontWeight: 600, color: colors.ink, lineHeight: 1.25, margin: '0 0 24px' }}>
               {meta.title}
             </h1>
 
             <figure style={{ margin: '0 0 30px' }}>
-              <div style={illustrationStyle}>
+              <div className="reading-illustration" style={illustrationStyle}>
                 <span style={{ fontFamily: fonts.mono, fontSize: 11, letterSpacing: '.05em', color: colors.faint2 }}>
                   物語のイラスト · story illustration
                 </span>
@@ -158,6 +160,14 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup }: Rea
             />
 
             <Legend />
+
+            {onCompleteReading ? (
+              <div style={{ marginTop: 22, display: 'flex', justifyContent: 'flex-end' }}>
+                <button type="button" data-testid="reading-complete" onClick={onCompleteReading} style={completeButtonStyle}>
+                  読了として記録
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -179,12 +189,23 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup }: Rea
 }
 
 const mobileHeaderStyle: React.CSSProperties = {
-  display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '6px 18px 12px',
   borderBottom: `1px solid ${colors.borderCard}`,
   background: colors.surfaceCard,
+};
+
+const completeButtonStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '9px 16px',
+  cursor: 'pointer',
 };
 
 const backButtonStyle: React.CSSProperties = {

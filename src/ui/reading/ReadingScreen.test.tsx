@@ -98,6 +98,13 @@ describe('<ReadingScreen/>', () => {
     expect(getByTestId('study-word-restless')).toBeTruthy();
   });
 
+  it('offers a completion action when read-through persistence is wired', () => {
+    const onCompleteReading = vi.fn();
+    const { getByTestId } = renderScreen({ passage: makePassage(), onCompleteReading });
+    fireEvent.click(getByTestId('reading-complete'));
+    expect(onCompleteReading).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to the in-progress session passage when none is passed', () => {
     act(() => sessionStore.getState().startPassage(makePassage(), 1_000));
     const { getByText } = renderScreen();

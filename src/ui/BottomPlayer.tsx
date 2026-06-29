@@ -10,6 +10,7 @@ import { colors, fonts, radius, shadow } from './theme/tokens';
 import { usePlayerStore, playerStore } from '../state/stores/playerStore';
 
 const RATES = [1, 1.25, 1.5, 0.75] as const;
+const VOICES = ['Joanna', 'Matthew', 'Amy'] as const;
 
 /** Format an elapsed/total millisecond count as `m:ss`. */
 export function formatClock(ms: number): string {
@@ -22,6 +23,8 @@ export function formatClock(ms: number): string {
 export interface BottomPlayerProps {
   /** Surface of the word currently under the playhead (resolved by the reading wiring). */
   nowReading?: string;
+  onRateChange?: (rate: number) => void;
+  onVoiceChange?: (voiceId: string) => void;
 }
 
 const chip = (active = false): React.CSSProperties => ({
@@ -36,7 +39,7 @@ const chip = (active = false): React.CSSProperties => ({
   cursor: 'pointer',
 });
 
-export function BottomPlayer({ nowReading }: BottomPlayerProps) {
+export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: BottomPlayerProps) {
   const status = usePlayerStore((s) => s.status);
   const playing = usePlayerStore((s) => s.playing);
   const rate = usePlayerStore((s) => s.rate);
@@ -56,6 +59,15 @@ export function BottomPlayer({ nowReading }: BottomPlayerProps) {
     const i = RATES.indexOf(rate as (typeof RATES)[number]);
     const next = RATES[(i + 1) % RATES.length] ?? 1;
     playerStore.getState().setRate(next);
+    onRateChange?.(next);
+  };
+
+  const cycleVoice = (): void => {
+    const current = voiceId || VOICES[0];
+    const i = VOICES.indexOf(current as (typeof VOICES)[number]);
+    const next = VOICES[(i + 1) % VOICES.length] ?? VOICES[0];
+    playerStore.getState().setVoice(next);
+    onVoiceChange?.(next);
   };
 
   return (
@@ -91,7 +103,7 @@ export function BottomPlayer({ nowReading }: BottomPlayerProps) {
         {playing ? '❚❚' : '▶'}
       </button>
 
-      <div style={{ flex: 'none', width: 186 }}>
+      <div className="bottom-player-label" style={{ flex: 'none', width: 186 }}>
         <div style={{ fontFamily: fonts.ui, fontSize: 13, fontWeight: 600, color: colors.ink }}>
           {label} <span style={{ color: colors.faint, fontWeight: 400 }}>· Listen</span>
         </div>
@@ -105,7 +117,7 @@ export function BottomPlayer({ nowReading }: BottomPlayerProps) {
         ) : null}
       </div>
 
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+      <div className="bottom-player-seek" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
         <span style={{ fontFamily: fonts.num, fontSize: 12, color: colors.muted, flex: 'none' }}>
           {formatClock(positionMs)}
         </span>
@@ -123,11 +135,13 @@ export function BottomPlayer({ nowReading }: BottomPlayerProps) {
         </span>
       </div>
 
-      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="bottom-player-controls" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
         <button type="button" aria-label={`再生速度 ${rate}倍`} onClick={cycleRate} style={chip()}>
           {rate.toFixed(rate % 1 === 0 ? 1 : 2)}×
         </button>
-        <span style={chip()}>声: {voiceId || 'Emma'}</span>
+        <button type="button" aria-label={`声を切り替え 現在 ${voiceId || VOICES[0]}`} onClick={cycleVoice} style={chip()}>
+          声: {voiceId || VOICES[0]}
+        </button>
         <span style={chip(true)}>✓ 追従ハイライト</span>
       </div>
     </div>

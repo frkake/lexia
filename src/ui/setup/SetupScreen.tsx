@@ -2,7 +2,7 @@
  * L4 — SetupScreen (design.md "SetupScreen", 2.1–2.7; Setup frame). Lets the learner
  * pick a CEFR level (single), themes (multi), the new-word ratio and passage length, and
  * curate the auto-selected target words (exclude a candidate, add a manual one). The
- * required conditions — a level and ≥1 target word — gate generation: when unmet the
+ * required condition — a selected level — gates generation: when unmet the
  * screen surfaces the missing items instead of generating (2.7); when met it emits the
  * assembled SetupConfig via `onGenerate` (the wiring layer hands it to SessionPlanner).
  * Presentational: candidates are injected (SessionPlanner.selectCandidates) and the
@@ -25,6 +25,8 @@ export interface SetupScreenProps {
   initial?: Partial<SetupConfig>;
   /** Receives the assembled config once required conditions are met. */
   onGenerate?: (setup: SetupConfig) => void;
+  generating?: boolean;
+  generationError?: string | null;
 }
 
 const LEVELS: { level: Cefr; toeic: string }[] = [
@@ -43,15 +45,15 @@ const LENGTHS: { value: SetupConfig['length']; label: string }[] = [
   { value: 'long', label: '長 · 約400語' },
 ];
 
-/** Which required conditions (level, ≥1 target word) are still unmet (2.7). */
+/** Which required conditions are still unmet (2.7). Target words are optional. */
 export function setupMissing(level: Cefr | undefined, targetWordIds: string[]): string[] {
   const missing: string[] = [];
   if (!level) missing.push('レベル');
-  if (targetWordIds.length === 0) missing.push('対象単語（1語以上）');
+  void targetWordIds;
   return missing;
 }
 
-export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScreenProps) {
+export function SetupScreen({ candidates = [], initial, onGenerate, generating = false, generationError = null }: SetupScreenProps) {
   const candidateIds = useMemo(() => new Set(candidates.map((c) => c.wordId)), [candidates]);
 
   const [level, setLevel] = useState<Cefr | undefined>(initial?.level);
@@ -110,8 +112,8 @@ export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScree
   };
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', background: colors.surfacePage, padding: '40px 24px' }}>
-      <div style={cardStyle}>
+    <div className="setup-page" style={{ display: 'flex', justifyContent: 'center', background: colors.surfacePage, padding: '40px 24px' }}>
+      <div className="setup-card" style={cardStyle}>
         <div style={{ padding: '34px 40px 30px' }}>
           <h1 style={{ fontFamily: fonts.serifJp, fontSize: 27, fontWeight: 500, color: colors.ink, margin: 0 }}>
             学習をはじめる
@@ -125,7 +127,7 @@ export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScree
           {/* Level */}
           <section>
             <Label text="レベル" hint="CEFR / TOEIC" />
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div className="setup-levels" style={{ display: 'flex', gap: 8 }}>
               {LEVELS.map(({ level: l, toeic }) => {
                 const on = level === l;
                 return (
@@ -172,7 +174,7 @@ export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScree
           </section>
 
           {/* Sliders */}
-          <section style={{ display: 'flex', gap: 30 }}>
+          <section className="setup-sliders" style={{ display: 'flex', gap: 30 }}>
             <div style={{ flex: 1 }}>
               <div style={sliderHeadStyle}>
                 <span style={sliderLabelStyle}>新出単語の割合</span>
@@ -219,7 +221,7 @@ export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScree
           <section>
             <Label text="今回織り込む単語" hint="未学習・苦手から自動選定" mb={5} />
             <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 12 }}>
-              不要な単語はタップで外せます
+              指定しない場合は、選んだレベルとテーマに合わせた文章を生成します
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {candidates.map((c) => {
@@ -276,8 +278,14 @@ export function SetupScreen({ candidates = [], initial, onGenerate }: SetupScree
             </div>
           ) : null}
 
-          <button type="button" onClick={generate} style={generateButtonStyle}>
-            文章を生成する
+          {generationError ? (
+            <div role="alert" style={alertStyle}>
+              {generationError}
+            </div>
+          ) : null}
+
+          <button type="button" onClick={generate} disabled={generating} aria-busy={generating} style={generateButtonStyle(generating)}>
+            {generating ? '生成しています…' : '文章を生成する'}
           </button>
         </div>
       </div>
@@ -378,7 +386,7 @@ const alertStyle: CSSProperties = {
   padding: '11px 14px',
 };
 
-const generateButtonStyle: CSSProperties = {
+const generateButtonStyle = (busy: boolean): CSSProperties => ({
   width: '100%',
   fontFamily: fonts.ui,
   fontSize: 15,
@@ -388,6 +396,7 @@ const generateButtonStyle: CSSProperties = {
   border: 'none',
   borderRadius: radius.card,
   padding: 15,
-  cursor: 'pointer',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.72 : 1,
   marginTop: 6,
-};
+});

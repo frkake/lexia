@@ -19,3 +19,8 @@ export function useContainer(): Container {
   if (!container) throw new Error('useContainer must be used within an AppProvider');
   return container;
 }
+
+/** Access the app container when a component can also run in isolated tests. */
+export function useOptionalContainer(): Container | null {
+  return useContext(AppContext);
+}

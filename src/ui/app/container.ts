@@ -80,6 +80,9 @@ export interface Container {
 export async function createContainer(userId: UserId, seams: ContainerSeams = {}): Promise<Container> {
   const db = seams.db ?? (await openLexiaDb(String(userId)));
   const repos = createRepositories(db);
+  // No mock fallback: when the generation proxy is missing/down the HTTP gateway rejects
+  // with a typed error, which the orchestrator/controller surface to the user (a missing
+  // backend must show an error, not silently serve placeholder content).
   const content = seams.content ?? new HttpContentGateway({ baseUrl: seams.baseUrl });
   // Both adjacent capabilities default to their HTTP seam; when the TTS endpoint is
   // absent the synthesize call rejects and the pipeline degrades (player unavailable).

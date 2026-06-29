@@ -36,6 +36,24 @@ pnpm typecheck        # tsc --noEmit
 pnpm lint             # eslint
 ```
 
+## 生成API（バックエンドプロキシ）
+
+文章生成・単語データは、LLM を保持する薄いサーバプロキシ経由で取得する（クレデンシャルはクライアントに出さない）。
+プロキシは Vite プラグイン（`server/`）として実装され、`pnpm dev` / `pnpm preview` が `/api/*` を提供する。
+
+- プロバイダは `.env` の `LLM_PROVIDER` で選択（`openai`（既定）/ `claude`）。`.env.example` を `.env` にコピーして API キーを設定する。
+  - OpenAI: `OPENAI_API_KEY`（任意で `OPENAI_MODEL`、既定 `gpt-4o`）
+  - Anthropic: `ANTHROPIC_API_KEY`（任意で `ANTHROPIC_MODEL`、既定 `claude-opus-4-8`）
+- 生成APIが未設定・到達不可・エラーのときは**モックにフォールバックせずエラーを返す**。
+  クライアントは「生成サービスに接続できませんでした」等のエラーを表示する。
+- 動作確認（`pnpm dev` 起動後、別ターミナルで最小リクエストを送る）:
+
+```bash
+curl -X POST http://localhost:5173/api/passages:generate \
+  -H 'content-type: application/json' \
+  -d '{"level":"B1","themes":["会議"],"newWordRatio":0.3,"length":"short","targetWords":[]}'
+```
+
 ### ユニット / 統合テスト（Vitest）
 
 ```bash

@@ -18,6 +18,10 @@ test.describe('reading flow (desktop)', () => {
     await expect(page.getByRole('heading', { name: 'A Decisive Agreement' })).toBeVisible();
     // The woven-in new word carries the "new" mastery-density annotation.
     await expect(page.locator('[data-kind="new"]')).toHaveText('decisive');
+    // The compact back/meta header is mobile-only; desktop should not show it.
+    if ((page.viewportSize()?.width ?? 0) > 600) {
+      await expect(page.getByRole('button', { name: '戻る' })).toBeHidden();
+    }
   });
 
   test('selecting a word opens its multi-faceted detail card', async ({ page }) => {
@@ -48,6 +52,13 @@ test.describe('reading flow (desktop)', () => {
     await page.getByRole('button', { name: '全文' }).click();
     await expect(gloss).toBeVisible();
   });
+});
+
+test('Setup can generate a passage without target words when the backend is absent', async ({ page }) => {
+  await page.goto('/setup');
+  await page.getByRole('button', { name: '文章を生成する' }).click();
+  await expect(page).toHaveURL(/\/read$/);
+  await expect(page.getByRole('heading', { name: 'ビジネスの短い読解' })).toBeVisible();
 });
 
 test('the resident audio element survives client-side navigation', async ({ page }) => {
