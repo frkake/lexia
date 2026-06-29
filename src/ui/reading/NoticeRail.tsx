@@ -5,16 +5,19 @@
  */
 
 import { noticeStyle, colors, fonts } from '../theme/tokens';
+import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { IndexedPassage, NoticeCue, SpanRef } from '../../types/domain';
 
-/** Rebuild the surface expression a cue points at from the passage tokens. */
+/**
+ * Rebuild the surface expression a cue points at from the passage tokens, using the SAME canonical
+ * spacing as the body text (PassageRenderer) and the validator — so clitics/punctuation/hyphens
+ * ("doesn't", not "does n't") render identically and the rail expression matches the in-text badge.
+ */
 function expressionFor(passage: IndexedPassage, span: SpanRef): string {
   const sentence = passage.sentences[span.sentenceIndex];
   if (!sentence) return '';
-  return sentence.tokens
-    .slice(span.tokenStart, span.tokenEnd)
-    .map((t) => t.text)
-    .join(' ');
+  const tokens = sentence.tokens.slice(span.tokenStart, span.tokenEnd).map((t) => t.text);
+  return tokenizer.renderText({ tokens, translationJa: '' }).trim();
 }
 
 function NoticeItem({ passage, cue }: { passage: IndexedPassage; cue: NoticeCue }) {

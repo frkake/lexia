@@ -115,6 +115,13 @@ export interface NoticeCue {
   wordId: string;
   /** Key into the supplied WordData attribute that grounds this cue. */
   sourceAttribute: string;
+  /**
+   * The exact expression in the passage this cue is about, copied verbatim from the sentence's
+   * tokens. `span` is RE-DERIVED from this text (not from the model's raw token indices, which it
+   * miscounts), so the in-text badge and the NoticeRail expression always match `explanationJa`.
+   * Invariant (enforced by PassageValidator): the tokens at `span` render exactly `anchorText`.
+   */
+  anchorText: string;
   explanationJa: string;
 }
 
@@ -272,6 +279,26 @@ export interface GenerationRequest {
   newWordRatio: number;
   length: 'short' | 'medium' | 'long';
   targetWords: GenerationTargetWord[];
+  /**
+   * Set by the orchestrator on a repair attempt: human-readable descriptions of the
+   * violations the previous generation hit, fed back into the prompt so the model fixes
+   * them instead of being asked to regenerate blind. Absent on the first attempt.
+   */
+  repairFeedback?: string[];
+}
+
+/**
+ * Asks the proxy to propose new vocabulary (base-form lemmas) to teach when the learner
+ * starts from a level + theme without hand-picking target words. The proposed words are
+ * then fetched as WordData and woven into the passage (and seeded into the SRS).
+ */
+export interface WordSuggestionRequest {
+  level: Cefr;
+  themes: string[];
+  /** How many lemmas to propose. */
+  count: number;
+  /** Lemmas to avoid (already excluded/known); lowercase. */
+  exclude?: string[];
 }
 
 /** Anthropic-style stop reasons relevant to generation gating. */

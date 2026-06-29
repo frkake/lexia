@@ -36,6 +36,9 @@ import type { IndexedPassage, MasteryStage, Rating, SetupConfig, WordData, WordS
 
 const CANDIDATE_LIMIT = 12;
 
+/** How many new words to auto-propose (by passage length) when the learner picks none. */
+const NEW_WORDS_BY_LENGTH: Record<SetupConfig['length'], number> = { short: 4, medium: 6, long: 8 };
+
 function stripCacheNamespace(data: WordData): WordData {
   const copy = { ...data } as WordData & { userId?: unknown };
   delete copy.userId;
@@ -52,6 +55,26 @@ async function loadAndCacheWordData(c: Container, wordId: string): Promise<WordD
     // WordData still powers the current screen; cache persistence is a best-effort fast path.
   }
   return data;
+}
+
+/**
+ * When the learner starts from a level + theme without hand-picking any target words, ask the
+ * proxy to propose new vocabulary to teach (so the passage actually has new words / collocations
+ * to learn). Falls back to the original (empty) selection if suggestion is unavailable or fails.
+ */
+async function resolveTargetWordIds(c: Container, setup: SetupConfig): Promise<string[]> {
+  if (setup.targetWordIds.length > 0 || !c.content.suggestWords) return setup.targetWordIds;
+  try {
+    const suggested = await c.content.suggestWords({
+      level: setup.level,
+      themes: setup.themes,
+      count: NEW_WORDS_BY_LENGTH[setup.length],
+      exclude: setup.excludedWordIds,
+    });
+    return suggested.length > 0 ? suggested : setup.targetWordIds;
+  } catch {
+    return setup.targetWordIds;
+  }
 }
 
 async function loadWordDataMap(c: Container, wordIds: string[]): Promise<Record<string, WordData>> {
@@ -179,7 +202,10 @@ export function SetupRoute() {
     setGenerationError(null);
     c.settings.getState().setLastSetup(setup);
     try {
-      const wordData = await loadWordDataMap(c, setup.targetWordIds);
+      // No hand-picked words → auto-propose new vocabulary to teach for this level + theme.
+      const targetWordIds = await resolveTargetWordIds(c, setup);
+      const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+      const wordData = await loadWordDataMap(c, targetWordIds);
       const outcome = await runGenerationPipeline(
         {
           createOrchestrator: c.createOrchestrator,
@@ -195,7 +221,7 @@ export function SetupRoute() {
           voiceId: voiceId || c.voiceId,
           wordData,
         },
-        setup,
+        effectiveSetup,
         c.userId,
       );
       if (outcome.ok) navigate('/read');

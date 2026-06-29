@@ -11,7 +11,13 @@
  */
 
 import type { ContentGateway } from '../../types/ports';
-import type { GenerationRequest, GenerationResponse, StopReason, WordData } from '../../types/domain';
+import type {
+  GenerationRequest,
+  GenerationResponse,
+  StopReason,
+  WordData,
+  WordSuggestionRequest,
+} from '../../types/domain';
 
 export type ContentGatewayErrorKind =
   | 'bad_request'
@@ -77,6 +83,15 @@ export class HttpContentGateway implements ContentGateway {
 
   getWordData(wordId: string): Promise<WordData> {
     return this.request<WordData>(`/api/words/${encodeURIComponent(wordId)}`, { method: 'GET' });
+  }
+
+  async suggestWords(req: WordSuggestionRequest): Promise<string[]> {
+    const body = await this.request<{ words: string[] }>('/api/words:suggest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return Array.isArray(body.words) ? body.words : [];
   }
 
   /** Issue a request and normalize transport / status failures into ContentGatewayError. */

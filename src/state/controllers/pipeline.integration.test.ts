@@ -47,14 +47,20 @@ const wordData: WordData = {
   core: { meaningsJa: ['取引'], examples: [{ en: 'close a deal', ja: '取引をまとめる' }], collocations: ['close a deal'], synonymNuances: [] },
 };
 
+// A simple 8-word filler sentence, repeated so the passage clears the length gate for `length: 'short'`.
+const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.'];
+
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
-    sentences: [{ tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' }],
+    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 117 },
+    sentences: [
+      { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
+      ...Array.from({ length: 14 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
+    ],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 4, headWordId: 'deal', collocationId: 'close-deal' }],
     noticeCues: [
-      { index: 1, span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, category: 'connotation', wordId: 'deal', sourceAttribute: 'connotation', explanationJa: '前向きな含意。' },
+      { index: 1, span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, category: 'connotation', wordId: 'deal', sourceAttribute: 'connotation', anchorText: 'deal', explanationJa: '前向きな含意。' },
     ],
   };
 }

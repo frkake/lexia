@@ -12,6 +12,7 @@
  */
 
 import type { GenerationRequest } from '../../src/types/domain';
+import { APPROX_WORDS } from '../../src/domain/generation/lengthSpec';
 
 const CEFR = ['A2', 'B1', 'B2', 'C1', 'C2'] as const;
 const NOTICE_CATEGORIES = [
@@ -113,16 +114,58 @@ export const PASSAGE_JSON_SCHEMA = {
           category: { type: 'string', enum: [...NOTICE_CATEGORIES] },
           wordId: { type: 'string' },
           sourceAttribute: { type: 'string' },
+          anchorText: { type: 'string' },
           explanationJa: { type: 'string' },
         },
-        required: ['index', 'span', 'category', 'wordId', 'sourceAttribute', 'explanationJa'],
+        required: ['index', 'span', 'category', 'wordId', 'sourceAttribute', 'anchorText', 'explanationJa'],
       },
     },
   },
   required: ['meta', 'sentences', 'targetSpans', 'collocationSpans', 'noticeCues'],
 } as const;
 
-/** JSON Schema for WordData — a single dictionary card (MORE attributes are optional). */
+/**
+ * JSON Schema for WordData.more — the rich attributes that ground the advanced notice
+ * categories (etymology / semantic_network / grammar_pattern / word_family / common_error).
+ * Strict-mode shape: every property is `required`; optionals are nullable and empties are
+ * pruned server-side (normalizeWordData) so the validator's grounding check stays honest.
+ */
+const WORD_MORE_JSON_SCHEMA = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  properties: {
+    etymology: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        prefix: { type: ['string', 'null'] },
+        root: { type: ['string', 'null'] },
+        suffix: { type: ['string', 'null'] },
+      },
+      required: ['prefix', 'root', 'suffix'],
+    },
+    semanticNetwork: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        synonyms: { type: 'array', items: { type: 'string' } },
+        antonyms: { type: 'array', items: { type: 'string' } },
+        hypernyms: { type: 'array', items: { type: 'string' } },
+        hyponyms: { type: 'array', items: { type: 'string' } },
+        related: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['synonyms', 'antonyms', 'hypernyms', 'hyponyms', 'related'],
+    },
+    wordFamily: { type: 'array', items: { type: 'string' } },
+    idioms: { type: 'array', items: { type: 'string' } },
+    grammarPatterns: { type: 'array', items: { type: 'string' } },
+    metaphor: { type: ['string', 'null'] },
+    commonErrors: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['etymology', 'semanticNetwork', 'wordFamily', 'idioms', 'grammarPatterns', 'metaphor', 'commonErrors'],
+} as const;
+
+/** JSON Schema for WordData — a single dictionary card (rich MORE attributes for notices). */
 export const WORD_DATA_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -153,15 +196,10 @@ export const WORD_DATA_JSON_SCHEMA = {
       },
       required: ['meaningsJa', 'examples', 'collocations', 'synonymNuances'],
     },
+    more: WORD_MORE_JSON_SCHEMA,
   },
-  required: ['wordId', 'headword', 'ipa', 'pos', 'register', 'connotation', 'frequency', 'core'],
+  required: ['wordId', 'headword', 'ipa', 'pos', 'register', 'connotation', 'frequency', 'core', 'more'],
 } as const;
-
-const APPROX_WORDS: Record<GenerationRequest['length'], number> = {
-  short: 120,
-  medium: 250,
-  long: 400,
-};
 
 /** Output-token budget per requested length (generous; passages stay well under). */
 export function maxTokensForLength(length: GenerationRequest['length']): number {
@@ -185,18 +223,46 @@ const PASSAGE_SYSTEM = [
   'Target words: weave each requested target word into the passage. For each occurrence add a',
   'targetSpan whose [tokenStart, tokenEnd) selects exactly the token(s) of that word, surface =',
   'those tokens joined, and surface MUST be an inflection of the requested word (same lemma).',
-  'masteryDensity copies the requested value. Keep overall vocabulary within the CEFR level.',
+  'masteryDensity copies the requested value.',
   '',
-  'Notice cues (optional, only when grounded): a cue may ONLY cite an attribute that was supplied',
-  'for that word, and category must match: connotation->connotation, register->register,',
+  'Constraints (the request fields are hard requirements, not hints — satisfy ALL of them):',
+  '- Theme: set the passage in / about the requested theme(s). The situation, roles, named',
+  '  entities, and domain vocabulary must clearly belong to that theme. Put the primary theme',
+  '  in meta.theme and give a title that fits it. (If no theme is given, pick a coherent one.)',
+  '- Length: the total number of words across all sentences MUST be close to approxWords (aim',
+  '  within ±20%): short≈120 (about 8-12 sentences), medium≈250 (about 16-22 sentences),',
+  '  long≈400 (about 26-34 sentences). Keep writing sentences until you reach that word count —',
+  '  do not stop early. meta.approxWords MUST equal the actual number of words you wrote.',
+  '- Level: keep ALL non-target vocabulary at or below the requested CEFR level; only the listed',
+  '  target words may exceed it. Prefer a simpler synonym over a more advanced word.',
+  '- Target words & ratio: include EVERY requested target word at least once, copying its',
+  '  masteryDensity, so the new/review balance matches newWordRatio.',
+  '',
+  'Collocations: actively REUSE each target word\'s supplied core.collocations in the passage —',
+  'a learner needs to see the word in its natural phrases. For every collocation you weave in, add',
+  'a collocationSpan covering exactly its tokens, with headWordId = that word\'s wordId and',
+  'collocationId = the collocation string taken from core.collocations.',
+  '',
+  'Notice cues: add 3-5 cues that span at least THREE DIFFERENT categories — do NOT make them all',
+  'collocation. Lead with the richer more.* attributes when they are supplied (etymology,',
+  'semantic_network, grammar_pattern, word_family, common_error) and round out with connotation,',
+  'register, synonym_nuance or frequency. A cue may ONLY cite an attribute that was supplied for',
+  'that word, and category must match: connotation->connotation, register->register,',
   'collocation->core.collocations, synonym_nuance->core.synonymNuances, grammar_pattern->',
   'more.grammarPatterns, etymology->more.etymology, semantic_network->more.semanticNetwork,',
-  'word_family->more.wordFamily, common_error->more.commonErrors, frequency->frequency. Omit a',
-  'cue entirely if the attribute is absent. explanationJa is a short Japanese explanation.',
+  'word_family->more.wordFamily, common_error->more.commonErrors, frequency->frequency. Omit a cue',
+  'whose attribute is absent or empty.',
+  'For each cue, set anchorText to the EXACT word or phrase IN THE PASSAGE the note is about —',
+  'copy it VERBATIM from that sentence\'s tokens (usually the target word itself, or a short phrase',
+  'containing it). Do NOT count token indices by hand; the app places the cue\'s badge on anchorText',
+  'and re-derives its position from it, so anchorText MUST appear verbatim in the passage and span',
+  'MUST cover exactly those tokens. explanationJa is a short Japanese explanation of what to notice',
+  'about anchorText.',
   '',
-  'collocationSpans and noticeCues may be empty arrays. When no target words are requested, write',
-  'a coherent passage on the theme and return empty targetSpans/collocationSpans/noticeCues.',
-  'meta.newCount/reviewCount count distinct new/review target words; approxWords ~= total tokens.',
+  'When target words ARE requested, collocationSpans and noticeCues should be NON-empty (use the',
+  'attributes you were given). They may be empty ONLY when no target words are requested — in that',
+  'case write a coherent passage on the theme with empty targetSpans/collocationSpans/noticeCues.',
+  'meta.newCount/reviewCount count distinct new/review target words; approxWords ~= total words.',
 ].join('\n');
 
 /** JSON description of the request the model must satisfy. */
@@ -215,7 +281,18 @@ function passageUser(req: GenerationRequest): string {
     newWordRatio: req.newWordRatio,
     targetWords: targets,
   };
-  return `Generate one PassageOutput JSON for this request:\n${JSON.stringify(request, null, 2)}`;
+  const lines = [
+    'Generate one PassageOutput JSON that satisfies ALL of these constraints:',
+    JSON.stringify(request, null, 2),
+  ];
+  if (req.repairFeedback && req.repairFeedback.length > 0) {
+    lines.push(
+      '',
+      'Your previous attempt was rejected. Fix every problem below and regenerate:',
+      ...req.repairFeedback.map((f) => `- ${f}`),
+    );
+  }
+  return lines.join('\n');
 }
 
 export function buildPassageMessages(req: GenerationRequest): { system: string; user: string } {
@@ -229,11 +306,54 @@ const WORD_SYSTEM = [
   'the word. register is one of formal/neutral/casual/academic/business/slang. connotation is a',
   'short Japanese note. frequency is 1 (rare) to 5 (very common). Provide 1-3 meanings, 1-2',
   'examples, and a few collocations and synonym nuances.',
+  'Also fill "more" as richly as the word allows — these power the in-passage "notice" insights:',
+  '- etymology: prefix/root/suffix when the word has them (else null for that part).',
+  '- semanticNetwork: synonyms, antonyms, hypernyms, hyponyms, related (arrays; [] if none).',
+  '- wordFamily: derived forms / part-of-speech variants (e.g. ["decision","decisive"]).',
+  '- grammarPatterns: typical constructions (e.g. ["depend on N","it depends whether ..."]).',
+  '- commonErrors: mistakes Japanese learners typically make with this word.',
+  '- idioms and metaphor: fixed expressions and a short Japanese note on any metaphorical sense.',
+  'Use [] for arrays and null for scalars/objects that genuinely do not apply — never invent.',
 ].join('\n');
 
 export function buildWordMessages(wordId: string): { system: string; user: string } {
   return {
     system: WORD_SYSTEM,
     user: `Produce the WordData JSON for the English word "${wordId}". Set wordId to "${wordId}".`,
+  };
+}
+
+/** JSON Schema for a vocabulary suggestion reply: a flat list of base-form lemmas. */
+export const WORD_SUGGESTION_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { words: { type: 'array', items: { type: 'string' } } },
+  required: ['words'],
+} as const;
+
+const SUGGEST_SYSTEM = [
+  'You curate vocabulary for a CEFR-graded English reading app whose users are Japanese speakers.',
+  'Given a CEFR level and theme(s), propose distinct English words a learner at that level should',
+  'study next. Choose words that clearly belong to the theme/domain and sit AT or slightly ABOVE',
+  'the given level — useful and worth learning, not trivial function words (the, go, very) and not',
+  'absurdly rare. Each must be a single base-form lemma (no spaces), lowercase. Never include any',
+  'word from the exclude list. Reply with JSON {"words":[...]} only — no prose, no code fences.',
+].join('\n');
+
+export function buildSuggestionMessages(req: {
+  level: string;
+  themes: string[];
+  count: number;
+  exclude?: string[];
+}): { system: string; user: string } {
+  const ask = {
+    level: req.level,
+    themes: req.themes,
+    count: req.count,
+    exclude: req.exclude ?? [],
+  };
+  return {
+    system: SUGGEST_SYSTEM,
+    user: `Propose exactly ${req.count} lemmas for this request:\n${JSON.stringify(ask, null, 2)}`,
   };
 }

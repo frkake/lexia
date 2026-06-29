@@ -21,6 +21,7 @@ function makePassage(): IndexedPassage {
         category: 'connotation',
         wordId: 'restless',
         sourceAttribute: 'connotation',
+        anchorText: 'restless',
         explanationJa: '不安・苛立ちを含む否定的な響き。',
       },
     ],

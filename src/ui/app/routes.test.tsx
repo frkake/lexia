@@ -32,10 +32,16 @@ const wordData: WordData = {
   },
 };
 
+// A simple 8-word filler sentence, repeated so the passage clears the length gate for `length: 'medium'`.
+const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.'];
+
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
-    sentences: [{ tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' }],
+    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 245 },
+    sentences: [
+      { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
+      ...Array.from({ length: 30 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
+    ],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [],
     noticeCues: [],
@@ -108,6 +114,57 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     });
     const log = await createRepositories(db).reviewLog.since(userId, 0);
     expect(log.some((entry) => entry.wordId === 'deal' && entry.source === 'passage')).toBe(true);
+  });
+
+  it('auto-proposes new words when none are selected, weaving + seeding them into the SRS', async () => {
+    const userId = 'route_auto_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    // No seeded scheduling → the Setup screen has no candidates → targetWordIds is empty.
+
+    let suggestCalls = 0;
+    const gateway: ContentGateway = {
+      async suggestWords() {
+        suggestCalls += 1;
+        return ['deal'];
+      },
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    // Fresh settings store → lastSetup stays at the default (level B1, no target words), isolated
+    // from the singleton mutated by the sibling test above.
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    // Level defaults to B1 (lastSetup), so generation is allowed with zero hand-picked words.
+    expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
+    fireEvent.click(screen.getByText('文章を生成する'));
+
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
+    expect(suggestCalls).toBe(1);
+    // The auto-proposed word is woven in AND tracked in the SRS so it can reappear later.
+    await waitFor(async () => {
+      const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
+      expect(seeded).toBeDefined();
+    });
   });
 
   it('enriches the live Review route with WordData and caches it for the wordbook', async () => {

@@ -38,9 +38,9 @@ const READING_OUTPUT: PassageOutput = {
     { sentenceIndex: 2, tokenStart: 2, tokenEnd: 5, headWordId: 'deal', collocationId: 'close-deal' },
   ],
   noticeCues: [
-    { index: 1, span: { sentenceIndex: 0, tokenStart: 4, tokenEnd: 5 }, category: 'connotation', wordId: 'decisive', sourceAttribute: 'connotation', explanationJa: '前向きで力強い含意を持つ。' },
-    { index: 2, span: { sentenceIndex: 1, tokenStart: 3, tokenEnd: 4 }, category: 'register', wordId: 'cordial', sourceAttribute: 'register', explanationJa: 'ややフォーマルな響き。' },
-    { index: 3, span: { sentenceIndex: 2, tokenStart: 2, tokenEnd: 5 }, category: 'collocation', wordId: 'deal', sourceAttribute: 'core.collocations', explanationJa: 'close a deal の定型表現。' },
+    { index: 1, span: { sentenceIndex: 0, tokenStart: 4, tokenEnd: 5 }, category: 'connotation', wordId: 'decisive', sourceAttribute: 'connotation', anchorText: 'decisive', explanationJa: '前向きで力強い含意を持つ。' },
+    { index: 2, span: { sentenceIndex: 1, tokenStart: 3, tokenEnd: 4 }, category: 'register', wordId: 'cordial', sourceAttribute: 'register', anchorText: 'cordial', explanationJa: 'ややフォーマルな響き。' },
+    { index: 3, span: { sentenceIndex: 2, tokenStart: 2, tokenEnd: 5 }, category: 'collocation', wordId: 'deal', sourceAttribute: 'core.collocations', anchorText: 'closed the deal', explanationJa: 'close a deal の定型表現。' },
   ],
 };
 

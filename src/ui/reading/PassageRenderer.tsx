@@ -140,8 +140,18 @@ export function PassageRenderer({
       return inner;
     }
 
+    // Flush every not-yet-emitted cue whose span ENDS at or before `end`. A cue whose tokenEnd
+    // lands strictly inside a target/collocation span (e.g. a connotation cue on the head word of
+    // a collocation chip) would otherwise be skipped when the cursor jumps over the span — its
+    // badge would vanish from the prose while NoticeRail still lists it. Flushing by "ended by now"
+    // surfaces such a badge right after the chip, keeping the in-text marker ↔ rail correspondence.
+    const emittedEnds = new Set<number>();
     const emitBadges = (end: number): void => {
-      for (const cue of cuesByEnd.get(end) ?? []) out.push(<NoticeBadge key={`badge-${cue.index}`} cue={cue} />);
+      const pending = [...cuesByEnd.keys()].filter((e) => e <= end && !emittedEnds.has(e)).sort((a, b) => a - b);
+      for (const e of pending) {
+        emittedEnds.add(e);
+        for (const cue of cuesByEnd.get(e)!) out.push(<NoticeBadge key={`badge-${cue.index}`} cue={cue} />);
+      }
     };
 
     let i = 0;
@@ -185,6 +195,9 @@ export function PassageRenderer({
       emitBadges(i + 1);
       i += 1;
     }
+
+    // Safety net: surface any in-range cue not reached above (e.g. tokenEnd === tokens.length).
+    emitBadges(tokens.length);
 
     return out;
   }

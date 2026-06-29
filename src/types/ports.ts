@@ -14,6 +14,7 @@ import type {
   GenerationRequest,
   GenerationResponse,
   WordData,
+  WordSuggestionRequest,
   IndexedPassage,
   AudioAsset,
   TimingMap,
@@ -38,6 +39,12 @@ export interface ContentGateway {
   /** Calls the thin server proxy; the response carries `stopReason`. */
   generatePassage(req: GenerationRequest): Promise<GenerationResponse>;
   getWordData(wordId: string): Promise<WordData>;
+  /**
+   * Proposes new vocabulary (base-form lemmas) to teach for a level + theme when the learner
+   * picked no target words. Optional so lightweight gateways/mocks need not implement it; the
+   * caller falls back to a themed (word-free) passage when it is absent or fails.
+   */
+  suggestWords?(req: WordSuggestionRequest): Promise<string[]>;
 }
 
 /** Audio synthesis + token-resolved timing maps. */

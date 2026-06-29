@@ -20,6 +20,7 @@ function basePassage(over: Partial<PassageOutput> = {}): PassageOutput {
         category: 'register',
         wordId: 'negotiate',
         sourceAttribute: 'register',
+        anchorText: 'negotiate',
         explanationJa: 'ビジネス寄りの語。',
       },
     ],
@@ -106,6 +107,7 @@ describe('PassageValidator', () => {
             category: 'word_family',
             wordId: 'negotiate',
             sourceAttribute: 'more.wordFamily', // not supplied in ctx attributes
+            anchorText: 'negotiate',
             explanationJa: '派生語。',
           },
         ],
@@ -125,6 +127,7 @@ describe('PassageValidator', () => {
             category: 'register',
             wordId: 'negotiate',
             sourceAttribute: 'connotation', // exists, but is the connotation attribute, not register
+            anchorText: 'negotiate',
             explanationJa: '',
           },
         ],
@@ -132,6 +135,49 @@ describe('PassageValidator', () => {
       ctx,
     );
     expect(report.violations.some((v) => v.kind === 'cue_category_mismatch')).toBe(true);
+  });
+
+  it('detects a notice cue whose span does not render its declared anchorText', () => {
+    // anchorText says the note is about "negotiate", but the span points at "terms" (tokens [5,6)).
+    // This is the badge ↔ explanation drift the feature guards: the marker would sit on the wrong word.
+    const report = passageValidator.validate(
+      basePassage({
+        noticeCues: [
+          {
+            index: 1,
+            span: { sentenceIndex: 0, tokenStart: 5, tokenEnd: 6 }, // "terms", not "negotiate"
+            category: 'register',
+            wordId: 'negotiate',
+            sourceAttribute: 'register',
+            anchorText: 'negotiate',
+            explanationJa: 'ビジネス寄りの語。',
+          },
+        ],
+      }),
+      ctx,
+    );
+    expect(report.ok).toBe(false);
+    expect(report.violations.some((v) => v.kind === 'cue_surface_mismatch')).toBe(true);
+  });
+
+  it('accepts a notice cue whose span renders exactly its anchorText (multi-token)', () => {
+    const report = passageValidator.validate(
+      basePassage({
+        noticeCues: [
+          {
+            index: 1,
+            span: { sentenceIndex: 0, tokenStart: 4, tokenEnd: 6 }, // "the terms"
+            category: 'collocation',
+            wordId: 'negotiate',
+            sourceAttribute: 'core.collocations',
+            anchorText: 'the terms',
+            explanationJa: 'negotiate the terms の定型。',
+          },
+        ],
+      }),
+      ctx,
+    );
+    expect(report.violations.some((v) => v.kind === 'cue_surface_mismatch')).toBe(false);
   });
 
   it('flags passages whose out-of-band token ratio exceeds tolerance', () => {
@@ -152,5 +198,26 @@ describe('PassageValidator', () => {
     );
     expect(report.cefrOffBandRatio).toBeGreaterThan(0.15);
     expect(report.violations.some((v) => v.kind === 'cefr_out_of_band')).toBe(true);
+  });
+
+  it('flags a passage far shorter than the requested length', () => {
+    const report = passageValidator.validate(basePassage(), { ...ctx, approxWords: 250 });
+    expect(report.violations.some((v) => v.kind === 'length_out_of_range')).toBe(true);
+  });
+
+  it('flags a passage far longer than the requested length', () => {
+    const report = passageValidator.validate(basePassage(), { ...ctx, approxWords: 2 });
+    expect(report.violations.some((v) => v.kind === 'length_out_of_range')).toBe(true);
+  });
+
+  it('accepts a passage whose length is within the band', () => {
+    const report = passageValidator.validate(basePassage(), { ...ctx, approxWords: 8 });
+    expect(report.violations.some((v) => v.kind === 'length_out_of_range')).toBe(false);
+    expect(report.ok).toBe(true);
+  });
+
+  it('skips the length gate when approxWords is absent', () => {
+    const report = passageValidator.validate(basePassage(), ctx);
+    expect(report.violations.some((v) => v.kind === 'length_out_of_range')).toBe(false);
   });
 });

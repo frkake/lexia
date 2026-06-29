@@ -13,19 +13,29 @@
 
 import { tokenizer } from '../tokenizer/joinService';
 import { CEFR_OUT_OF_BAND_TOLERANCE } from '../srs/parameters';
-import type { Cefr, NoticeCategory, PassageOutput, Sentence, SpanRef } from '../../types/domain';
+import { LENGTH_WORD_TOLERANCE } from './lengthSpec';
+import { CATEGORY_ATTRIBUTES, isCueGrounded } from './noticeGrounding';
+import type { Cefr, PassageOutput, Sentence, SpanRef } from '../../types/domain';
 
 export type SpanViolationKind =
   | 'span_out_of_range'
   | 'surface_mismatch'
   | 'cue_unattested'
   | 'cue_category_mismatch'
+  | 'cue_surface_mismatch'
   | 'cefr_out_of_band'
-  | 'new_ratio_out_of_range';
+  | 'length_out_of_range';
 
 export interface SpanViolation {
   kind: SpanViolationKind;
   detail: string;
+  /**
+   * Set when the violation belongs to a single NoticeCue (by its `index`). The orchestrator
+   * uses this to drop just the offending cue(s) as a last resort, rather than failing the whole
+   * passage over a cue-local marker drift. Absent for passage-wide checks (length, CEFR) and for
+   * target/collocation span errors, which are not droppable.
+   */
+  cueIndex?: number;
 }
 
 export interface ValidationTarget {
@@ -41,8 +51,8 @@ export interface ValidationTarget {
 export interface ValidationContext {
   level: Cefr;
   targets: ValidationTarget[];
-  /** Requested new-word ratio; checked leniently when present. */
-  newWordRatio?: number;
+  /** Target word count for the requested length; the length gate runs only when present. */
+  approxWords?: number;
   /** External CEFR band lookup for a lowercased token; undefined ⇒ unknown band. */
   cefrOf?: (token: string) => Cefr | undefined;
 }
@@ -61,21 +71,6 @@ export interface PassageValidator {
 
 const CEFR_RANK: Record<Cefr, number> = { A2: 0, B1: 1, B2: 2, C1: 3, C2: 4 };
 
-/** Attribute keys (dotted paths into WordData) each cue category may cite. */
-const CATEGORY_ATTRIBUTES: Record<NoticeCategory, string[]> = {
-  connotation: ['connotation'],
-  collocation: ['core.collocations', 'collocations'],
-  register: ['register'],
-  etymology: ['more.etymology', 'etymology'],
-  semantic_network: ['more.semanticNetwork', 'semanticNetwork'],
-  synonym_nuance: ['core.synonymNuances', 'synonymNuances'],
-  grammar_pattern: ['more.grammarPatterns', 'grammarPatterns'],
-  word_family: ['more.wordFamily', 'wordFamily'],
-  frequency: ['frequency'],
-  common_error: ['more.commonErrors', 'commonErrors'],
-};
-
-const NEW_RATIO_TOLERANCE = 0.5;
 const SUFFIXES = ['ing', 'edly', 'ied', 'ies', 'es', 'ed', 'er', 'est', 'ly', "'s", 's', 'd', 'n'];
 
 function spanInRange(span: SpanRef, sentences: Sentence[]): boolean {
@@ -107,21 +102,6 @@ function isInflectionOf(form: string, base: string, inflections?: string[]): boo
   const sf = stem(f);
   const sb = stem(b);
   return sf === sb || sf.startsWith(sb) || sb.startsWith(sf);
-}
-
-/** Resolve a dotted path and report whether it holds a non-empty value. */
-function hasAttribute(attributes: Record<string, unknown> | undefined, path: string): boolean {
-  if (!attributes) return false;
-  let cur: unknown = attributes;
-  for (const key of path.split('.')) {
-    if (cur === null || typeof cur !== 'object' || !(key in (cur as object))) return false;
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  if (cur === undefined || cur === null) return false;
-  if (Array.isArray(cur)) return cur.length > 0;
-  if (typeof cur === 'string') return cur.trim().length > 0;
-  if (typeof cur === 'object') return Object.keys(cur as object).length > 0;
-  return true; // numbers, booleans
 }
 
 const isWord = (token: string): boolean => /[a-zA-Z]/.test(token);
@@ -163,25 +143,43 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
     }
   }
 
-  // NoticeCues: range + grounding + category consistency.
+  // NoticeCues: range + anchor fidelity + grounding + category consistency. Every violation here
+  // carries `cueIndex` so the orchestrator can drop just this cue as a last resort.
   for (const cue of candidate.noticeCues) {
     if (!spanInRange(cue.span, sentences)) {
-      violations.push({ kind: 'span_out_of_range', detail: `cue #${cue.index}` });
+      violations.push({ kind: 'span_out_of_range', detail: `cue #${cue.index}`, cueIndex: cue.index });
       continue;
+    }
+    // Load-bearing: the badge (PassageRenderer) and the rail expression (NoticeRail) are both
+    // derived from cue.span, so the span MUST render exactly the cue's declared anchorText —
+    // otherwise the in-text marker drifts off what explanationJa describes (the bug this guards).
+    // reanchorSpans rebuilds the span from anchorText; this turns any residual drift into a
+    // repairable (then droppable) violation instead of a silent mismatch shipped to the UI.
+    const renderedAnchor = renderSpan(sentences[cue.span.sentenceIndex]!, cue.span);
+    if (renderedAnchor.toLowerCase() !== cue.anchorText.trim().toLowerCase()) {
+      violations.push({
+        kind: 'cue_surface_mismatch',
+        detail: `cue #${cue.index} anchor "${cue.anchorText}" ≠ tokens "${renderedAnchor}"`,
+        cueIndex: cue.index,
+      });
     }
     const allowed = CATEGORY_ATTRIBUTES[cue.category];
     if (!allowed.includes(cue.sourceAttribute)) {
       violations.push({
         kind: 'cue_category_mismatch',
         detail: `cue #${cue.index} category ${cue.category} cites "${cue.sourceAttribute}"`,
+        cueIndex: cue.index,
       });
       continue;
     }
     const target = targetById.get(cue.wordId);
-    if (!hasAttribute(target?.attributes, cue.sourceAttribute)) {
+    // Ground by category (not the literal sourceAttribute) — models are inconsistent about the
+    // `more.` prefix, so a cue is attested when the category's canonical attribute is present.
+    if (!isCueGrounded(cue.category, target?.attributes)) {
       violations.push({
         kind: 'cue_unattested',
-        detail: `cue #${cue.index} "${cue.sourceAttribute}" missing for ${cue.wordId}`,
+        detail: `cue #${cue.index} ${cue.category} not grounded for ${cue.wordId}`,
+        cueIndex: cue.index,
       });
     }
   }
@@ -206,20 +204,28 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
     });
   }
 
-  // New-word ratio (lenient — only gross deviation, needs enough distinct targets).
-  if (ctx.newWordRatio !== undefined) {
-    const distinct = new Map(candidate.targetSpans.map((s) => [s.wordId, s.masteryDensity]));
-    if (distinct.size >= 3) {
-      const newCount = [...distinct.values()].filter((d) => d === 'new').length;
-      const actual = newCount / distinct.size;
-      if (Math.abs(actual - ctx.newWordRatio) > NEW_RATIO_TOLERANCE) {
-        violations.push({
-          kind: 'new_ratio_out_of_range',
-          detail: `new ratio ${actual.toFixed(2)} vs requested ${ctx.newWordRatio}`,
-        });
+  // Length: total word count must stay within a (loose) band of the requested target so a
+  // passage that ignores the requested length is rejected and regenerated.
+  if (ctx.approxWords !== undefined && ctx.approxWords > 0) {
+    let totalWords = 0;
+    for (const sentence of sentences) {
+      for (const token of sentence.tokens) {
+        if (isWord(token)) totalWords += 1;
       }
     }
+    const lo = ctx.approxWords * (1 - LENGTH_WORD_TOLERANCE);
+    const hi = ctx.approxWords * (1 + LENGTH_WORD_TOLERANCE);
+    if (totalWords < lo || totalWords > hi) {
+      violations.push({
+        kind: 'length_out_of_range',
+        detail: `passage has ${totalWords} words vs requested ~${ctx.approxWords}`,
+      });
+    }
   }
+
+  // Note: the new/review balance (newWordRatio) is determined by which words SessionPlanner
+  // selects — the model only copies each target's masteryDensity — so it is a selection
+  // concern, not something to validate on the generated output (it cannot be repaired here).
 
   return { ok: violations.length === 0, violations, cefrOffBandRatio };
 }

@@ -90,3 +90,22 @@ describe('HttpContentGateway.getWordData', () => {
     await expect(gw.getWordData('missing')).rejects.toMatchObject({ kind: 'not_found', status: 404 });
   });
 });
+
+describe('HttpContentGateway.suggestWords', () => {
+  it('posts to /api/words:suggest and returns the proposed lemmas', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const gw = gatewayWith(async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { words: ['agenda', 'consensus'] });
+    });
+    const words = await gw.suggestWords({ level: 'B1', themes: ['会議'], count: 2 });
+    expect(captured!.url).toBe('https://api.test/api/words:suggest');
+    expect(captured!.init?.method).toBe('POST');
+    expect(words).toEqual(['agenda', 'consensus']);
+  });
+
+  it('returns an empty list when the reply has no words array', async () => {
+    const gw = gatewayWith(async () => jsonResponse(200, {}));
+    expect(await gw.suggestWords({ level: 'B1', themes: ['x'], count: 3 })).toEqual([]);
+  });
+});

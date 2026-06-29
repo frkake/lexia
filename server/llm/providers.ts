@@ -11,14 +11,25 @@
  * is honored end-to-end.
  */
 
-import type { GenerationRequest, GenerationResponse, PassageOutput, StopReason, WordData } from '../../src/types/domain';
+import type {
+  GenerationRequest,
+  GenerationResponse,
+  PassageOutput,
+  StopReason,
+  WordData,
+  WordSuggestionRequest,
+} from '../../src/types/domain';
 import {
   PASSAGE_JSON_SCHEMA,
   WORD_DATA_JSON_SCHEMA,
+  WORD_SUGGESTION_JSON_SCHEMA,
   buildPassageMessages,
+  buildSuggestionMessages,
   buildWordMessages,
   maxTokensForLength,
 } from './schema';
+import { tokenizer } from '../../src/domain/tokenizer/joinService';
+import { CATEGORY_ATTRIBUTES, isCueGrounded } from '../../src/domain/generation/noticeGrounding';
 
 export type Env = Record<string, string | undefined>;
 
@@ -205,7 +216,146 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
         ? metaIn.approxWords
         : sentences.reduce((n, s) => n + (Array.isArray(s.tokens) ? s.tokens.length : 0), 0),
   };
-  return { meta, sentences, targetSpans, collocationSpans, noticeCues };
+  return reanchorSpans({ meta, sentences, targetSpans, collocationSpans, noticeCues }, req);
+}
+
+interface Loc {
+  sentenceIndex: number;
+  tokenStart: number;
+  tokenEnd: number;
+}
+
+/** Canonical render of a token slice — identical to the validator's renderSpan + the app renderer. */
+function renderSlice(tokens: string[], start: number, end: number): string {
+  return tokenizer.renderText({ tokens: tokens.slice(start, end), translationJa: '' }).trim().toLowerCase();
+}
+
+/** First run [start,end) in `tokens` from `from` whose canonical render equals `surface`. */
+function findRun(tokens: string[], surface: string, from: number): [number, number] | null {
+  const target = surface.trim().toLowerCase();
+  if (!target) return null;
+  for (let start = from; start < tokens.length; start += 1) {
+    for (let end = start + 1; end <= Math.min(tokens.length, start + 6); end += 1) {
+      const rendered = renderSlice(tokens, start, end);
+      if (rendered === target) return [start, end];
+      if (rendered.length > target.length) break; // run already overshoots the target
+    }
+  }
+  return null;
+}
+
+/** Locate `surface` in the passage — preferred sentence first — skipping already-used positions. */
+function locate(sentences: PassageOutput['sentences'], surface: string, prefer: number, used: Set<string>): Loc | null {
+  const order = [prefer, ...sentences.map((_, i) => i).filter((i) => i !== prefer)];
+  for (const si of order) {
+    const toks = sentences[si]?.tokens;
+    if (!Array.isArray(toks)) continue;
+    let from = 0;
+    for (;;) {
+      const run = findRun(toks, surface, from);
+      if (!run) break;
+      if (!used.has(`${si}:${run[0]}`)) return { sentenceIndex: si, tokenStart: run[0], tokenEnd: run[1] };
+      from = run[0] + 1;
+    }
+  }
+  return null;
+}
+
+/** Every run of `surface` in one sentence's tokens (canonical-render match). */
+function runsInSentence(sentences: PassageOutput['sentences'], si: number, surface: string): Loc[] {
+  const toks = sentences[si]?.tokens;
+  if (!Array.isArray(toks)) return [];
+  const out: Loc[] = [];
+  let from = 0;
+  for (;;) {
+    const run = findRun(toks, surface, from);
+    if (!run) break;
+    out.push({ sentenceIndex: si, tokenStart: run[0], tokenEnd: run[1] });
+    from = run[0] + 1;
+  }
+  return out;
+}
+
+/**
+ * Locate a NoticeCue's `anchorText`, disambiguating repeated occurrences by the model's declared
+ * `preferStart`. The model's absolute token count is unreliable, but it still indicates WHICH
+ * occurrence it meant, so among equal-text runs in the declared sentence we pick the one whose
+ * start is closest to `preferStart` (NOT blindly the first — that would re-introduce the badge ↔
+ * explanation drift this whole fix targets). Falls back to the first run in any other sentence.
+ */
+function locateAnchor(
+  sentences: PassageOutput['sentences'],
+  anchorText: string,
+  preferSentence: number,
+  preferStart: number,
+): Loc | null {
+  const preferred = runsInSentence(sentences, preferSentence, anchorText);
+  if (preferred.length > 0) {
+    return preferred.reduce((best, r) =>
+      Math.abs(r.tokenStart - preferStart) < Math.abs(best.tokenStart - preferStart) ? r : best,
+    );
+  }
+  for (let si = 0; si < sentences.length; si += 1) {
+    if (si === preferSentence) continue;
+    const runs = runsInSentence(sentences, si, anchorText);
+    if (runs.length > 0) return runs[0]!;
+  }
+  return null;
+}
+
+/**
+ * Models reliably miscount the token indices of their own spans (the prose is correct but
+ * [tokenStart,tokenEnd) points at the wrong tokens, which the PassageValidator rejects as
+ * surface_mismatch). Re-derive each span's indices by locating its declared text in the passage
+ * so the client validator + renderer + TTS see correct spans. Target/collocation spans relocate by
+ * their `surface`/`collocationId`; notice cues relocate by their quoted `anchorText` — the one
+ * annotation that previously had no text anchor, so its badge drifted off `explanationJa`. Spans
+ * whose text cannot be found keep their declared indices so the client validator flags them
+ * (cue_surface_mismatch) and the orchestrator can drop just that cue.
+ */
+function reanchorSpans(passage: PassageOutput, req: GenerationRequest): PassageOutput {
+  const usedTarget = new Set<string>();
+  const targetSpans = passage.targetSpans
+    .map((span) => {
+      const loc = locate(passage.sentences, span.surface, span.sentenceIndex, usedTarget);
+      if (!loc) return null;
+      usedTarget.add(`${loc.sentenceIndex}:${loc.tokenStart}`);
+      return { ...span, ...loc };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+  // Collocations legitimately overlap target words, so they track their own occupancy.
+  const usedColl = new Set<string>();
+  const collocationSpans = passage.collocationSpans
+    .map((span) => {
+      const loc = locate(passage.sentences, span.collocationId, span.sentenceIndex, usedColl);
+      if (!loc) return null;
+      usedColl.add(`${loc.sentenceIndex}:${loc.tokenStart}`);
+      return { ...span, ...loc };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
+  const attrByWord = new Map(req.targetWords.map((t) => [t.wordId, t.attributes]));
+  const noticeCues = passage.noticeCues
+    .map((cue) => {
+      // Drop cues the validator would reject as ungrounded (saves the repair budget for length).
+      if (!isCueGrounded(cue.category, attrByWord.get(cue.wordId))) return null;
+      // Canonicalize the cited attribute — models invent path variants ("core.connotation",
+      // "attributes.register") that fail the validator's category↔attribute check.
+      const sourceAttribute = CATEGORY_ATTRIBUTES[cue.category]?.[0] ?? cue.sourceAttribute;
+      // Re-derive the span from the cue's quoted anchorText (the model reliably quotes the text it
+      // wrote but miscounts indices), disambiguating repeated occurrences by the declared index.
+      // If the anchor is not found, keep the declared span so the client validator flags it.
+      const loc = locateAnchor(passage.sentences, cue.anchorText, cue.span.sentenceIndex, cue.span.tokenStart);
+      return { ...cue, sourceAttribute, span: loc ?? cue.span };
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null)
+    // Renumber to contiguous, unique badge indices: the model can emit duplicate `index` values,
+    // which would let the orchestrator's cue-drop salvage remove the wrong cue and collide React
+    // keys in NoticeRail/PassageRenderer.
+    .map((cue, i) => ({ ...cue, index: i + 1 }));
+
+  return { ...passage, targetSpans, collocationSpans, noticeCues };
 }
 
 export async function generatePassage(
@@ -250,10 +400,69 @@ export async function getWordData(
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Promise<WordData> {
   const { system, user } = buildWordMessages(wordId);
-  const { text } = await callModel(env, fetchImpl, system, user, 900, WORD_DATA_JSON_SCHEMA, 'word_data');
+  // Larger budget than before: the rich `more` attributes need more output tokens.
+  const { text } = await callModel(env, fetchImpl, system, user, 1500, WORD_DATA_JSON_SCHEMA, 'word_data');
   const parsed = parseJson<Partial<WordData>>(text, 'word data');
   if (!parsed.headword || !parsed.core) {
     throw new ProviderError(502, 'Generation API returned incomplete word data.');
   }
-  return { ...parsed, wordId } as WordData;
+  return normalizeWordData(parsed, wordId);
+}
+
+/**
+ * Drop null/empty `more` fields so stored WordData matches the optional domain shape and the
+ * validator's grounding rule (empty ⇒ absent) stays consistent with what the UI renders.
+ */
+function normalizeWordData(parsed: Partial<WordData>, wordId: string): WordData {
+  const data = { ...parsed, wordId } as WordData;
+  const more = pruneEmpty((parsed as { more?: unknown }).more);
+  if (more && Object.keys(more).length > 0) data.more = more as WordData['more'];
+  else delete (data as { more?: unknown }).more;
+  return data;
+}
+
+/** Recursively strip null/empty values; returns undefined when nothing meaningful remains. */
+function pruneEmpty(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v == null) continue;
+    if (Array.isArray(v)) {
+      if (v.length > 0) out[key] = v;
+    } else if (typeof v === 'object') {
+      const inner = pruneEmpty(v);
+      if (inner && Object.keys(inner).length > 0) out[key] = inner;
+    } else if (typeof v === 'string') {
+      if (v.trim().length > 0) out[key] = v;
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+/** Propose base-form lemmas to teach for a level + theme (used when no targets are picked). */
+export async function suggestWords(
+  env: Env,
+  req: WordSuggestionRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string[]> {
+  const count = Math.max(1, Math.min(req.count || 6, 12));
+  const { system, user } = buildSuggestionMessages({ ...req, count });
+  const { text } = await callModel(env, fetchImpl, system, user, 400, WORD_SUGGESTION_JSON_SCHEMA, 'word_suggestion');
+  const parsed = parseJson<{ words?: unknown }>(text, 'word suggestions');
+  const raw = Array.isArray(parsed.words) ? parsed.words : [];
+  const exclude = new Set((req.exclude ?? []).map((w) => w.toLowerCase()));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const w of raw) {
+    if (typeof w !== 'string') continue;
+    const lemma = w.trim().toLowerCase();
+    // Keep single base-form lemmas only; drop blanks, multiword phrases, dups, and excluded.
+    if (!lemma || /\s/.test(lemma) || seen.has(lemma) || exclude.has(lemma)) continue;
+    seen.add(lemma);
+    out.push(lemma);
+    if (out.length >= count) break;
+  }
+  return out;
 }
