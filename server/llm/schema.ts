@@ -11,7 +11,7 @@
  * half-open `[tokenStart, tokenEnd)` token ranges within one sentence.
  */
 
-import type { GenerationRequest } from '../../src/types/domain';
+import type { GenerationRequest, PassageAnnotationRequest } from '../../src/types/domain';
 import { APPROX_WORDS } from '../../src/domain/generation/lengthSpec';
 
 const CEFR = ['A2', 'B1', 'B2', 'C1', 'C2'] as const;
@@ -26,6 +26,8 @@ const NOTICE_CATEGORIES = [
   'word_family',
   'frequency',
   'common_error',
+  'idiom',
+  'phrasal_verb',
 ] as const;
 
 const SPAN_PROPS = {
@@ -243,25 +245,10 @@ const PASSAGE_SYSTEM = [
   'a collocationSpan covering exactly its tokens, with headWordId = that word\'s wordId and',
   'collocationId = the collocation string taken from core.collocations.',
   '',
-  'Notice cues: add 3-5 cues that span at least THREE DIFFERENT categories — do NOT make them all',
-  'collocation. Lead with the richer more.* attributes when they are supplied (etymology,',
-  'semantic_network, grammar_pattern, word_family, common_error) and round out with connotation,',
-  'register, synonym_nuance or frequency. A cue may ONLY cite an attribute that was supplied for',
-  'that word, and category must match: connotation->connotation, register->register,',
-  'collocation->core.collocations, synonym_nuance->core.synonymNuances, grammar_pattern->',
-  'more.grammarPatterns, etymology->more.etymology, semantic_network->more.semanticNetwork,',
-  'word_family->more.wordFamily, common_error->more.commonErrors, frequency->frequency. Omit a cue',
-  'whose attribute is absent or empty.',
-  'For each cue, set anchorText to the EXACT word or phrase IN THE PASSAGE the note is about —',
-  'copy it VERBATIM from that sentence\'s tokens (usually the target word itself, or a short phrase',
-  'containing it). Do NOT count token indices by hand; the app places the cue\'s badge on anchorText',
-  'and re-derives its position from it, so anchorText MUST appear verbatim in the passage and span',
-  'MUST cover exactly those tokens. explanationJa is a short Japanese explanation of what to notice',
-  'about anchorText.',
-  '',
-  'When target words ARE requested, collocationSpans and noticeCues should be NON-empty (use the',
-  'attributes you were given). They may be empty ONLY when no target words are requested — in that',
-  'case write a coherent passage on the theme with empty targetSpans/collocationSpans/noticeCues.',
+  'When target words ARE requested, collocationSpans should be NON-empty (use the supplied',
+  'core.collocations). Leave noticeCues an EMPTY array — in-passage "notice" insights are added by a',
+  'SEPARATE annotation step, not here. With no target words, write a coherent themed passage with',
+  'empty targetSpans/collocationSpans/noticeCues.',
   'meta.newCount/reviewCount count distinct new/review target words; approxWords ~= total words.',
 ].join('\n');
 
@@ -297,6 +284,83 @@ function passageUser(req: GenerationRequest): string {
 
 export function buildPassageMessages(req: GenerationRequest): { system: string; user: string } {
   return { system: PASSAGE_SYSTEM, user: passageUser(req) };
+}
+
+// ── Annotation pass (exhaustive in-passage notice cues) ──────────────────────
+
+/** Expression categories the annotation pass may emit (the in-text, phrase-level subset). */
+export const ANNOTATION_CATEGORIES = [
+  'collocation',
+  'idiom',
+  'phrasal_verb',
+  'connotation',
+  'register',
+  'grammar_pattern',
+] as const;
+
+/** JSON Schema for the annotation reply: a flat list of location-anchored notice cues. */
+export const ANNOTATION_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    noticeCues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          span: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { ...SPAN_PROPS },
+            required: ['sentenceIndex', 'tokenStart', 'tokenEnd'],
+          },
+          category: { type: 'string', enum: [...ANNOTATION_CATEGORIES] },
+          anchorText: { type: 'string' },
+          explanationJa: { type: 'string' },
+        },
+        required: ['span', 'category', 'anchorText', 'explanationJa'],
+      },
+    },
+  },
+  required: ['noticeCues'],
+} as const;
+
+const ANNOTATION_SYSTEM = [
+  'You annotate an already-written English reading passage for Japanese learners. You receive the',
+  'passage as sentences of TOKENS (one word / punctuation mark / clitic per token, joined with',
+  'deterministic spacing) and reply with a SINGLE JSON object {"noticeCues":[...]} matching the',
+  'schema — no prose, no markdown, no code fences.',
+  '',
+  'Find EVERY expression in the passage a learner should pause on, across these categories:',
+  'collocation, idiom, phrasal_verb, connotation, register, grammar_pattern. Be exhaustive — do not',
+  'stop at a few. For each, add a cue:',
+  '- anchorText: the EXACT word(s) in the passage the note is about, copied VERBATIM from that',
+  "  sentence's tokens (the joined surface). It MUST appear verbatim in the passage.",
+  '- span: { sentenceIndex, tokenStart, tokenEnd } (half-open) for those tokens. Do NOT agonize over',
+  '  exact indices — the app re-derives the span from anchorText — but point at the right sentence.',
+  '- category: the single best fit from the list above.',
+  '- explanationJa: a short Japanese note on what to notice (nuance, fixed phrasing, why it matters).',
+  '',
+  'Quality bar: only high-confidence, pedagogically worthwhile items at or above the requested CEFR',
+  'level. Skip transparent, trivial sequences ("go to", "in the"). Aim for at most ~2-3 cues per',
+  'sentence so the page stays readable; add nothing for a sentence with nothing notable. Returning',
+  'few or zero cues for a plain passage is fine.',
+].join('\n');
+
+export function buildAnnotationMessages(req: PassageAnnotationRequest): { system: string; user: string } {
+  const sentences = req.sentences.map((s, i) => ({ sentenceIndex: i, tokens: s.tokens }));
+  const user = [
+    `Passage CEFR level: ${req.level}.`,
+    'Annotate this passage exhaustively. Reply with {"noticeCues":[...]} only.',
+    JSON.stringify({ sentences }, null, 2),
+  ].join('\n');
+  return { system: ANNOTATION_SYSTEM, user };
+}
+
+/** Output-token budget for the annotation pass: generous, scales with passage size. */
+export function annotationMaxTokens(sentenceCount: number): number {
+  return Math.min(4000, 500 + sentenceCount * 150);
 }
 
 const WORD_SYSTEM = [

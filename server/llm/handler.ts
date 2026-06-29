@@ -9,12 +9,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { GenerationRequest, WordSuggestionRequest } from '../../src/types/domain';
-import { type Env, ProviderError, generatePassage, getWordData, suggestWords } from './providers';
+import type { GenerationRequest, PassageAnnotationRequest, WordSuggestionRequest } from '../../src/types/domain';
+import { type Env, ProviderError, annotatePassage, generatePassage, getWordData, suggestWords } from './providers';
 
 type Next = (err?: unknown) => void;
 
 const GENERATE_PATH = '/api/passages:generate';
+const ANNOTATE_PATH = '/api/passages:annotate';
 const SUGGEST_PATH = '/api/words:suggest';
 const WORDS_PREFIX = '/api/words/';
 
@@ -37,6 +38,16 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     }
     const result = await generatePassage(env, body);
     return sendJson(res, 200, { passage: result.passage, stop_reason: result.stopReason });
+  }
+
+  if (path === ANNOTATE_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<PassageAnnotationRequest>(req);
+    if (!body || !Array.isArray(body.sentences) || !body.level) {
+      throw new ProviderError(400, 'Invalid PassageAnnotationRequest body.');
+    }
+    const noticeCues = await annotatePassage(env, body);
+    return sendJson(res, 200, { noticeCues });
   }
 
   if (path === SUGGEST_PATH) {

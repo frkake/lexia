@@ -21,6 +21,9 @@ import type {
   PassageOutput,
   ReadingProgress,
   Settings,
+  Cefr,
+  Sentence,
+  NoticeCue,
 } from './domain';
 
 // ── Adjacent capability seams ────────────────────────────────────────────────
@@ -45,6 +48,12 @@ export interface ContentGateway {
    * caller falls back to a themed (word-free) passage when it is absent or fails.
    */
   suggestWords?(req: WordSuggestionRequest): Promise<string[]>;
+  /**
+   * Exhaustively annotate an already-generated passage with in-text "notice" cues (collocations,
+   * idioms, phrasal verbs, connotation, register, grammar). Optional so lightweight gateways/mocks
+   * need not implement it; the orchestrator skips enrichment when it is absent.
+   */
+  annotatePassage?(sentences: Sentence[], level: Cefr): Promise<NoticeCue[]>;
 }
 
 /** Audio synthesis + token-resolved timing maps. */

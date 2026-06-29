@@ -180,6 +180,20 @@ describe('PassageValidator', () => {
     expect(report.violations.some((v) => v.kind === 'cue_surface_mismatch')).toBe(false);
   });
 
+  it('does not flag an annotation cue that omits wordId/sourceAttribute (location-only grounding)', () => {
+    const report = passageValidator.validate(
+      basePassage({
+        // No wordId / sourceAttribute (an exhaustive annotation-pass cue). span renders "negotiate".
+        noticeCues: [
+          { index: 1, span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, category: 'idiom', anchorText: 'negotiate', explanationJa: '' },
+        ],
+      }),
+      ctx,
+    );
+    expect(report.violations.some((v) => v.kind === 'cue_unattested' || v.kind === 'cue_category_mismatch')).toBe(false);
+    expect(report.ok).toBe(true);
+  });
+
   it('flags passages whose out-of-band token ratio exceeds tolerance', () => {
     const report = passageValidator.validate(
       basePassage({

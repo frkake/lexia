@@ -88,6 +88,7 @@ export interface NoticeStyle {
 const CONNOTATION: Omit<NoticeStyle, 'label'> = { color: colors.greenDeep, bg: '#E6F2EE', numberColor: colors.green };
 const COLLOCATION: Omit<NoticeStyle, 'label'> = { color: colors.primaryDeep, bg: '#EAF0F8', numberColor: colors.primary };
 const REGISTER: Omit<NoticeStyle, 'label'> = { color: colors.inkSoft, bg: '#EDF1F6', numberColor: colors.register };
+const IDIOM: Omit<NoticeStyle, 'label'> = { color: colors.terracotta, bg: '#F3E9E4', numberColor: colors.terracotta };
 
 const NOTICE_LABELS: Record<NoticeCategory, string> = {
   connotation: 'コノテーション',
@@ -100,6 +101,8 @@ const NOTICE_LABELS: Record<NoticeCategory, string> = {
   word_family: '語のファミリー',
   frequency: '頻度',
   common_error: '誤用注意',
+  idiom: 'イディオム',
+  phrasal_verb: '句動詞',
 };
 
 /** Categories share one of three visual groups (design.md 気づき番号色). */
@@ -114,6 +117,8 @@ const NOTICE_GROUP: Record<NoticeCategory, Omit<NoticeStyle, 'label'>> = {
   synonym_nuance: REGISTER,
   word_family: REGISTER,
   common_error: REGISTER,
+  idiom: IDIOM,
+  phrasal_verb: COLLOCATION,
 };
 
 /** Resolve the full chip + badge style for a notice category. */

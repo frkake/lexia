@@ -163,8 +163,11 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
         cueIndex: cue.index,
       });
     }
+    // Attribute-grounding applies only to legacy target-word cues (those that declare a
+    // sourceAttribute / wordId). Exhaustive annotation-pass cues omit both and are validated by
+    // location only (above); their correctness is the annotation pass's responsibility.
     const allowed = CATEGORY_ATTRIBUTES[cue.category];
-    if (!allowed.includes(cue.sourceAttribute)) {
+    if (cue.sourceAttribute !== undefined && !allowed.includes(cue.sourceAttribute)) {
       violations.push({
         kind: 'cue_category_mismatch',
         detail: `cue #${cue.index} category ${cue.category} cites "${cue.sourceAttribute}"`,
@@ -172,15 +175,17 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
       });
       continue;
     }
-    const target = targetById.get(cue.wordId);
-    // Ground by category (not the literal sourceAttribute) — models are inconsistent about the
-    // `more.` prefix, so a cue is attested when the category's canonical attribute is present.
-    if (!isCueGrounded(cue.category, target?.attributes)) {
-      violations.push({
-        kind: 'cue_unattested',
-        detail: `cue #${cue.index} ${cue.category} not grounded for ${cue.wordId}`,
-        cueIndex: cue.index,
-      });
+    if (cue.wordId !== undefined) {
+      const target = targetById.get(cue.wordId);
+      // Ground by category (not the literal sourceAttribute) — models are inconsistent about the
+      // `more.` prefix, so a cue is attested when the category's canonical attribute is present.
+      if (!isCueGrounded(cue.category, target?.attributes)) {
+        violations.push({
+          kind: 'cue_unattested',
+          detail: `cue #${cue.index} ${cue.category} not grounded for ${cue.wordId}`,
+          cueIndex: cue.index,
+        });
+      }
     }
   }
 

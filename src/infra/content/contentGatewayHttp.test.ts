@@ -109,3 +109,24 @@ describe('HttpContentGateway.suggestWords', () => {
     expect(await gw.suggestWords({ level: 'B1', themes: ['x'], count: 3 })).toEqual([]);
   });
 });
+
+describe('HttpContentGateway.annotatePassage', () => {
+  it('posts the sentences + level to /api/passages:annotate and returns the cues', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const cue = { index: 1, span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1 }, category: 'idiom' as const, anchorText: 'She', explanationJa: '' };
+    const gw = gatewayWith(async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { noticeCues: [cue] });
+    });
+    const cues = await gw.annotatePassage(samplePassage.sentences, 'B1');
+    expect(captured!.url).toBe('https://api.test/api/passages:annotate');
+    expect(captured!.init?.method).toBe('POST');
+    expect(JSON.parse(String(captured!.init?.body))).toMatchObject({ level: 'B1' });
+    expect(cues).toEqual([cue]);
+  });
+
+  it('returns an empty list when the reply has no cues array', async () => {
+    const gw = gatewayWith(async () => jsonResponse(200, {}));
+    expect(await gw.annotatePassage(samplePassage.sentences, 'B1')).toEqual([]);
+  });
+});

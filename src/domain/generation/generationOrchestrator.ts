@@ -106,6 +106,20 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
 
   async function generate(req: GenerationRequest): Promise<Result<IndexedPassage, GenerationError>> {
     const ctx = contextFor(req, deps.cefrOf);
+
+    // After a passage is accepted, enrich it with the exhaustive annotation pass (a second LLM call
+    // run ONCE on the final text). Failure is non-fatal: ship the passage with whatever cues it has.
+    const finalize = async (passage: PassageOutput): Promise<Result<IndexedPassage, GenerationError>> => {
+      let noticeCues = passage.noticeCues;
+      try {
+        const annotated = await deps.gateway.annotatePassage?.(passage.sentences, req.level);
+        if (annotated) noticeCues = annotated;
+      } catch {
+        // Degrade: keep the passage readable; notices are simply absent.
+      }
+      return ok(tokenizer.index(passageId, { ...passage, noticeCues }));
+    };
+
     let attemptReq = req;
     let regenLeft = maxRegenerations;
     let repairLeft = maxRepairs;
@@ -127,7 +141,7 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
 
       const report = validator.validate(resp.passage, ctx);
       if (report.ok) {
-        return ok(tokenizer.index(passageId, resp.passage));
+        return finalize(resp.passage);
       }
       if (repairLeft <= 0) {
         // Last resort: the badge ↔ explanation drift this feature guards is cue-local. Drop only
@@ -136,7 +150,7 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
         // violations (length / CEFR / target surface) carry no cueIndex, so they still fail.
         const salvaged = dropFailingCues(resp.passage, report);
         if (salvaged && validator.validate(salvaged, ctx).ok) {
-          return ok(tokenizer.index(passageId, salvaged));
+          return finalize(salvaged);
         }
         return err({ kind: 'validation_exhausted', lastReport: report });
       }

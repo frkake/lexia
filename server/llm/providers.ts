@@ -14,22 +14,27 @@
 import type {
   GenerationRequest,
   GenerationResponse,
+  NoticeCue,
+  PassageAnnotationRequest,
   PassageOutput,
   StopReason,
   WordData,
   WordSuggestionRequest,
 } from '../../src/types/domain';
 import {
+  ANNOTATION_CATEGORIES,
+  ANNOTATION_JSON_SCHEMA,
   PASSAGE_JSON_SCHEMA,
   WORD_DATA_JSON_SCHEMA,
   WORD_SUGGESTION_JSON_SCHEMA,
+  annotationMaxTokens,
+  buildAnnotationMessages,
   buildPassageMessages,
   buildSuggestionMessages,
   buildWordMessages,
   maxTokensForLength,
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
-import { CATEGORY_ATTRIBUTES, isCueGrounded } from '../../src/domain/generation/noticeGrounding';
 
 export type Env = Record<string, string | undefined>;
 
@@ -216,7 +221,7 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
         ? metaIn.approxWords
         : sentences.reduce((n, s) => n + (Array.isArray(s.tokens) ? s.tokens.length : 0), 0),
   };
-  return reanchorSpans({ meta, sentences, targetSpans, collocationSpans, noticeCues }, req);
+  return reanchorSpans({ meta, sentences, targetSpans, collocationSpans, noticeCues });
 }
 
 interface Loc {
@@ -308,12 +313,10 @@ function locateAnchor(
  * [tokenStart,tokenEnd) points at the wrong tokens, which the PassageValidator rejects as
  * surface_mismatch). Re-derive each span's indices by locating its declared text in the passage
  * so the client validator + renderer + TTS see correct spans. Target/collocation spans relocate by
- * their `surface`/`collocationId`; notice cues relocate by their quoted `anchorText` — the one
- * annotation that previously had no text anchor, so its badge drifted off `explanationJa`. Spans
- * whose text cannot be found keep their declared indices so the client validator flags them
- * (cue_surface_mismatch) and the orchestrator can drop just that cue.
+ * their `surface`/`collocationId`. Notice cues are NOT produced here — they come from the separate
+ * annotation pass (annotatePassage); generation leaves noticeCues empty.
  */
-function reanchorSpans(passage: PassageOutput, req: GenerationRequest): PassageOutput {
+function reanchorSpans(passage: PassageOutput): PassageOutput {
   const usedTarget = new Set<string>();
   const targetSpans = passage.targetSpans
     .map((span) => {
@@ -335,27 +338,8 @@ function reanchorSpans(passage: PassageOutput, req: GenerationRequest): PassageO
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);
 
-  const attrByWord = new Map(req.targetWords.map((t) => [t.wordId, t.attributes]));
-  const noticeCues = passage.noticeCues
-    .map((cue) => {
-      // Drop cues the validator would reject as ungrounded (saves the repair budget for length).
-      if (!isCueGrounded(cue.category, attrByWord.get(cue.wordId))) return null;
-      // Canonicalize the cited attribute — models invent path variants ("core.connotation",
-      // "attributes.register") that fail the validator's category↔attribute check.
-      const sourceAttribute = CATEGORY_ATTRIBUTES[cue.category]?.[0] ?? cue.sourceAttribute;
-      // Re-derive the span from the cue's quoted anchorText (the model reliably quotes the text it
-      // wrote but miscounts indices), disambiguating repeated occurrences by the declared index.
-      // If the anchor is not found, keep the declared span so the client validator flags it.
-      const loc = locateAnchor(passage.sentences, cue.anchorText, cue.span.sentenceIndex, cue.span.tokenStart);
-      return { ...cue, sourceAttribute, span: loc ?? cue.span };
-    })
-    .filter((c): c is NonNullable<typeof c> => c !== null)
-    // Renumber to contiguous, unique badge indices: the model can emit duplicate `index` values,
-    // which would let the orchestrator's cue-drop salvage remove the wrong cue and collide React
-    // keys in NoticeRail/PassageRenderer.
-    .map((cue, i) => ({ ...cue, index: i + 1 }));
-
-  return { ...passage, targetSpans, collocationSpans, noticeCues };
+  // Notices are produced by the separate annotation pass (annotatePassage), not by generation.
+  return { ...passage, targetSpans, collocationSpans, noticeCues: [] };
 }
 
 export async function generatePassage(
@@ -465,4 +449,69 @@ export async function suggestWords(
     if (out.length >= count) break;
   }
   return out;
+}
+
+type RawCue = {
+  span?: { sentenceIndex?: number; tokenStart?: number; tokenEnd?: number };
+  category?: NoticeCue['category'];
+  anchorText?: string;
+  explanationJa?: string;
+};
+
+const ANNOTATION_CATEGORY_SET = new Set<string>(ANNOTATION_CATEGORIES);
+
+/**
+ * Turn the annotation model's raw cues into grounded NoticeCues: re-derive each span from its
+ * verbatim `anchorText` (the model quotes the text correctly but miscounts indices), drop cues whose
+ * anchor cannot be located or whose category is unknown, and number survivors in READING ORDER —
+ * matching PassageRenderer, which flushes a badge when the cursor passes the cue's tokenEnd.
+ */
+function anchorCues(sentences: PassageOutput['sentences'], raw: RawCue[]): NoticeCue[] {
+  return raw
+    .map((cue): NoticeCue | null => {
+      const anchorText = typeof cue.anchorText === 'string' ? cue.anchorText.trim() : '';
+      const category = cue.category;
+      if (!anchorText || !category || !ANNOTATION_CATEGORY_SET.has(category)) return null;
+      const loc = locateAnchor(sentences, anchorText, cue.span?.sentenceIndex ?? 0, cue.span?.tokenStart ?? 0);
+      if (!loc) return null;
+      return {
+        index: 0,
+        span: loc,
+        category,
+        anchorText,
+        explanationJa: typeof cue.explanationJa === 'string' ? cue.explanationJa : '',
+      };
+    })
+    .filter((c): c is NoticeCue => c !== null)
+    .sort(
+      (a, b) =>
+        a.span.sentenceIndex - b.span.sentenceIndex ||
+        a.span.tokenEnd - b.span.tokenEnd ||
+        a.span.tokenStart - b.span.tokenStart,
+    )
+    .map((cue, i) => ({ ...cue, index: i + 1 }));
+}
+
+/** Second LLM pass: exhaustively annotate a finished passage with in-text notice cues. */
+export async function annotatePassage(
+  env: Env,
+  req: PassageAnnotationRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<NoticeCue[]> {
+  if (!Array.isArray(req.sentences) || req.sentences.length === 0) return [];
+  const { system, user } = buildAnnotationMessages(req);
+  const { text, stopReason } = await callModel(
+    env,
+    fetchImpl,
+    system,
+    user,
+    annotationMaxTokens(req.sentences.length),
+    ANNOTATION_JSON_SCHEMA,
+    'passage_annotation',
+  );
+  // Refusal / truncation yield no usable annotations; degrade to none rather than failing.
+  if (stopReason === 'refusal' || stopReason === 'max_tokens') return [];
+  const parsed = parseJson<{ noticeCues?: unknown }>(text, 'annotation');
+  const raw = Array.isArray(parsed.noticeCues) ? (parsed.noticeCues as RawCue[]) : [];
+  return anchorCues(req.sentences, raw);
 }

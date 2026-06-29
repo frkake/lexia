@@ -106,15 +106,21 @@ export type NoticeCategory =
   | 'grammar_pattern'
   | 'word_family'
   | 'frequency'
-  | 'common_error';
+  | 'common_error'
+  | 'idiom'
+  | 'phrasal_verb';
 
 export interface NoticeCue {
   index: number;
   span: SpanRef;
   category: NoticeCategory;
-  wordId: string;
-  /** Key into the supplied WordData attribute that grounds this cue. */
-  sourceAttribute: string;
+  /**
+   * Legacy target-word grounding link: the word this cue annotates. Only the old target-word cue
+   * path set it; exhaustive annotation-pass cues omit it (they are not bound to a target word).
+   */
+  wordId?: string;
+  /** Legacy target-word grounding key (the WordData attribute that attested this cue). */
+  sourceAttribute?: string;
   /**
    * The exact expression in the passage this cue is about, copied verbatim from the sentence's
    * tokens. `span` is RE-DERIVED from this text (not from the model's raw token indices, which it
@@ -285,6 +291,15 @@ export interface GenerationRequest {
    * them instead of being asked to regenerate blind. Absent on the first attempt.
    */
   repairFeedback?: string[];
+}
+
+/**
+ * Input to the exhaustive annotation pass: the finished passage's tokenized sentences plus its
+ * CEFR level. The proxy runs a second model call over this and returns location-anchored NoticeCues.
+ */
+export interface PassageAnnotationRequest {
+  sentences: Sentence[];
+  level: Cefr;
 }
 
 /**

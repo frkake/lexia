@@ -14,4 +14,9 @@ describe('isCueGrounded', () => {
     expect(isCueGrounded('word_family', {})).toBe(false);
     expect(isCueGrounded('register', undefined)).toBe(false);
   });
+
+  it('treats idiom and phrasal_verb as never attribute-grounded (the annotation pass asserts them)', () => {
+    expect(isCueGrounded('idiom', { more: { idioms: ['bite the bullet'] } })).toBe(false);
+    expect(isCueGrounded('phrasal_verb', {})).toBe(false);
+  });
 });

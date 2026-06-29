@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ProviderError, generatePassage, getWordData, suggestWords, type Env } from './providers';
+import { ProviderError, generatePassage, getWordData, suggestWords, annotatePassage, type Env } from './providers';
 import type { GenerationRequest } from '../../src/types/domain';
 
 const req: GenerationRequest = {
@@ -69,20 +69,13 @@ describe('generatePassage — OpenAI provider (default)', () => {
     expect(res.passage.noticeCues).toEqual([]);
   });
 
-  it('re-anchors mis-indexed spans and cleans notice cues against the supplied attributes', async () => {
+  it('re-anchors mis-indexed target and collocation spans by their declared text', async () => {
     const reqWithTargets: GenerationRequest = {
       level: 'B1',
       themes: ['会議'],
       newWordRatio: 0.3,
       length: 'short',
-      targetWords: [
-        {
-          wordId: 'agenda',
-          surface: 'agenda',
-          masteryDensity: 'new',
-          attributes: { connotation: 'neutral', more: { commonErrors: ['agenda vs schedule'] } },
-        },
-      ],
+      targetWords: [{ wordId: 'agenda', surface: 'agenda', masteryDensity: 'new', attributes: { connotation: 'neutral' } }],
     };
     const passage = {
       meta: { title: 't', theme: '会議', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 9 },
@@ -90,74 +83,14 @@ describe('generatePassage — OpenAI provider (default)', () => {
       // Wrong indices: "agenda" declared at [0,1) ("We"); collocation declared at [5,9).
       targetSpans: [{ sentenceIndex: 0, tokenStart: 0, tokenEnd: 1, wordId: 'agenda', surface: 'agenda', masteryDensity: 'new' }],
       collocationSpans: [{ sentenceIndex: 0, tokenStart: 5, tokenEnd: 9, headWordId: 'agenda', collocationId: 'set an agenda' }],
-      noticeCues: [
-        // Grounded (more.commonErrors) but the model MIS-INDEXED the span ([0,1)="We") and used a
-        // non-canonical sourceAttribute. anchorText "an agenda" (tokens [2,4)) is the source of truth.
-        { index: 0, span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1 }, category: 'common_error', wordId: 'agenda', sourceAttribute: 'commonErrors', anchorText: 'an agenda', explanationJa: '' },
-        // Ungrounded: no register attribute supplied → must be dropped.
-        { index: 1, span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1 }, category: 'register', wordId: 'agenda', sourceAttribute: 'attributes.register', anchorText: 'agenda', explanationJa: '' },
-      ],
+      noticeCues: [],
     };
     const fetchImpl = vi.fn(async () => openAiCompletion(passage));
-    const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
-    const res = await generatePassage(env, reqWithTargets, fetchImpl as unknown as typeof fetch);
-
+    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, reqWithTargets, fetchImpl as unknown as typeof fetch);
     expect(res.passage.targetSpans[0]).toMatchObject({ tokenStart: 3, tokenEnd: 4 }); // "agenda"
     expect(res.passage.collocationSpans[0]).toMatchObject({ tokenStart: 1, tokenEnd: 4 }); // "set an agenda"
-    expect(res.passage.noticeCues.some((c) => c.category === 'register')).toBe(false); // ungrounded → dropped
-    const c0 = res.passage.noticeCues.find((c) => c.category === 'common_error')!;
-    expect(c0.sourceAttribute).toBe('more.commonErrors'); // canonicalized
-    // Span RE-DERIVED from anchorText "an agenda" ([2,4)) — NOT the model's [0,1), and NOT the
-    // target word "agenda" alone ([3,4)). This is the badge ↔ explanation correspondence fix.
-    expect(c0.span).toMatchObject({ sentenceIndex: 0, tokenStart: 2, tokenEnd: 4 });
-  });
-
-  it('re-anchors a repeated expression to the occurrence nearest the model\'s declared index', async () => {
-    const reqT: GenerationRequest = {
-      level: 'B1',
-      themes: ['x'],
-      newWordRatio: 0.3,
-      length: 'short',
-      targetWords: [{ wordId: 'plant', surface: 'plant', masteryDensity: 'new', attributes: { connotation: 'neutral' } }],
-    };
-    const passage = {
-      meta: { title: 't', theme: 'x', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 6 },
-      sentences: [{ tokens: ['The', 'plant', 'will', 'plant', 'seeds', '.'], translationJa: '' }],
-      targetSpans: [{ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'plant', surface: 'plant', masteryDensity: 'new' }],
-      collocationSpans: [],
-      noticeCues: [
-        // "plant" appears twice; the cue is about the SECOND one (declared tokenStart:3).
-        { index: 1, span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, category: 'connotation', wordId: 'plant', sourceAttribute: 'connotation', anchorText: 'plant', explanationJa: '' },
-      ],
-    };
-    const fetchImpl = vi.fn(async () => openAiCompletion(passage));
-    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, reqT, fetchImpl as unknown as typeof fetch);
-    // Must land on the second "plant" ([3,4)), not drift to the first ([1,2)).
-    expect(res.passage.noticeCues[0]!.span).toMatchObject({ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 });
-  });
-
-  it('renumbers surviving notice cues to contiguous unique indices (1..N)', async () => {
-    const reqT: GenerationRequest = {
-      level: 'B1',
-      themes: ['x'],
-      newWordRatio: 0.3,
-      length: 'short',
-      targetWords: [{ wordId: 'plant', surface: 'plant', masteryDensity: 'new', attributes: { connotation: 'neutral', register: 'neutral' } }],
-    };
-    const passage = {
-      meta: { title: 't', theme: 'x', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
-      sentences: [{ tokens: ['A', 'green', 'plant', 'grows', '.'], translationJa: '' }],
-      targetSpans: [{ sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'plant', surface: 'plant', masteryDensity: 'new' }],
-      collocationSpans: [],
-      noticeCues: [
-        // Both grounded, but the model emitted DUPLICATE indices (0, 0).
-        { index: 0, span: { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3 }, category: 'connotation', wordId: 'plant', sourceAttribute: 'connotation', anchorText: 'plant', explanationJa: '' },
-        { index: 0, span: { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3 }, category: 'register', wordId: 'plant', sourceAttribute: 'register', anchorText: 'plant', explanationJa: '' },
-      ],
-    };
-    const fetchImpl = vi.fn(async () => openAiCompletion(passage));
-    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, reqT, fetchImpl as unknown as typeof fetch);
-    expect(res.passage.noticeCues.map((c) => c.index)).toEqual([1, 2]);
+    // Notices are produced by the separate annotation pass (annotatePassage), not by generation.
+    expect(res.passage.noticeCues).toEqual([]);
   });
 
   it('unwraps a {meta, passage:{sentences}} shape and backfills missing meta from the request', async () => {
@@ -309,5 +242,48 @@ describe('suggestWords', () => {
     const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
     const words = await suggestWords(env, { level: 'B1', themes: ['x'], count: 5 }, fetchImpl as unknown as typeof fetch);
     expect(words).toEqual([]);
+  });
+});
+
+describe('annotatePassage', () => {
+  const sentences = [
+    { tokens: ['The', 'board', 'will', 'bite', 'the', 'bullet', '.'], translationJa: '' },
+    { tokens: ['It', 'paid', 'off', '.'], translationJa: '' },
+  ];
+
+  it('re-derives each cue span from its verbatim anchorText and numbers them in reading order', async () => {
+    const reply = {
+      noticeCues: [
+        // Listed out of reading order; the model's indices are unreliable (deliberately wrong here).
+        { span: { sentenceIndex: 1, tokenStart: 0, tokenEnd: 0 }, category: 'phrasal_verb', anchorText: 'paid off', explanationJa: '報われた' },
+        { span: { sentenceIndex: 0, tokenStart: 9, tokenEnd: 9 }, category: 'idiom', anchorText: 'bite the bullet', explanationJa: '思い切ってやる' },
+      ],
+    };
+    const fetchImpl = vi.fn(async () => openAiCompletion(reply));
+    const cues = await annotatePassage({ OPENAI_API_KEY: 'sk-real-key' }, { sentences, level: 'B1' }, fetchImpl as unknown as typeof fetch);
+    expect(cues.map((c) => [c.category, c.index, c.span.sentenceIndex, c.span.tokenStart, c.span.tokenEnd])).toEqual([
+      ['idiom', 1, 0, 3, 6], // "bite the bullet"
+      ['phrasal_verb', 2, 1, 1, 3], // "paid off"
+    ]);
+  });
+
+  it('drops a cue whose anchorText does not occur in the passage', async () => {
+    const reply = { noticeCues: [{ span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1 }, category: 'idiom', anchorText: 'kick the bucket', explanationJa: '' }] };
+    const fetchImpl = vi.fn(async () => openAiCompletion(reply));
+    const cues = await annotatePassage({ OPENAI_API_KEY: 'sk-real-key' }, { sentences, level: 'B1' }, fetchImpl as unknown as typeof fetch);
+    expect(cues).toEqual([]);
+  });
+
+  it('degrades to no cues on a truncated (max_tokens) reply', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion({ noticeCues: [] }, 'length'));
+    const cues = await annotatePassage({ OPENAI_API_KEY: 'sk-real-key' }, { sentences, level: 'B1' }, fetchImpl as unknown as typeof fetch);
+    expect(cues).toEqual([]);
+  });
+
+  it('returns no cues for an empty passage without calling the model', async () => {
+    const fetchImpl = vi.fn();
+    const cues = await annotatePassage({ OPENAI_API_KEY: 'sk-real-key' }, { sentences: [], level: 'B1' }, fetchImpl as unknown as typeof fetch);
+    expect(cues).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

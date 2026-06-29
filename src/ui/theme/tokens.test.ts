@@ -65,6 +65,11 @@ describe('design tokens', () => {
     expect(noticeStyle('grammar_pattern').numberColor).toBe('#3D6CB0');
   });
 
+  it('styles idiom with the terracotta group and phrasal_verb with the blue group', () => {
+    expect(noticeStyle('idiom')).toMatchObject({ label: 'イディオム', color: '#C07A63', numberColor: '#C07A63' });
+    expect(noticeStyle('phrasal_verb')).toMatchObject({ label: '句動詞', numberColor: '#3D6CB0' });
+  });
+
   it('returns a defined style for every notice category', () => {
     const categories = [
       'connotation',
@@ -77,6 +82,8 @@ describe('design tokens', () => {
       'word_family',
       'frequency',
       'common_error',
+      'idiom',
+      'phrasal_verb',
     ] as const;
     for (const c of categories) {
       const s = noticeStyle(c);

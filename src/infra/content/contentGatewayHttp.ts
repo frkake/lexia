@@ -17,6 +17,9 @@ import type {
   StopReason,
   WordData,
   WordSuggestionRequest,
+  Cefr,
+  Sentence,
+  NoticeCue,
 } from '../../types/domain';
 
 export type ContentGatewayErrorKind =
@@ -92,6 +95,15 @@ export class HttpContentGateway implements ContentGateway {
       body: JSON.stringify(req),
     });
     return Array.isArray(body.words) ? body.words : [];
+  }
+
+  async annotatePassage(sentences: Sentence[], level: Cefr): Promise<NoticeCue[]> {
+    const body = await this.request<{ noticeCues: NoticeCue[] }>('/api/passages:annotate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sentences, level }),
+    });
+    return Array.isArray(body.noticeCues) ? body.noticeCues : [];
   }
 
   /** Issue a request and normalize transport / status failures into ContentGatewayError. */

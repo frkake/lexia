@@ -177,4 +177,34 @@ describe('GenerationOrchestrator', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.kind).toBe('max_tokens');
   });
+
+  it('enriches the accepted passage with cues from the annotation pass', async () => {
+    const { gateway } = queueGateway([goodResponse]);
+    const enriched: ContentGateway = {
+      ...gateway,
+      annotatePassage: async () => [
+        { index: 1, span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, category: 'idiom', anchorText: 'negotiate', explanationJa: '' },
+      ],
+    };
+    const orch = createGenerationOrchestrator({ gateway: enriched, passageId: 'p1' });
+    const result = await orch.generate(req);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.source.noticeCues.map((c) => c.category)).toEqual(['idiom']);
+    }
+  });
+
+  it('degrades (still ships the passage) when the annotation pass throws', async () => {
+    const { gateway } = queueGateway([goodResponse]);
+    const failing: ContentGateway = {
+      ...gateway,
+      annotatePassage: async () => {
+        throw new Error('annotate down');
+      },
+    };
+    const orch = createGenerationOrchestrator({ gateway: failing, passageId: 'p1' });
+    const result = await orch.generate(req);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.renderText).toContain('negotiate');
+  });
 });
