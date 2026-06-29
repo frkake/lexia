@@ -1,0 +1,97 @@
+/*
+ * L4 — global stylesheet: design-token CSS custom properties (mirror of tokens.ts,
+ * single source of truth = design.md "Design Tokens") plus the responsive shell layout
+ * that inline styles can't express (100dvh, safe-area, container/breakpoint switch for
+ * the docked mobile player). The single component tree adapts by width; routes never swap.
+ */
+
+:root {
+  --primary: #3d6cb0;
+  --primary-deep: #2d518c;
+  --primary-border: #cbd8e8;
+  --ink: #1e2630;
+  --body: #27313d;
+  --ink-soft: #5a6675;
+  --muted: #717e8c;
+  --faint: #9aa4b1;
+  --green: #4c9a86;
+  --terracotta: #c07a63;
+  --surface-page: #f6f8fa;
+  --surface-card: #ffffff;
+  --border-card: #e8ecf2;
+  --border-control: #e4e8ee;
+  --mastery-new: #c4ccd6;
+  --mastery-learning: #8fb0da;
+  --mastery-consolidating: #4c7bc0;
+  --mastery-mastered: #4c9a86;
+  --shadow-dock: 0 -6px 24px rgba(25, 40, 65, 0.07);
+  --radius-card: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--surface-page);
+  color: var(--body);
+  font-family: 'IBM Plex Sans', 'Noto Sans JP', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Shell: header + scrollable main + docked player, full dynamic-viewport height. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  background: var(--surface-page);
+}
+
+.app-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border-card);
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* leave room so the docked player never overlaps content */
+  padding-bottom: 84px;
+}
+
+.bottom-player {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+}
+
+/* Mobile: fix the player to the bottom inside the safe area (viewport-fit=cover). */
+@media (max-width: 600px) {
+  .app-header {
+    padding: 10px 16px;
+  }
+  .bottom-player {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 22px 22px 0 0;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .app-main {
+    padding-bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+}

@@ -1,0 +1,92 @@
+import { describe, it, expect } from 'vitest';
+import { HttpContentGateway } from './contentGatewayHttp';
+import type { GenerationRequest, WordData } from '../../types/domain';
+
+const req: GenerationRequest = {
+  level: 'B1',
+  themes: ['travel'],
+  newWordRatio: 0.3,
+  length: 'short',
+  targetWords: [{ wordId: 'w1', surface: 'resilient', masteryDensity: 'new' }],
+};
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+function gatewayWith(fetchImpl: typeof fetch): HttpContentGateway {
+  return new HttpContentGateway({ baseUrl: 'https://api.test', fetch: fetchImpl });
+}
+
+const samplePassage = {
+  meta: { title: 't', theme: 'travel', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
+  sentences: [{ tokens: ['She', 'stayed', 'resilient', '.'], translationJa: '' }],
+  targetSpans: [],
+  collocationSpans: [],
+  noticeCues: [],
+};
+
+describe('HttpContentGateway.generatePassage', () => {
+  it('posts to /api/passages:generate and maps stop_reason to stopReason', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const gw = gatewayWith(async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { passage: samplePassage, stop_reason: 'end_turn' });
+    });
+    const res = await gw.generatePassage(req);
+    expect(captured!.url).toBe('https://api.test/api/passages:generate');
+    expect(captured!.init?.method).toBe('POST');
+    expect(res.stopReason).toBe('end_turn');
+    expect(res.passage.sentences[0]!.tokens).toContain('resilient');
+  });
+
+  it('normalizes 422 to a validation error', async () => {
+    const gw = gatewayWith(async () => jsonResponse(422, { error: 'invalid' }));
+    await expect(gw.generatePassage(req)).rejects.toMatchObject({ kind: 'validation', status: 422 });
+  });
+
+  it('normalizes 429 to a rate_limited error', async () => {
+    const gw = gatewayWith(async () => jsonResponse(429, {}));
+    await expect(gw.generatePassage(req)).rejects.toMatchObject({ kind: 'rate_limited' });
+  });
+
+  it('normalizes 503 to an unavailable error', async () => {
+    const gw = gatewayWith(async () => jsonResponse(503, {}));
+    await expect(gw.generatePassage(req)).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+
+  it('normalizes a thrown fetch into a network error', async () => {
+    const gw = gatewayWith(async () => {
+      throw new Error('offline');
+    });
+    await expect(gw.generatePassage(req)).rejects.toMatchObject({ kind: 'network' });
+  });
+});
+
+describe('HttpContentGateway.getWordData', () => {
+  it('gets /api/words/{wordId} and returns WordData', async () => {
+    const word: WordData = {
+      wordId: 'w1',
+      headword: 'resilient',
+      ipa: '/rɪˈzɪljənt/',
+      pos: ['adj'],
+      register: 'neutral',
+      connotation: 'positive',
+      frequency: 3,
+      core: { meaningsJa: ['回復力のある'], examples: [], collocations: [], synonymNuances: [] },
+    };
+    let url = '';
+    const gw = gatewayWith(async (u) => {
+      url = String(u);
+      return jsonResponse(200, word);
+    });
+    const got = await gw.getWordData('w1');
+    expect(url).toBe('https://api.test/api/words/w1');
+    expect(got.headword).toBe('resilient');
+  });
+
+  it('normalizes 404 to a not_found error', async () => {
+    const gw = gatewayWith(async () => jsonResponse(404, {}));
+    await expect(gw.getWordData('missing')).rejects.toMatchObject({ kind: 'not_found', status: 404 });
+  });
+});
