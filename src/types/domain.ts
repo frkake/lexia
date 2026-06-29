@@ -296,10 +296,17 @@ export interface GenerationRequest {
 /**
  * Input to the exhaustive annotation pass: the finished passage's tokenized sentences plus its
  * CEFR level. The proxy runs a second model call over this and returns location-anchored NoticeCues.
+ *
+ * `targetSpans` / `collocationSpans` are the expressions the reading UI already marks (study-word
+ * underlines, collocation tints). They are passed as REQUIRED COVERAGE so every body mark also gets
+ * a「気づき」cue — keeping the in-text marking and the notice rail one consistent set (no
+ * "this collocation is explained but that one isn't").
  */
 export interface PassageAnnotationRequest {
   sentences: Sentence[];
   level: Cefr;
+  targetSpans?: TargetSpan[];
+  collocationSpans?: CollocationSpan[];
 }
 
 /**

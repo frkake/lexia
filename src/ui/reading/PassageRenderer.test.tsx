@@ -1,9 +1,53 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { PassageRenderer } from './PassageRenderer';
 import { tokenizer } from '../../domain/tokenizer/joinService';
+import { readingUiStore } from '../../state/stores/readingUiStore';
+import { cueHighlight } from '../theme/tokens';
 import type { IndexedPassage, PassageOutput } from '../../types/domain';
+
+/** A sentence whose notice cue spans three PLAIN (non-target, non-collocation) tokens. */
+function makeMultiTokenCuePassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', theme: 'negotiation', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 5 },
+    sentences: [{ tokens: ['We', 'leverage', 'our', 'reputation', '.'], translationJa: '評判を活かす。' }],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [
+      {
+        index: 2,
+        span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 },
+        category: 'collocation',
+        anchorText: 'leverage our reputation',
+        explanationJa: '活かせる資産が来る。',
+      },
+    ],
+  };
+  return tokenizer.index('p-multi', source);
+}
+
+/** A notice cue ("leverage", [2,3)) sitting INSIDE a collocation chip ("leverage our reputation"). */
+function makeCueInsideCollocationPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', theme: 'negotiation', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
+    sentences: [{ tokens: ['We', 'can', 'leverage', 'our', 'reputation', '.'], translationJa: '評判を活かせる。' }],
+    targetSpans: [
+      { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'leverage', surface: 'leverage', masteryDensity: 'new' },
+    ],
+    collocationSpans: [{ sentenceIndex: 0, tokenStart: 2, tokenEnd: 5, headWordId: 'leverage', collocationId: 'lev-rep' }],
+    noticeCues: [
+      {
+        index: 2,
+        span: { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3 },
+        category: 'collocation',
+        anchorText: 'leverage',
+        explanationJa: '活かせる資産が来る。',
+      },
+    ],
+  };
+  return tokenizer.index('p-inside', source);
+}
 
 function makePassage(): IndexedPassage {
   const source: PassageOutput = {
@@ -96,5 +140,67 @@ describe('<PassageRenderer/>', () => {
     const { getByTestId } = render(<PassageRenderer passage={makePassage()} fontScale={1.5} />);
     // base prose size is 19px → scaled to 28.5px
     expect(getByTestId('passage-prose').style.fontSize).toBe('28.5px');
+  });
+});
+
+describe('<PassageRenderer/> Spotlight Link (cue ↔ span)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('tags the cue span end-to-end with data-cue-index, not just the badge', () => {
+    const { container } = render(<PassageRenderer passage={makeMultiTokenCuePassage()} />);
+    const segs = Array.from(container.querySelectorAll('[data-cue-index~="2"]'));
+    expect(segs.length).toBeGreaterThan(0);
+    // The tagged segments (words + interior gaps) cover the full expression extent.
+    expect(segs.map((s) => s.textContent).join('')).toBe('leverage our reputation');
+  });
+
+  it('does not tag tokens outside the cue span', () => {
+    const { getByText } = render(<PassageRenderer passage={makeMultiTokenCuePassage()} />);
+    expect(getByText('We').closest('[data-cue-index]')).toBeNull();
+  });
+
+  it('makes the in-text badge an interactive prose-side handle linked to the rail item', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    const badge = getByTestId('notice-badge-1');
+    expect(badge.getAttribute('role')).toBe('button');
+    expect(badge.getAttribute('aria-controls')).toBe('notice-item-1');
+  });
+
+  it('previews a cue on badge hover and clears it on leave', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    const badge = getByTestId('notice-badge-1');
+    fireEvent.mouseEnter(badge);
+    expect(readingUiStore.getState().hoverCueIndex).toBe(1);
+    fireEvent.mouseLeave(badge);
+    expect(readingUiStore.getState().hoverCueIndex).toBeNull();
+  });
+
+  it('pins a cue when its badge is clicked', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    fireEvent.click(getByTestId('notice-badge-1'));
+    expect(readingUiStore.getState().pinnedCueIndex).toBe(1);
+  });
+
+  it('lights an underline-only span with a faint category FILL when its cue is active', () => {
+    readingUiStore.getState().setPinned(1); // cue #1 = connotation on the target word "restless"
+    const { container } = render(<PassageRenderer passage={makePassage()} />);
+    const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
+    expect(seg.style.background).toBe(cueHighlight('connotation').fill);
+    expect(seg.style.boxShadow).toBe(''); // fill channel, not ring
+  });
+
+  it('uses a RING (not a fill) for a cue inside a collocation chip — collision avoidance', () => {
+    readingUiStore.getState().setPinned(2);
+    const { container } = render(<PassageRenderer passage={makeCueInsideCollocationPassage()} />);
+    const seg = container.querySelector('[data-cue-index~="2"]') as HTMLElement;
+    expect(seg.style.background).toBe(''); // never double-fill the #E4EDF8 chip
+    expect(seg.style.boxShadow).toContain('inset');
+  });
+
+  it('adds no highlight ink at rest, however many cues exist', () => {
+    const { container } = render(<PassageRenderer passage={makePassage()} />);
+    const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
+    expect(seg.style.background).toBe('');
+    expect(seg.style.boxShadow).toBe('');
   });
 });

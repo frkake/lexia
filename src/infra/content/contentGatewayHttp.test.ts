@@ -111,22 +111,25 @@ describe('HttpContentGateway.suggestWords', () => {
 });
 
 describe('HttpContentGateway.annotatePassage', () => {
-  it('posts the sentences + level to /api/passages:annotate and returns the cues', async () => {
+  it('posts the sentences + level + body-mark spans to /api/passages:annotate and returns the cues', async () => {
     let captured: { url: string; init?: RequestInit } | null = null;
     const cue = { index: 1, span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1 }, category: 'idiom' as const, anchorText: 'She', explanationJa: '' };
     const gw = gatewayWith(async (url, init) => {
       captured = { url: String(url), init };
       return jsonResponse(200, { noticeCues: [cue] });
     });
-    const cues = await gw.annotatePassage(samplePassage.sentences, 'B1');
+    const collocationSpans = [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 3, headWordId: 'w1', collocationId: 'c1' }];
+    const targetSpans = [{ sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'w1', surface: 'resilient', masteryDensity: 'new' as const }];
+    const cues = await gw.annotatePassage({ sentences: samplePassage.sentences, level: 'B1', collocationSpans, targetSpans });
     expect(captured!.url).toBe('https://api.test/api/passages:annotate');
     expect(captured!.init?.method).toBe('POST');
-    expect(JSON.parse(String(captured!.init?.body))).toMatchObject({ level: 'B1' });
+    // The required-coverage spans must reach the proxy so the rail can cover every body mark.
+    expect(JSON.parse(String(captured!.init?.body))).toMatchObject({ level: 'B1', collocationSpans, targetSpans });
     expect(cues).toEqual([cue]);
   });
 
   it('returns an empty list when the reply has no cues array', async () => {
     const gw = gatewayWith(async () => jsonResponse(200, {}));
-    expect(await gw.annotatePassage(samplePassage.sentences, 'B1')).toEqual([]);
+    expect(await gw.annotatePassage({ sentences: samplePassage.sentences, level: 'B1' })).toEqual([]);
   });
 });

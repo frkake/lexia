@@ -6,6 +6,7 @@ import { ReadingScreen } from './ReadingScreen';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { sessionStore } from '../../state/stores/sessionStore';
 import { settingsStore } from '../../state/stores/settingsStore';
+import { readingUiStore } from '../../state/stores/readingUiStore';
 import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
 function makePassage(): IndexedPassage {
@@ -41,6 +42,7 @@ beforeEach(() => {
   act(() => {
     settingsStore.setState({ fontScale: 1, translationMode: 'off' });
     sessionStore.getState().reset();
+    readingUiStore.getState().reset();
   });
 });
 
@@ -125,5 +127,20 @@ describe('<ReadingScreen/>', () => {
     act(() => sessionStore.getState().startPassage(makePassage(), 1_000));
     const { getByText } = renderScreen();
     expect(getByText('growing')).toBeTruthy();
+  });
+
+  it('reflects the active cue on the root so both columns can light from one attribute', () => {
+    act(() => readingUiStore.getState().setPinned(1));
+    const { container } = renderScreen({ passage: makePassage() });
+    expect((container.firstChild as HTMLElement).getAttribute('data-active-cue')).toBe('1');
+  });
+
+  it('clears the pinned cue on Escape', () => {
+    act(() => readingUiStore.getState().setPinned(1));
+    renderScreen({ passage: makePassage() });
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+    expect(readingUiStore.getState().pinnedCueIndex).toBeNull();
   });
 });

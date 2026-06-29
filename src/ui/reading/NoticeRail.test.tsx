@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { render, fireEvent } from '@testing-library/react';
 import { NoticeRail } from './NoticeRail';
 import { tokenizer } from '../../domain/tokenizer/joinService';
+import { readingUiStore } from '../../state/stores/readingUiStore';
 import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
 function makePassage(): IndexedPassage {
@@ -76,5 +77,38 @@ describe('<NoticeRail/>', () => {
     const { getByText, queryByText } = render(<NoticeRail passage={tokenizer.index('p', source)} />);
     expect(getByText("doesn't")).toBeTruthy();
     expect(queryByText('does n\'t')).toBeNull();
+  });
+});
+
+describe('<NoticeRail/> Spotlight Link (item ↔ span)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('links each item to its in-text badge for AT', () => {
+    const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
+    const item = getByTestId('notice-item-1');
+    expect(item.getAttribute('id')).toBe('notice-item-1');
+    expect(item.getAttribute('aria-controls')).toBe('notice-badge-1');
+  });
+
+  it('previews a cue on item hover and clears it on leave', () => {
+    const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
+    const item = getByTestId('notice-item-2');
+    fireEvent.mouseEnter(item);
+    expect(readingUiStore.getState().hoverCueIndex).toBe(2);
+    fireEvent.mouseLeave(item);
+    expect(readingUiStore.getState().hoverCueIndex).toBeNull();
+  });
+
+  it('pins a cue when its item is clicked (and still jumps to the badge)', () => {
+    const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
+    fireEvent.click(getByTestId('notice-item-1'));
+    expect(readingUiStore.getState().pinnedCueIndex).toBe(1);
+  });
+
+  it('marks the active item with aria-current when its cue is lit', () => {
+    readingUiStore.getState().setPinned(1);
+    const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
+    expect(getByTestId('notice-item-1').getAttribute('aria-current')).toBe('true');
+    expect(getByTestId('notice-item-2').getAttribute('aria-current')).toBeNull();
   });
 });

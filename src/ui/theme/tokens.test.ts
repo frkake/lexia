@@ -4,6 +4,7 @@ import {
   masteryColors,
   annotationEncoding,
   noticeStyle,
+  cueHighlight,
   fonts,
   radius,
 } from './tokens';
@@ -98,5 +99,33 @@ describe('design tokens', () => {
     expect(fonts.serifJp).toContain('Noto Serif JP');
     expect(fonts.bodyJp).toContain('Noto Sans JP');
     expect(radius.card).toBe(8);
+  });
+});
+
+describe('cueHighlight (Spotlight Link active styling)', () => {
+  it('connotation: faint green fill + a deep-green ring kept off the Mastered hue', () => {
+    const h = cueHighlight('connotation');
+    expect(h.fill).toBe('rgba(76, 154, 134, 0.1)'); // green #4C9A86 @ 0.10
+    expect(h.ring).toBe('#3E8C79'); // greenDeep
+    // must NOT collide with the Mastered mastery color (#4C9A86)
+    expect(h.ring).not.toBe(masteryColors.Mastered);
+  });
+
+  it('collocation group rings in the deep-blue family', () => {
+    expect(cueHighlight('collocation').ring).toBe('#2D518C'); // primaryDeep
+    expect(cueHighlight('grammar_pattern').ring).toBe('#2D518C');
+    expect(cueHighlight('phrasal_verb').ring).toBe('#2D518C');
+    expect(cueHighlight('collocation').fill).toBe('rgba(61, 108, 176, 0.1)');
+  });
+
+  it('register group rings in the gray family', () => {
+    expect(cueHighlight('register').ring).toBe('#5A6675'); // inkSoft
+    expect(cueHighlight('etymology').ring).toBe('#5A6675');
+  });
+
+  it('idiom rings in the deepened terracotta token', () => {
+    expect(colors.terracottaDeep).toBe('#A65A41');
+    expect(cueHighlight('idiom').ring).toBe('#A65A41');
+    expect(cueHighlight('idiom').fill).toBe('rgba(192, 122, 99, 0.1)');
   });
 });

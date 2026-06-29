@@ -21,9 +21,8 @@ import type {
   PassageOutput,
   ReadingProgress,
   Settings,
-  Cefr,
-  Sentence,
   NoticeCue,
+  PassageAnnotationRequest,
 } from './domain';
 
 // ── Adjacent capability seams ────────────────────────────────────────────────
@@ -50,10 +49,11 @@ export interface ContentGateway {
   suggestWords?(req: WordSuggestionRequest): Promise<string[]>;
   /**
    * Exhaustively annotate an already-generated passage with in-text "notice" cues (collocations,
-   * idioms, phrasal verbs, connotation, register, grammar). Optional so lightweight gateways/mocks
-   * need not implement it; the orchestrator skips enrichment when it is absent.
+   * idioms, phrasal verbs, connotation, register, grammar). The request carries the body-mark spans
+   * (study words + collocations) as REQUIRED COVERAGE so the notice rail covers every in-text mark.
+   * Optional so lightweight gateways/mocks need not implement it; enrichment is skipped when absent.
    */
-  annotatePassage?(sentences: Sentence[], level: Cefr): Promise<NoticeCue[]>;
+  annotatePassage?(req: PassageAnnotationRequest): Promise<NoticeCue[]>;
 }
 
 /** Audio synthesis + token-resolved timing maps. */

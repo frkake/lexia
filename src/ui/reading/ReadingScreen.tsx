@@ -8,6 +8,7 @@
  */
 
 import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { PassageRenderer } from './PassageRenderer';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
@@ -18,6 +19,7 @@ import { colors, fonts, radius } from '../theme/tokens';
 import { useSessionStore, sessionStore } from '../../state/stores/sessionStore';
 import { useSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import { usePlayerStore } from '../../state/stores/playerStore';
+import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
 import type { IndexedPassage } from '../../types/domain';
 
 const FONT_STEPS = [0.85, 1, 1.15, 1.3, 1.45];
@@ -58,6 +60,37 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
 
   const active = passage ?? sessionPassage;
 
+  // Spotlight Link: the single cue lit across both columns, plus its lifecycle wiring.
+  const activeCueIndex = useEffectiveCue();
+  const prevPassageId = useRef<string | null>(null);
+  useEffect(() => {
+    // Drop any stale hover/pin when the passage actually changes (not on first mount).
+    const id = active?.passageId ?? null;
+    if (prevPassageId.current !== null && prevPassageId.current !== id) {
+      readingUiStore.getState().reset();
+    }
+    prevPassageId.current = id;
+  }, [active?.passageId]);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') readingUiStore.getState().clearPin();
+    };
+    const onClick = (e: MouseEvent): void => {
+      const t = e.target as HTMLElement | null;
+      // A click away from any notice handle dismisses the pinned pairing.
+      if (!t?.closest?.('.notice-badge, [data-testid^="notice-item-"]')) {
+        readingUiStore.getState().clearPin();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, []);
+
   if (!active) {
     return (
       <div style={{ padding: '46px 60px', fontFamily: fonts.ui, color: colors.faint }}>
@@ -97,7 +130,7 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
   );
 
   return (
-    <div>
+    <div data-active-cue={activeCueIndex ?? undefined}>
       {/* Mobile header: back + title + compact meta (12.4). CSS shows it only on narrow widths. */}
       <div className="reading-mobile-header" style={mobileHeaderStyle}>
         <button type="button" aria-label="戻る" onClick={() => navigate(-1)} style={backButtonStyle}>

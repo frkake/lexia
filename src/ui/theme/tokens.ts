@@ -34,6 +34,8 @@ export const colors = {
   terracotta: '#C07A63',
   terracottaSoft: '#B6886F',
   terracottaBorder: '#E4D2CC',
+  /** Deepened terracotta for the idiom group's active "Spotlight Link" ring (≥3:1 on white). */
+  terracottaDeep: '#A65A41',
   register: '#6B7686',
   // surfaces
   surfacePage: '#F6F8FA',
@@ -124,6 +126,46 @@ const NOTICE_GROUP: Record<NoticeCategory, Omit<NoticeStyle, 'label'>> = {
 /** Resolve the full chip + badge style for a notice category. */
 export function noticeStyle(category: NoticeCategory): NoticeStyle {
   return { label: NOTICE_LABELS[category], ...NOTICE_GROUP[category] };
+}
+
+/**
+ * Active "Spotlight Link" styling for a cue: a faint category FILL (background) for
+ * underline-only / plain tokens, and a deep-variant RING (box-shadow) for tokens that
+ * already own the background channel (collocation tint / keyword chip). Both are the cue's
+ * own category color so the lit prose span matches its rail chip/badge — the color is the
+ * mapping cue. Reuses the existing noticeStyle grouping; introduces no new base hues except
+ * the deepened-terracotta token. The connotation ring uses greenDeep (not the green badge
+ * color) so it stays off the Mastered mastery hue (#4C9A86).
+ */
+export interface CueHighlight {
+  /** Faint category background, applied only where no background already exists. */
+  fill: string;
+  /** Deep category color for the inset ring (used on chips) and the lit-span outline. */
+  ring: string;
+}
+
+/** Deep (active-ring) color per visual group, keyed by the shared group object. */
+const CUE_RING_BY_GROUP = new Map<Omit<NoticeStyle, 'label'>, string>([
+  [CONNOTATION, colors.greenDeep],
+  [COLLOCATION, colors.primaryDeep],
+  [REGISTER, colors.inkSoft],
+  [IDIOM, colors.terracottaDeep],
+]);
+
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function cueHighlight(category: NoticeCategory): CueHighlight {
+  const group = NOTICE_GROUP[category];
+  return {
+    fill: hexToRgba(group.numberColor, 0.1),
+    ring: CUE_RING_BY_GROUP.get(group) ?? colors.inkSoft,
+  };
 }
 
 export const fonts = {

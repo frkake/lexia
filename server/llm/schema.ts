@@ -11,8 +11,9 @@
  * half-open `[tokenStart, tokenEnd)` token ranges within one sentence.
  */
 
-import type { GenerationRequest, PassageAnnotationRequest } from '../../src/types/domain';
+import type { GenerationRequest, PassageAnnotationRequest, Sentence } from '../../src/types/domain';
 import { APPROX_WORDS } from '../../src/domain/generation/lengthSpec';
+import { tokenizer } from '../../src/domain/tokenizer/joinService';
 
 const CEFR = ['A2', 'B1', 'B2', 'C1', 'C2'] as const;
 const NOTICE_CATEGORIES = [
@@ -354,19 +355,84 @@ const ANNOTATION_SYSTEM = [
   `DON'T restate the dictionary meaning; give the insight meaning alone can't: what fills the slot, which register/situation, or the contrast with a real alternative. For idiom/grammar_pattern give only the minimal non-literal twist, never a full gloss.`,
   'BE CONCRETE BUT TRUE: name 2-3 real example words in parens (X / Y / Z) or a real alternative word; only cite collocates/register/situations you are confident are standard for THIS expression — never invent them to fill the slot, and when unsure prefer hedged framing (多くの場合) over absolutes like 必ず.',
   '',
-  'Quality bar: only high-confidence, pedagogically worthwhile items at or above the requested CEFR',
-  'level. Skip transparent, trivial sequences ("go to", "in the"). Aim for at most ~2-3 cues per',
-  'sentence so the page stays readable; add nothing for a sentence with nothing notable. Returning',
-  'few or zero cues for a plain passage is fine.',
+  'REQUIRED COVERAGE: the user message may list expressions already highlighted in the reading UI',
+  '(study words and collocations). You MUST output exactly one cue for EACH listed expression —',
+  'these are mandatory and OVERRIDE the readability cap below. Use category "collocation" for the',
+  '(collocation) items; for (word) items pick the single most useful category for that word and give',
+  'its key usage insight (skip none, even if the insight is modest).',
+  '',
+  'Quality bar: beyond the required items, add other high-confidence, pedagogically worthwhile finds',
+  'at or above the requested CEFR level. Skip transparent, trivial sequences ("go to", "in the"). For',
+  'these EXTRA (non-required) cues, aim for at most ~2-3 per sentence so the page stays readable.',
 ].join('\n');
+
+/** Canonical surface of a token range (clitics/punctuation joined like the body text). */
+function surfaceOf(sentence: Sentence, start: number, end: number): string {
+  const tokens = sentence.tokens.slice(start, end);
+  return tokenizer.renderText({ tokens, translationJa: '' }).trim();
+}
+
+interface CoverItem {
+  sentenceIndex: number;
+  tokenStart: number;
+  anchorText: string;
+  kind: 'collocation' | 'word';
+}
+
+/**
+ * The expressions the reading UI already marks (collocation tints + study-word underlines), distilled
+ * into a required-coverage list. A study word wholly inside a listed collocation is dropped (the
+ * collocation cue already covers that region), so we never require both "leverage" and the chip
+ * "leverage our reputation".
+ */
+function buildCoverage(req: PassageAnnotationRequest): CoverItem[] {
+  const colls = req.collocationSpans ?? [];
+  const items: CoverItem[] = [];
+  for (const c of colls) {
+    const sent = req.sentences[c.sentenceIndex];
+    if (!sent) continue;
+    items.push({
+      sentenceIndex: c.sentenceIndex,
+      tokenStart: c.tokenStart,
+      anchorText: surfaceOf(sent, c.tokenStart, c.tokenEnd),
+      kind: 'collocation',
+    });
+  }
+  for (const t of req.targetSpans ?? []) {
+    const sent = req.sentences[t.sentenceIndex];
+    if (!sent) continue;
+    const insideColl = colls.some(
+      (c) => c.sentenceIndex === t.sentenceIndex && c.tokenStart <= t.tokenStart && t.tokenEnd <= c.tokenEnd,
+    );
+    if (insideColl) continue;
+    items.push({
+      sentenceIndex: t.sentenceIndex,
+      tokenStart: t.tokenStart,
+      anchorText: t.surface || surfaceOf(sent, t.tokenStart, t.tokenEnd),
+      kind: 'word',
+    });
+  }
+  return items.sort((a, b) => a.sentenceIndex - b.sentenceIndex || a.tokenStart - b.tokenStart);
+}
 
 export function buildAnnotationMessages(req: PassageAnnotationRequest): { system: string; user: string } {
   const sentences = req.sentences.map((s, i) => ({ sentenceIndex: i, tokens: s.tokens }));
+  const coverage = buildCoverage(req);
+  const coverageBlock = coverage.length
+    ? [
+        '',
+        'REQUIRED COVERAGE — output exactly one cue for EACH (anchorText copied verbatim), in addition to other finds:',
+        ...coverage.map((c) => `- s${c.sentenceIndex}: "${c.anchorText}" (${c.kind})`),
+      ].join('\n')
+    : '';
   const user = [
     `Passage CEFR level: ${req.level}.`,
     'Annotate this passage exhaustively. Reply with {"noticeCues":[...]} only.',
     JSON.stringify({ sentences }, null, 2),
-  ].join('\n');
+    coverageBlock,
+  ]
+    .filter(Boolean)
+    .join('\n');
   return { system: ANNOTATION_SYSTEM, user };
 }
 

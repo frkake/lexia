@@ -112,7 +112,14 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
     const finalize = async (passage: PassageOutput): Promise<Result<IndexedPassage, GenerationError>> => {
       let noticeCues = passage.noticeCues;
       try {
-        const annotated = await deps.gateway.annotatePassage?.(passage.sentences, req.level);
+        // Pass the body-mark spans (study words + collocations) as REQUIRED COVERAGE so the notice
+        // rail covers every in-text mark — one consistent set, not two independently-chosen ones.
+        const annotated = await deps.gateway.annotatePassage?.({
+          sentences: passage.sentences,
+          level: req.level,
+          targetSpans: passage.targetSpans,
+          collocationSpans: passage.collocationSpans,
+        });
         if (annotated) noticeCues = annotated;
       } catch {
         // Degrade: keep the passage readable; notices are simply absent.

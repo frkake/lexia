@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createGenerationOrchestrator } from './generationOrchestrator';
 import type { ContentGateway } from '../../types/ports';
-import type { GenerationRequest, GenerationResponse, PassageOutput, StopReason } from '../../types/domain';
+import type { GenerationRequest, GenerationResponse, PassageAnnotationRequest, PassageOutput, StopReason } from '../../types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
@@ -192,6 +192,24 @@ describe('GenerationOrchestrator', () => {
     if (result.ok) {
       expect(result.value.source.noticeCues.map((c) => c.category)).toEqual(['idiom']);
     }
+  });
+
+  it('passes the body-mark spans (study words + collocations) to the annotation pass as required coverage', async () => {
+    const { gateway } = queueGateway([goodResponse]);
+    let captured: PassageAnnotationRequest | null = null;
+    const enriched: ContentGateway = {
+      ...gateway,
+      annotatePassage: async (r) => {
+        captured = r;
+        return [];
+      },
+    };
+    const orch = createGenerationOrchestrator({ gateway: enriched, passageId: 'p1' });
+    await orch.generate(req);
+    expect(captured).not.toBeNull();
+    expect(captured!.level).toBe('B1');
+    expect(captured!.targetSpans).toEqual(goodResponse.passage.targetSpans);
+    expect(captured!.collocationSpans).toEqual(goodResponse.passage.collocationSpans);
   });
 
   it('degrades (still ships the passage) when the annotation pass throws', async () => {

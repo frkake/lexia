@@ -32,6 +32,33 @@
   box-sizing: border-box;
 }
 
+/*
+ * Spotlight Link (cue ↔ span). The active fill/ring is applied inline by PassageRenderer on
+ * collision-free channels; here we only add the motion and the multi-line continuity that
+ * inline styles can't gate. `box-decoration-break: clone` makes a wrapped span's fill repeat
+ * its rounded background on every line. All motion is dropped under reduced-motion.
+ */
+.cue-seg {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.notice-badge {
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cue-seg,
+  .notice-badge {
+    transition: none;
+  }
+}
+
 html,
 body,
 #root {
