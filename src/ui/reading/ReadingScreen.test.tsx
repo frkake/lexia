@@ -99,6 +99,21 @@ describe('<ReadingScreen/>', () => {
     expect(getByTestId('study-word-restless')).toBeTruthy();
   });
 
+  it('jumps to the matching in-text badge when a notice item is clicked', () => {
+    const original = Element.prototype.scrollIntoView;
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const { getByTestId } = renderScreen({ passage: makePassage() });
+      fireEvent.click(getByTestId('notice-item-1'));
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+      // It scrolled the badge whose id matches the cue — the in-text marker, not some other node.
+      expect(scrollSpy.mock.instances[0]).toBe(getByTestId('notice-badge-1'));
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('offers a completion action when read-through persistence is wired', () => {
     const onCompleteReading = vi.fn();
     const { getByTestId } = renderScreen({ passage: makePassage(), onCompleteReading });

@@ -36,6 +36,9 @@ export interface PassageRendererProps {
 function NoticeBadge({ cue }: { cue: NoticeCue }) {
   return (
     <span
+      // `id` is the scroll target NoticeRail jumps to; `scrollMarginTop` keeps the badge clear of
+      // the sticky mobile header when scrolled into view.
+      id={`notice-badge-${cue.index}`}
       data-testid={`notice-badge-${cue.index}`}
       style={{
         display: 'inline-flex',
@@ -52,6 +55,7 @@ function NoticeBadge({ cue }: { cue: NoticeCue }) {
         verticalAlign: '8px',
         marginLeft: 1,
         lineHeight: 1,
+        scrollMarginTop: 90,
       }}
     >
       {cue.index}

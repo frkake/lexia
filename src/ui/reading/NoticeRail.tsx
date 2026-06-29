@@ -20,12 +20,29 @@ function expressionFor(passage: IndexedPassage, span: SpanRef): string {
   return tokenizer.renderText({ tokens, translationJa: '' }).trim();
 }
 
+/** Scroll the body to a cue's in-text badge (PassageRenderer tags each badge with a matching id). */
+function jumpToBadge(cueIndex: number): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById(`notice-badge-${cueIndex}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+}
+
 function NoticeItem({ passage, cue }: { passage: IndexedPassage; cue: NoticeCue }) {
   const style = noticeStyle(cue.category);
+  const jump = (): void => jumpToBadge(cue.index);
   return (
     <div
       data-testid={`notice-item-${cue.index}`}
-      style={{ display: 'flex', gap: 11, padding: '14px 0', borderBottom: `1px solid ${colors.dividerRow}` }}
+      role="button"
+      tabIndex={0}
+      onClick={jump}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          jump();
+        }
+      }}
+      title="本文の該当箇所へ移動"
+      style={{ display: 'flex', gap: 11, padding: '14px 0', borderBottom: `1px solid ${colors.dividerRow}`, cursor: 'pointer' }}
     >
       <span
         style={{
