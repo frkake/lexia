@@ -52,6 +52,18 @@ test.describe('reading flow (desktop)', () => {
     await page.getByRole('button', { name: '全文' }).click();
     await expect(gloss).toBeVisible();
   });
+
+  test('emphasizes the new word on the Japanese side through the real generate→render path (Req 4)', async ({ page }) => {
+    // Exercises the WHOLE path: generated passage (with translationSpans) → store → IndexedPassage
+    // → ReadingScreen right cell → SentenceTranslation underline. Guards against the wiring silently
+    // breaking even though the gallery fixture covers the component in isolation.
+    await generateFromSetup(page);
+    await page.getByRole('button', { name: '全文' }).click();
+    const newMark = page.locator('[data-translation-new="true"]');
+    await expect(newMark).toHaveText('決定的'); // the new word's JA, underlined
+    // Only the new element is underlined, not the whole gloss.
+    await expect(newMark).toHaveCount(1);
+  });
 });
 
 test('Setup can generate a passage without target words when the backend is absent', async ({ page }) => {

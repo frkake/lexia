@@ -12,7 +12,13 @@ import type { PassageOutput, WordData } from '../src/types/domain';
 export const E2E_PASSAGE: PassageOutput = {
   meta: { title: 'A Decisive Agreement', theme: '交渉', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 5 },
   sentences: [
-    { tokens: ['We', 'reached', 'a', 'decisive', 'agreement', '.'], translationJa: '私たちは決定的な合意に達した。' },
+    {
+      tokens: ['We', 'reached', 'a', 'decisive', 'agreement', '.'],
+      translationJa: '私たちは決定的な合意に達した。',
+      // Requirement 4: the new word "decisive" → its Japanese 「決定的」(chars [4,7)) is emphasized,
+      // so the real generate→render path is exercised (not just the gallery fixture).
+      translationSpans: [{ charStart: 4, charEnd: 7, refType: 'word', wordId: 'decisive', isNew: true }],
+    },
   ],
   targetSpans: [
     { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'decisive', surface: 'decisive', masteryDensity: 'new' },

@@ -67,6 +67,21 @@ test('layout: new 3-zone reading renders the sentence grid + JA-side new-element
   await expect(page.locator('[data-translation-new="true"]').first()).toBeVisible();
 });
 
+test('layout: wide desktop keeps the grid two-column with a divider on the Japanese cell (GAP3/GAP4)', async ({ page }) => {
+  test.skip(({ viewport }) => !viewport || viewport.width <= 1024, 'wide desktop only');
+  await openGallery(page, 'reading-grid');
+  // Above 1024px the grid stays side-by-side (two resolved column tracks), not collapsed.
+  const cols = await page
+    .getByTestId('sentence-row-0')
+    .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+  expect(cols.trim().split(/\s+/).length).toBe(2);
+  // The Japanese right cell is visually separated from the English by a left border (GAP4).
+  const border = await page
+    .getByTestId('sentence-aside-0')
+    .evaluate((el) => getComputedStyle(el).borderLeftStyle);
+  expect(border).toBe('solid');
+});
+
 test('tokens: dashboard 4-stage mastery breakdown colors', async ({ page }) => {
   await openGallery(page, 'dashboard');
   expect(await styleOf(page.getByTestId('mastery-seg-new'), 'backgroundColor')).toBe(rgb('#C4CCD6'));

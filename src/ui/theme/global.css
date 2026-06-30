@@ -210,22 +210,6 @@ body {
     padding: 24px 18px 34px !important;
   }
 
-  /*
-   * New 3-zone reading layout — mobile reflow (Requirement 3.3). The sentence-unit grid sets its
-   * columns inline (PassageRenderer), so override with !important: collapse to ONE column so the
-   * right-cell Japanese reflows directly BELOW its English sentence. ReadingScreen separately
-   * disables rail line-alignment on this breakpoint (useIsNarrow) so the rail flattens too.
-   */
-  .sentence-row {
-    grid-template-columns: 1fr !important;
-    row-gap: 4px;
-  }
-
-  .sentence-aside {
-    padding-left: 13px;
-    border-left: 2px solid var(--primary-border);
-  }
-
   .setup-page {
     padding: 24px 18px 30px !important;
   }
@@ -254,5 +238,38 @@ body {
 
   .setup-levels {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+ * New 3-zone reading layout — sub-desktop reflow (Requirement 3.3 / GAP3). The two-sub-column
+ * sentence grid (EN | JA) needs a real desktop width; across the entire phone+tablet band (≤1024px)
+ * the main column is too narrow to hold both side by side, so collapse the grid to ONE column and
+ * let the Japanese reflow directly BELOW its English sentence. The grid template is set inline in
+ * PassageRenderer, so override with !important. ReadingScreen gates rail line-alignment on the same
+ * 1024px breakpoint (useIsNarrow), so the rail flattens here too.
+ */
+@media (max-width: 1024px) {
+  .sentence-row {
+    grid-template-columns: 1fr !important;
+    row-gap: 4px;
+  }
+
+  /* Stacked: a left accent rule sets the Japanese apart from the English above it. */
+  .sentence-aside {
+    padding-left: 13px;
+    border-left: 2px solid var(--primary-border);
+  }
+}
+
+/*
+ * Wide desktop (>1024px): the grid is genuinely side-by-side, so give the Japanese right cell a
+ * left divider + padding to separate it from the English column (GAP4 — otherwise only a 26px gap
+ * distinguishes them and the two columns run together).
+ */
+@media (min-width: 1025px) {
+  .sentence-aside {
+    padding-left: 18px;
+    border-left: 1px solid var(--border-card);
   }
 }
