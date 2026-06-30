@@ -73,6 +73,8 @@ const REPAIR_HINT: Record<SpanViolationKind, string> = {
   cue_category_mismatch: 'Make each notice cue category match the attribute it cites, or omit the cue.',
   cue_surface_mismatch:
     "Set each notice cue's anchorText to the exact word(s) it is about, copied verbatim from that sentence, and place its span on exactly those tokens.",
+  translation_span_mismatch:
+    'Only flag a translation span as new when it corresponds to a target word whose masteryDensity is "new"; remove the emphasis otherwise.',
 };
 
 function describeViolation(v: SpanViolation): string {
@@ -80,16 +82,42 @@ function describeViolation(v: SpanViolation): string {
 }
 
 /**
- * Last-resort salvage: remove the notice cues the validator flagged (by `cueIndex`) so a passage
- * whose only fault is a mislocated cue can still be accepted. Returns null when no cue was flagged
- * (i.e. the failure is a non-droppable passage/target violation), leaving the caller to fail.
+ * Last-resort salvage: remove the cue-local faults the validator flagged so a passage whose only
+ * faults are droppable can still be accepted. This covers (a) notice cues flagged by `cueIndex`
+ * (mislocated badge) and (b) translation-side emphasis flagged by `translationSpan` (a new-flag
+ * mismatch) — both are harmless to drop, leaving the body text intact. Returns null when nothing
+ * droppable was flagged (i.e. the failure is a non-droppable passage/target violation).
  */
 function dropFailingCues(passage: PassageOutput, report: ValidationReport): PassageOutput | null {
-  const bad = new Set(
+  const badCues = new Set(
     report.violations.map((v) => v.cueIndex).filter((i): i is number => i !== undefined),
   );
-  if (bad.size === 0) return null;
-  return { ...passage, noticeCues: passage.noticeCues.filter((c) => !bad.has(c.index)) };
+  const badTranslationSpans = report.violations
+    .map((v) => v.translationSpan)
+    .filter((t): t is NonNullable<typeof t> => t !== undefined);
+  if (badCues.size === 0 && badTranslationSpans.length === 0) return null;
+
+  let sentences = passage.sentences;
+  if (badTranslationSpans.length > 0) {
+    const bySentence = new Map<number, Set<string>>();
+    for (const t of badTranslationSpans) {
+      const set = bySentence.get(t.sentenceIndex) ?? new Set<string>();
+      set.add(`${t.charStart}:${t.charEnd}`);
+      bySentence.set(t.sentenceIndex, set);
+    }
+    sentences = passage.sentences.map((s, si) => {
+      const drop = bySentence.get(si);
+      if (!drop || !s.translationSpans) return s;
+      const kept = s.translationSpans.filter((sp) => !drop.has(`${sp.charStart}:${sp.charEnd}`));
+      return { ...s, translationSpans: kept };
+    });
+  }
+
+  return {
+    ...passage,
+    sentences,
+    noticeCues: passage.noticeCues.filter((c) => !badCues.has(c.index)),
+  };
 }
 
 /** Default repair: re-issue the request annotated with what failed so the retry is guided, not blind. */

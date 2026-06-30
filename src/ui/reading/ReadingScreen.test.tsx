@@ -144,3 +144,129 @@ describe('<ReadingScreen/>', () => {
     expect(readingUiStore.getState().pinnedCueIndex).toBeNull();
   });
 });
+
+describe('<ReadingScreen/> 3-zone layout (feature-flagged, 6.1)', () => {
+  it('keeps the legacy prose layout when the flag is off (default)', () => {
+    const { getByTestId } = renderScreen({ passage: makePassage() });
+    // Default off → flowing prose, no sentence grid rows.
+    expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('prose');
+  });
+
+  it('renders the sentence-unit grid with right-cell translation when the flag is on', () => {
+    act(() => settingsStore.setState({ translationMode: 'full' }));
+    const { getByTestId } = renderScreen({ passage: makePassage(), newLayout: true });
+    expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid');
+    // The Japanese sits in the sentence's right cell (3.1).
+    expect(getByTestId('sentence-aside-0').textContent).toContain('取締役会は苛立っていた。');
+  });
+
+  it('still shows the notice rail in the new layout (3-zone composition)', () => {
+    const { getByText } = renderScreen({ passage: makePassage(), newLayout: true });
+    expect(getByText('この文章で気づきたいこと')).toBeTruthy();
+  });
+
+  it('renders the anchor-aware NoticeRail even when a custom rail is injected (Blocker 2)', () => {
+    // The real app injects its own rail (study words). The notice rail must STILL be the
+    // ReadingScreen-owned, anchor-aware one — not bypassed — so it can line-align in the new layout.
+    const { getByText, getByTestId } = renderScreen({
+      passage: makePassage(),
+      newLayout: true,
+      rail: <div data-testid="injected-rail">学習する単語</div>,
+    });
+    // The owned NoticeRail is present (its heading) …
+    expect(getByText('この文章で気づきたいこと')).toBeTruthy();
+    // … the cue item is present so anchors can position it …
+    expect(getByTestId('notice-item-1')).toBeTruthy();
+    // … and the injected rail content is still rendered alongside it.
+    expect(getByTestId('injected-rail').textContent).toContain('学習する単語');
+  });
+
+  it('does not duplicate the notice rail when no custom rail is injected', () => {
+    const { getAllByText } = renderScreen({ passage: makePassage(), newLayout: true });
+    // Exactly one notice rail heading — the owned one (no double render).
+    expect(getAllByText('この文章で気づきたいこと')).toHaveLength(1);
+  });
+
+  it('widens the body container in the wide grid so the English column is not strangled', () => {
+    // Wide viewport (matchMedia → false): the 2-column grid needs more room than the legacy 600px
+    // single column, otherwise the English text is squeezed into a narrow strip.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      media: q,
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    }));
+    try {
+      const { getByTestId } = renderScreen({ passage: makePassage(), newLayout: true });
+      const bodyWidth = parseFloat(getByTestId('reading-body').style.maxWidth);
+      expect(bodyWidth).toBeGreaterThan(600);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the legacy single-column body width (600px) when the new layout is off', () => {
+    const { getByTestId } = renderScreen({ passage: makePassage() });
+    expect(getByTestId('reading-body').style.maxWidth).toBe('600px');
+  });
+
+  it('gives the reading column more weight than the rail in the wide grid (EN+JA needs the room)', () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      media: q,
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    }));
+    try {
+      const { container } = renderScreen({ passage: makePassage(), newLayout: true });
+      const main = container.querySelector('.reading-main') as HTMLElement;
+      // The legacy split was 1.9; the 3-zone layout holds two columns in the main so it must get
+      // a larger share than that to keep the English readable next to the rail.
+      expect(parseFloat(main.style.flexGrow || main.style.flex)).toBeGreaterThan(1.9);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses the wide 3-zone arrangement on a wide viewport', () => {
+    // matchMedia(max-width:600px) → false (wide).
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      media: q,
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    }));
+    try {
+      const { container } = renderScreen({ passage: makePassage(), newLayout: true });
+      expect((container.firstChild as HTMLElement).getAttribute('data-reading-zones')).toBe('wide');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('flattens to the narrow arrangement on a narrow viewport (Req 3.3 mobile fallback)', () => {
+    // matchMedia(max-width:600px) → true (narrow): line-alignment disabled, rail flattens.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      media: q,
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    }));
+    try {
+      const { container, getByTestId } = renderScreen({ passage: makePassage(), newLayout: true });
+      expect((container.firstChild as HTMLElement).getAttribute('data-reading-zones')).toBe('narrow');
+      // The rail item is NOT absolutely positioned when narrow (flat-flow fallback).
+      expect(getByTestId('notice-item-1').style.position).not.toBe('absolute');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

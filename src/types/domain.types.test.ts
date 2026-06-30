@@ -9,6 +9,8 @@ import type {
   NoticeCategory,
   UserId,
   Settings,
+  Sentence,
+  TranslationSpan,
 } from './domain';
 
 describe('domain types', () => {
@@ -119,5 +121,35 @@ describe('domain types', () => {
 
   it('Settings.translationMode is the three reading modes', () => {
     expectTypeOf<Settings['translationMode']>().toEqualTypeOf<'off' | 'per_sentence' | 'full'>();
+  });
+
+  it('a TranslationSpan carries a JA char range, a ref type, the EN word link and a new flag (9.5/4.2)', () => {
+    const span: TranslationSpan = {
+      charStart: 0,
+      charEnd: 3,
+      refType: 'word',
+      wordId: 'resilient',
+      isNew: true,
+    };
+    expect(span.charEnd).toBeGreaterThan(span.charStart);
+    expectTypeOf<TranslationSpan['refType']>().toEqualTypeOf<
+      'word' | 'collocation' | 'idiom' | 'grammar'
+    >();
+    expectTypeOf<TranslationSpan['wordId']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<TranslationSpan['isNew']>().toEqualTypeOf<boolean>();
+  });
+
+  it('a Sentence keeps translationSpans OPTIONAL so existing passages stay valid (9.5)', () => {
+    // No translationSpans — must still compile as a valid Sentence.
+    const legacy: Sentence = { tokens: ['Hi', '.'], translationJa: 'やあ。' };
+    expect(legacy.translationSpans).toBeUndefined();
+    // With spans — also valid.
+    const annotated: Sentence = {
+      tokens: ['She', 'stayed', 'resilient', '.'],
+      translationJa: '彼女は粘り強いままだった。',
+      translationSpans: [{ charStart: 3, charEnd: 6, refType: 'word', isNew: true }],
+    };
+    expect(annotated.translationSpans).toHaveLength(1);
+    expectTypeOf<Sentence['translationSpans']>().toEqualTypeOf<TranslationSpan[] | undefined>();
   });
 });

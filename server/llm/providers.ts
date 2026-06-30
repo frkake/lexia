@@ -17,7 +17,9 @@ import type {
   NoticeCue,
   PassageAnnotationRequest,
   PassageOutput,
+  Sentence,
   StopReason,
+  TranslationSpan,
   WordData,
   WordSuggestionRequest,
 } from '../../src/types/domain';
@@ -201,9 +203,57 @@ function unwrapPassage(parsed: Raw): Raw {
   return parsed;
 }
 
+/** A translation span as the model emits it: a verbatim JA anchor, no offsets (server re-derives). */
+type RawTranslationSpan = {
+  anchorTextJa?: string;
+  refType?: TranslationSpan['refType'];
+  wordId?: string;
+  isNew?: boolean;
+};
+
+/**
+ * Re-derive each translation span's UTF-16 char offsets by locating its verbatim `anchorTextJa`
+ * inside `translationJa` (the model quotes the JA correctly but miscounts offsets — same failure
+ * mode as target/notice spans). Spans whose anchor is absent, blank, or has an invalid refType are
+ * dropped; later occurrences track an advancing cursor so repeated anchors map to distinct ranges.
+ * Returns `undefined` when there is nothing to emit, keeping pre-feature sentences untouched.
+ */
+const VALID_REF_TYPES = new Set<TranslationSpan['refType']>(['word', 'collocation', 'idiom', 'grammar']);
+
+function reanchorTranslationSpans(translationJa: string, raw: RawTranslationSpan[]): TranslationSpan[] | undefined {
+  const out: TranslationSpan[] = [];
+  let cursor = 0;
+  for (const span of raw) {
+    const anchor = typeof span.anchorTextJa === 'string' ? span.anchorTextJa.trim() : '';
+    const refType = span.refType;
+    if (!anchor || !refType || !VALID_REF_TYPES.has(refType)) continue;
+    let at = translationJa.indexOf(anchor, cursor);
+    if (at < 0) at = translationJa.indexOf(anchor); // fall back to the first occurrence
+    if (at < 0) continue; // anchor not present in the translation → drop
+    cursor = at + anchor.length;
+    out.push({
+      charStart: at,
+      charEnd: at + anchor.length,
+      refType,
+      ...(typeof span.wordId === 'string' && span.wordId ? { wordId: span.wordId } : {}),
+      isNew: span.isNew === true,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** Map a raw model sentence to a domain Sentence, re-deriving any translation-span offsets. */
+function normalizeSentence(raw: Raw): Sentence {
+  const tokens = asArray<string>(raw.tokens);
+  const translationJa = typeof raw.translationJa === 'string' ? raw.translationJa : '';
+  const rawSpans = asArray<RawTranslationSpan>(raw.translationSpans);
+  const translationSpans = reanchorTranslationSpans(translationJa, rawSpans);
+  return { tokens, translationJa, ...(translationSpans ? { translationSpans } : {}) };
+}
+
 /** Ensure arrays exist and meta is complete (backfilled from the request) for the validator/UI. */
 function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
-  const sentences = asArray<PassageOutput['sentences'][number]>(core.sentences);
+  const sentences = asArray<Raw>(core.sentences).map(normalizeSentence);
   const targetSpans = asArray<PassageOutput['targetSpans'][number]>(core.targetSpans);
   const collocationSpans = asArray<PassageOutput['collocationSpans'][number]>(core.collocationSpans);
   const noticeCues = asArray<PassageOutput['noticeCues'][number]>(core.noticeCues);

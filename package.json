@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Lexia — context-based English vocabulary learning SPA",
   "scripts": {
-    "dev": "vite",
+    "dev": "NODE_USE_ENV_PROXY=1 vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "preview": "NODE_USE_ENV_PROXY=1 vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

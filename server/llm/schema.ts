@@ -63,8 +63,25 @@ export const PASSAGE_JSON_SCHEMA = {
         properties: {
           tokens: { type: 'array', items: { type: 'string' } },
           translationJa: { type: 'string' },
+          // Translation-side emphasis (Requirement 4): the model quotes the JA expression
+          // VERBATIM (anchorTextJa) and the server re-derives charStart/charEnd from it (the
+          // model miscounts offsets), mirroring how target/notice spans are re-anchored.
+          translationSpans: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                anchorTextJa: { type: 'string' },
+                refType: { type: 'string', enum: ['word', 'collocation', 'idiom', 'grammar'] },
+                wordId: { type: 'string' },
+                isNew: { type: 'boolean' },
+              },
+              required: ['anchorTextJa', 'refType', 'wordId', 'isNew'],
+            },
+          },
         },
-        required: ['tokens', 'translationJa'],
+        required: ['tokens', 'translationJa', 'translationSpans'],
       },
     },
     targetSpans: {

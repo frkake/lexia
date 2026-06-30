@@ -234,4 +234,75 @@ describe('PassageValidator', () => {
     const report = passageValidator.validate(basePassage(), ctx);
     expect(report.violations.some((v) => v.kind === 'length_out_of_range')).toBe(false);
   });
+
+  describe('translation-side new-element consistency (4.2/4.4)', () => {
+    it('flags a JA span flagged isNew whose linked target is NOT a new word', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [
+            {
+              tokens: ['The', 'team', 'will', 'negotiate', 'the', 'terms', '.'],
+              translationJa: 'チームは条件を交渉する。',
+              // "交渉" is flagged new, but the target "negotiate" is a REVIEW word below.
+              translationSpans: [{ charStart: 5, charEnd: 7, refType: 'word', wordId: 'negotiate', isNew: true }],
+            },
+          ],
+          targetSpans: [
+            { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'negotiate', surface: 'negotiate', masteryDensity: 'review' },
+          ],
+          noticeCues: [],
+        }),
+        ctx,
+      );
+      expect(report.ok).toBe(false);
+      const v = report.violations.find((x) => x.kind === 'translation_span_mismatch');
+      expect(v).toBeTruthy();
+      // The violation identifies the offending span so the orchestrator can drop just it.
+      expect(v!.translationSpan).toMatchObject({ sentenceIndex: 0, charStart: 5, charEnd: 7 });
+    });
+
+    it('accepts a JA span flagged isNew whose linked target IS a new word', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [
+            {
+              tokens: ['The', 'team', 'will', 'negotiate', 'the', 'terms', '.'],
+              translationJa: 'チームは条件を交渉する。',
+              translationSpans: [{ charStart: 5, charEnd: 7, refType: 'word', wordId: 'negotiate', isNew: true }],
+            },
+          ],
+          // target density is 'new' (matches basePassage default)
+          noticeCues: [],
+        }),
+        ctx,
+      );
+      expect(report.violations.some((x) => x.kind === 'translation_span_mismatch')).toBe(false);
+    });
+
+    it('does not flag a non-new JA span (isNew false) even when its target is a review word', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [
+            {
+              tokens: ['The', 'team', 'will', 'negotiate', 'the', 'terms', '.'],
+              translationJa: 'チームは条件を交渉する。',
+              translationSpans: [{ charStart: 5, charEnd: 7, refType: 'word', wordId: 'negotiate', isNew: false }],
+            },
+          ],
+          targetSpans: [
+            { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'negotiate', surface: 'negotiate', masteryDensity: 'review' },
+          ],
+          noticeCues: [],
+        }),
+        ctx,
+      );
+      expect(report.violations.some((x) => x.kind === 'translation_span_mismatch')).toBe(false);
+    });
+
+    it('passes a passage with no translation spans (back-compat)', () => {
+      const report = passageValidator.validate(basePassage(), ctx);
+      expect(report.violations.some((x) => x.kind === 'translation_span_mismatch')).toBe(false);
+      expect(report.ok).toBe(true);
+    });
+  });
 });

@@ -16,6 +16,7 @@ import { ReviewSession } from './ui/review/ReviewSession';
 import { SetupScreen } from './ui/setup/SetupScreen';
 import { WordbookScreen } from './ui/wordbook/WordbookScreen';
 import * as fx from './gallery.fixtures';
+import { resolveFeatureFlags } from './ui/app/featureFlags';
 import { colors } from './ui/theme/tokens';
 import './ui/theme/global.css';
 
@@ -24,7 +25,15 @@ function screenFor(key: string): ReactNode {
     case 'dashboard':
       return <DashboardScreen snapshot={fx.dashboardSnapshot} userName="あなた" glosses={fx.dueGlosses} now={fx.FIXED_NOW} />;
     case 'reading':
-      return <ReadingScreen passage={fx.readingPassage} />;
+      // Production-representative reading frame: the reading-layout flag now ships ON, so the
+      // baseline is the new 3-zone layout (sentence grid + right-cell translation + aligned rail).
+      return <ReadingScreen passage={fx.readingPassage} newLayout={resolveFeatureFlags().newReadingLayout} />;
+    case 'reading-legacy':
+      // Legacy layout kept for comparison / kill-switch verification (flag forced off).
+      return <ReadingScreen passage={fx.readingPassage} newLayout={false} />;
+    case 'reading-grid':
+      // Explicit new-layout frame (same as 'reading' while the flag is on).
+      return <ReadingScreen passage={fx.readingPassage} newLayout />;
     case 'wordcard':
       return (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 40, background: colors.surfacePage, minHeight: '100vh' }}>

@@ -8,7 +8,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
  * encoding, the 4-stage mastery colors and the notice-category chip colors.
  */
 
-const SCREENS = ['dashboard', 'reading', 'wordcard', 'review', 'setup', 'wordbook'] as const;
+const SCREENS = ['dashboard', 'reading', 'reading-grid', 'wordcard', 'review', 'setup', 'wordbook'] as const;
 
 /** "#rrggbb" → the "rgb(r, g, b)" string getComputedStyle returns. */
 function rgb(hex: string): string {
@@ -55,6 +55,16 @@ test('tokens: annotation encoding + notice chips (design.md 状態別注釈エ�
   expect(await styleOf(page.getByTestId('notice-badge-1'), 'backgroundColor')).toBe(rgb('#4C9A86'));
   expect(await styleOf(page.getByTestId('notice-badge-2'), 'backgroundColor')).toBe(rgb('#6B7686'));
   expect(await styleOf(page.getByTestId('notice-badge-3'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
+});
+
+test('layout: new 3-zone reading renders the sentence grid + JA-side new-element emphasis (6.1/4.1)', async ({ page }) => {
+  await openGallery(page, 'reading-grid');
+  // Sentence-unit 2-column grid: English left cell + translation right cell.
+  await expect(page.getByTestId('passage-prose')).toHaveAttribute('data-layout', 'grid');
+  await expect(page.getByTestId('sentence-en-0')).toBeVisible();
+  await expect(page.getByTestId('sentence-aside-0')).toBeVisible();
+  // The new-element emphasis underlines the JA slice for a new word.
+  await expect(page.locator('[data-translation-new="true"]').first()).toBeVisible();
 });
 
 test('tokens: dashboard 4-stage mastery breakdown colors', async ({ page }) => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { appRoutes } from '../router';
@@ -12,7 +12,7 @@ import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
 import { createPlayerStore } from '../../state/stores/playerStore';
 import { createSessionStore } from '../../state/stores/sessionStore';
-import { createSettingsStore } from '../../state/stores/settingsStore';
+import { createSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import type { ContentGateway } from '../../types/ports';
 import type { PassageOutput, UserId, WordData, WordSchedulingState } from '../../types/domain';
 
@@ -114,6 +114,55 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     });
     const log = await createRepositories(db).reviewLog.since(userId, 0);
     expect(log.some((entry) => entry.wordId === 'deal' && entry.source === 'passage')).toBe(true);
+  });
+
+  it('renders the new 3-zone reading layout (grid + right-cell translation) through the real route', async () => {
+    const userId = 'route_layout_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    await createRepositories(db).scheduling.upsert(sched(userId));
+
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    // ReadingScreen reads the SINGLETON settings store for translationMode, so set 全文 there to
+    // make the right-cell Japanese visible (restored after the test).
+    const prevMode = settingsStore.getState().translationMode;
+    act(() => settingsStore.getState().setTranslationMode('full'));
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
+    fireEvent.click(screen.getByText('文章を生成する'));
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
+
+    // The reading body is the sentence-unit grid (not flowing prose) …
+    await waitFor(() => expect(screen.getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid'));
+    // … the first sentence's Japanese sits in its right cell …
+    expect(screen.getByTestId('sentence-aside-0').textContent).toContain('今日、取引を成立させた。');
+    // … and exactly one notice rail is rendered (owned, anchor-aware — not duplicated by the route).
+    expect(screen.getAllByText('この文章で気づきたいこと')).toHaveLength(1);
+
+    act(() => settingsStore.getState().setTranslationMode(prevMode)); // restore for sibling tests
   });
 
   it('auto-proposes new words when none are selected, weaving + seeding them into the SRS', async () => {

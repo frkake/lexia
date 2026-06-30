@@ -13,6 +13,8 @@ import type { ReactNode } from 'react';
 import { PassageRenderer } from './PassageRenderer';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
 import { NoticeRail } from './NoticeRail';
+import { useLineAnchors } from './useLineAnchors';
+import { useIsNarrow } from './useIsNarrow';
 import { StudyWordsList, type StudyWord } from './StudyWordsList';
 import { Legend } from '../shared/Legend';
 import { colors, fonts, radius } from '../theme/tokens';
@@ -47,9 +49,14 @@ export interface ReadingScreenProps {
   onLookup?: (wordId: string) => void;
   /** Reading-time recognition: learner finished the passage without looking up the rest. */
   onCompleteReading?: () => void;
+  /**
+   * Feature-flag switch (6.1 / 7.4): when true, render the 3-zone layout (sentence-unit grid,
+   * right-cell translation, line-aligned rail). Default false preserves the legacy reading layout.
+   */
+  newLayout?: boolean;
 }
 
-export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCompleteReading }: ReadingScreenProps) {
+export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCompleteReading, newLayout = false }: ReadingScreenProps) {
   const navigate = useNavigate();
   const sessionPassage = useSessionStore((s) => s.passage);
   const activeWordId = useSessionStore((s) => s.activeWordId);
@@ -59,6 +66,20 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
   const activeTokenId = usePlayerStore((s) => s.currentTokenId);
 
   const active = passage ?? sessionPassage;
+
+  // 3-zone layout (6.1): the grid + line-aligned rail apply only on a WIDE viewport. On a narrow
+  // viewport the layout reflows (right-cell JA drops below the English, the rail flattens) — Req 3.3.
+  const isNarrow = useIsNarrow();
+  const zones: 'wide' | 'narrow' | undefined = newLayout ? (isNarrow ? 'narrow' : 'wide') : undefined;
+  const lineAligned = newLayout && !isNarrow;
+
+  // Measure the in-text badge lines so the rail can align to them. Enabled only when the wide 3-zone
+  // layout is active; otherwise it returns no anchors (legacy / narrow flat-flow fallback).
+  const { anchors, containerRef } = useLineAnchors({
+    fontScale,
+    passageId: active?.passageId ?? 'none',
+    enabled: lineAligned,
+  });
 
   // Spotlight Link: the single cue lit across both columns, plus its lifecycle wiring.
   const activeCueIndex = useEffectiveCue();
@@ -113,8 +134,11 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
   };
   const closeDetail = (): void => sessionStore.getState().setActiveWord(null);
 
-  // Default rail (NoticeRail + study words). Real mastery stages are layered in by the
-  // wiring task (10.2) via the `rail` prop; here stages stay unset until then.
+  // The NoticeRail is ALWAYS owned by ReadingScreen so it receives the line-anchor `anchors`
+  // (the only place that drives line-alignment in the new layout). The `rail` prop supplies the
+  // study-words portion BELOW it — a route injects live, mastery-enriched study words there; when
+  // absent we fall back to the bare target words derived from the passage. Injecting `rail` must
+  // not bypass (or duplicate) the anchor-aware notice rail.
   const studyWords: StudyWord[] = [];
   const seen = new Set<string>();
   for (const t of active.source.targetSpans) {
@@ -122,15 +146,16 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
     seen.add(t.wordId);
     studyWords.push({ wordId: t.wordId, surface: t.surface, reappearCount: t.reappearInfo?.count });
   }
-  const railContent = rail ?? (
+  const railContent = (
     <>
-      <NoticeRail passage={active} />
-      <StudyWordsList words={studyWords} />
+      {/* Line-aligned only on the wide 3-zone layout; flat flow on narrow / legacy. */}
+      <NoticeRail passage={active} anchors={lineAligned ? anchors : undefined} />
+      {rail ?? <StudyWordsList words={studyWords} />}
     </>
   );
 
   return (
-    <div data-active-cue={activeCueIndex ?? undefined}>
+    <div data-active-cue={activeCueIndex ?? undefined} data-reading-zones={zones}>
       {/* Mobile header: back + title + compact meta (12.4). CSS shows it only on narrow widths. */}
       <div className="reading-mobile-header" style={mobileHeaderStyle}>
         <button type="button" aria-label="戻る" onClick={() => navigate(-1)} style={backButtonStyle}>
@@ -148,8 +173,15 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
       </div>
 
       <div className="reading-layout" style={{ display: 'flex', background: colors.surfacePage }}>
-        <div className="reading-main" style={{ flex: 1.9, minWidth: 0, padding: '46px 60px 40px', display: 'flex', justifyContent: 'center' }}>
-          <div style={{ maxWidth: 600, width: '100%' }}>
+        {/* The 3-zone layout puts two sub-columns (EN+JA) in the main, so it needs a bigger share
+            of the row than the legacy single-column split (1.9) to keep the English readable. */}
+        <div className="reading-main" style={{ flex: zones === 'wide' ? 3 : 1.9, minWidth: 0, padding: '46px 60px 40px', display: 'flex', justifyContent: 'center' }}>
+          {/*
+           * The wide 3-zone grid splits this container into EN (1.6fr) + JA (1fr); at the legacy
+           * 600px that strangles the English column to ~360px. Widen it so the English keeps a
+           * comfortable reading measure (~575px). Legacy / narrow layouts keep the 600px column.
+           */}
+          <div data-testid="reading-body" style={{ maxWidth: zones === 'wide' ? 960 : 600, width: '100%' }}>
             <div className="reading-toolbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, letterSpacing: '.06em', color: colors.faint }}>
                 {metaLine}
@@ -182,15 +214,36 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
               </figcaption>
             </figure>
 
-            <PassageRenderer
-              passage={active}
-              fontScale={fontScale}
-              activeTokenId={activeTokenId}
-              onSelectWord={selectWord}
-              renderAfterSentence={(i) => (
-                <SentenceTranslation text={active.source.sentences[i]?.translationJa ?? ''} mode={translationMode} />
+            {/* The measurement container wraps the prose; useLineAnchors reads badge positions from it. */}
+            <div ref={containerRef}>
+              {newLayout ? (
+                <PassageRenderer
+                  passage={active}
+                  fontScale={fontScale}
+                  activeTokenId={activeTokenId}
+                  onSelectWord={selectWord}
+                  layout="grid"
+                  renderAside={(i) => (
+                    <SentenceTranslation
+                      text={active.source.sentences[i]?.translationJa ?? ''}
+                      mode={translationMode}
+                      placement="aside"
+                      spans={active.source.sentences[i]?.translationSpans}
+                    />
+                  )}
+                />
+              ) : (
+                <PassageRenderer
+                  passage={active}
+                  fontScale={fontScale}
+                  activeTokenId={activeTokenId}
+                  onSelectWord={selectWord}
+                  renderAfterSentence={(i) => (
+                    <SentenceTranslation text={active.source.sentences[i]?.translationJa ?? ''} mode={translationMode} />
+                  )}
+                />
               )}
-            />
+            </div>
 
             <Legend />
 

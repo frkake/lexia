@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
-import { NoticeRail } from './NoticeRail';
+import { NoticeRail, placeRailItems } from './NoticeRail';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { readingUiStore } from '../../state/stores/readingUiStore';
 import type { IndexedPassage, PassageOutput } from '../../types/domain';
@@ -110,5 +110,79 @@ describe('<NoticeRail/> Spotlight Link (item ↔ span)', () => {
     const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
     expect(getByTestId('notice-item-1').getAttribute('aria-current')).toBe('true');
     expect(getByTestId('notice-item-2').getAttribute('aria-current')).toBeNull();
+  });
+});
+
+describe('placeRailItems (line-alignment collision avoidance, 2.1/2.3)', () => {
+  it('places each item at its anchor line when they do not collide', () => {
+    const placed = placeRailItems(
+      [
+        { cueIndex: 1, top: 40 },
+        { cueIndex: 2, top: 200 },
+      ],
+      60, // item height
+    );
+    expect(placed).toEqual([
+      { cueIndex: 1, top: 40 },
+      { cueIndex: 2, top: 200 },
+    ]);
+  });
+
+  it('stacks near items downward so they never overlap, preserving order (2.3)', () => {
+    const placed = placeRailItems(
+      [
+        { cueIndex: 1, top: 40 },
+        { cueIndex: 2, top: 55 }, // only 15px below #1 → must be pushed to 40+60
+        { cueIndex: 3, top: 60 }, // collides with the pushed #2 → pushed again
+      ],
+      60,
+    );
+    expect(placed.map((p) => p.cueIndex)).toEqual([1, 2, 3]);
+    expect(placed[0]!.top).toBe(40);
+    expect(placed[1]!.top).toBe(100); // 40 + 60
+    expect(placed[2]!.top).toBe(160); // 100 + 60
+  });
+
+  it('sorts anchors by their appearance line before stacking', () => {
+    const placed = placeRailItems(
+      [
+        { cueIndex: 3, top: 300 },
+        { cueIndex: 1, top: 20 },
+        { cueIndex: 2, top: 25 },
+      ],
+      50,
+    );
+    expect(placed.map((p) => p.cueIndex)).toEqual([1, 2, 3]);
+    expect(placed.map((p) => p.top)).toEqual([20, 70, 300]);
+  });
+});
+
+describe('<NoticeRail/> line-aligned mode (anchors provided, 2.1/2.4)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('absolutely positions each item at its anchor top when anchors are supplied', () => {
+    const { getByTestId } = render(
+      <NoticeRail passage={makePassage()} anchors={[{ cueIndex: 1, top: 40 }, { cueIndex: 2, top: 300 }]} />,
+    );
+    const item1 = getByTestId('notice-item-1');
+    expect(item1.style.position).toBe('absolute');
+    expect(item1.style.top).toBe('40px');
+    expect(getByTestId('notice-item-2').style.top).toBe('300px');
+  });
+
+  it('keeps the badge↔item number correspondence after alignment (2.4)', () => {
+    const { getByTestId } = render(
+      <NoticeRail passage={makePassage()} anchors={[{ cueIndex: 1, top: 40 }, { cueIndex: 2, top: 300 }]} />,
+    );
+    // item id encodes the same cue number the in-text badge uses.
+    expect(getByTestId('notice-item-1').getAttribute('id')).toBe('notice-item-1');
+    expect(getByTestId('notice-item-1').getAttribute('aria-controls')).toBe('notice-badge-1');
+    expect(getByTestId('notice-item-1').textContent).toContain('restless');
+  });
+
+  it('falls back to flat flow layout when no anchors are supplied', () => {
+    const { getByTestId } = render(<NoticeRail passage={makePassage()} />);
+    // No absolute positioning in the fallback (narrow / measurement-off).
+    expect(getByTestId('notice-item-1').style.position).not.toBe('absolute');
   });
 });

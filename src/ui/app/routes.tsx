@@ -16,8 +16,8 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { DashboardScreen } from '../dashboard/DashboardScreen';
 import { SetupScreen, type CandidateWord } from '../setup/SetupScreen';
 import { ReadingScreen } from '../reading/ReadingScreen';
-import { NoticeRail } from '../reading/NoticeRail';
 import { StudyWordsList, type StudyWord } from '../reading/StudyWordsList';
+import { resolveFeatureFlags } from './featureFlags';
 import { ReviewSession, type ReviewItem } from '../review/ReviewSession';
 import { WordbookScreen, type WordbookEntry } from '../wordbook/WordbookScreen';
 import { WordDetailCard } from '../wordcard/WordDetailCard';
@@ -265,12 +265,9 @@ export function ReadingRoute() {
     );
   }, [c, passage?.passageId]);
 
-  const rail = passage ? (
-    <>
-      <NoticeRail passage={passage} />
-      <StudyWordsList words={studyWords ?? uniqueStudyWords(passage)} />
-    </>
-  ) : undefined;
+  // The NoticeRail is owned by ReadingScreen (it receives the line-anchor positions for the new
+  // layout); the route only supplies the live, mastery-enriched study-words list beneath it.
+  const rail = passage ? <StudyWordsList words={studyWords ?? uniqueStudyWords(passage)} /> : undefined;
 
   const onLookup = (wordId: string): void => {
     void applyRecallSignal(
@@ -299,10 +296,15 @@ export function ReadingRoute() {
     if (progress) await c.repos.progress.upsert(progress);
   };
 
+  // The display-improvement cluster (Requirements 1–4) is shipped, so the reading-layout flag is
+  // on by default; resolveFeatureFlags still allows an override to disable it.
+  const { newReadingLayout } = resolveFeatureFlags();
+
   return (
     <ReadingScreen
       passage={passage ?? undefined}
       rail={rail}
+      newLayout={newReadingLayout}
       onLookup={onLookup}
       onCompleteReading={() => void completeReading()}
       renderWordDetail={(wordId, onClose) => <WordDetailRoute wordId={wordId} onClose={onClose} />}

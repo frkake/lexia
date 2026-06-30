@@ -34,14 +34,24 @@ import type {
 
 const BASE_PROSE_PX = 19;
 
+/** Reading layout: legacy flowing prose, or the sentence-unit 2-column grid (Requirement 3.1). */
+export type PassageLayout = 'prose' | 'grid';
+
 export interface PassageRendererProps {
   passage: IndexedPassage;
   fontScale?: number;
   /** Token currently under the TTS playhead (emphasized when within a target). */
   activeTokenId?: TokenId | null;
   onSelectWord?: (wordId: string) => void;
-  /** Block content to inject after a sentence (per-sentence translation). */
+  /**
+   * Block content to inject after a sentence in PROSE layout (per-sentence translation).
+   * Preserved for the legacy layout; the grid layout uses `renderAside` (right cell) instead.
+   */
   renderAfterSentence?: (sentenceIndex: number) => ReactNode;
+  /** Right-cell content for the GRID layout: the sentence's Japanese translation (3.1). */
+  renderAside?: (sentenceIndex: number) => ReactNode;
+  /** 'prose' (default, legacy) keeps flowing prose; 'grid' is the new sentence-unit 2-column layout. */
+  layout?: PassageLayout;
 }
 
 export function PassageRenderer({
@@ -50,6 +60,8 @@ export function PassageRenderer({
   activeTokenId = null,
   onSelectWord,
   renderAfterSentence,
+  renderAside,
+  layout = 'prose',
 }: PassageRendererProps) {
   const { source } = passage;
   // The single cue currently lit across both columns (hover preview wins over the pin).
@@ -75,15 +87,48 @@ export function PassageRenderer({
   const isActive = (tokens: IndexedToken[], start: number, end: number): boolean =>
     activeTokenId != null && tokens.slice(start, end).some((t) => t.tokenId === activeTokenId);
 
-  /** Inline style for an active cue segment — fill where the bg channel is free, ring on chips. */
+  /**
+   * Inline style for a cue segment. Two regimes:
+   *   - PROSE (legacy): ink only when the cue is the active one (fill on free tokens, ring on chips).
+   *   - GRID (3.2): on a FREE token the category cue is always visible as a faint fill, and focusing
+   *     it escalates to a deep category ring. INSIDE a collocation chip, however, the chip's own tint
+   *     + number badge already mark the expression, so we draw NO per-token ring at rest (a ring per
+   *     word boxes every token of e.g. "strike a bargain" and clutters the chip); the ring appears
+   *     ONLY on focus. So all annotations stay legible at rest and the focused one is distinguishable.
+   * The category color comes from the active cue when focused, else the first cue listed on the seg.
+   */
   function segStyle(ids: number[], withinChip: boolean): CSSProperties | undefined {
-    if (activeCueIndex == null || !ids.includes(activeCueIndex)) return undefined;
-    const category = categoryByCue.get(activeCueIndex);
+    const isActive = activeCueIndex != null && ids.includes(activeCueIndex);
+
+    if (layout !== 'grid') {
+      if (!isActive) return undefined;
+      const category = categoryByCue.get(activeCueIndex);
+      if (!category) return undefined;
+      const hl = cueHighlight(category);
+      return withinChip
+        ? { boxShadow: `inset 0 0 0 1.5px ${hl.ring}`, borderRadius: 3 }
+        : { background: hl.fill, borderRadius: 3 };
+    }
+
+    // Grid: always-on, focus escalates.
+    const baseCueIndex = isActive ? activeCueIndex : ids[0];
+    if (baseCueIndex == null) return undefined;
+    const category = categoryByCue.get(baseCueIndex);
     if (!category) return undefined;
     const hl = cueHighlight(category);
-    return withinChip
-      ? { boxShadow: `inset 0 0 0 1.5px ${hl.ring}`, borderRadius: 3 }
-      : { background: hl.fill, borderRadius: 3 };
+
+    if (withinChip) {
+      // Chip tint + badge already mark the expression at rest, so draw the inset ring ONLY on focus
+      // — a per-word ring at rest boxes every token of the collocation and clutters the chip.
+      if (!isActive) return undefined;
+      return { boxShadow: `inset 0 0 0 2px ${hl.ring}`, borderRadius: 3 };
+    }
+    // Free token: always-on faint fill; focus adds an outer deep category ring over the fill.
+    return {
+      background: hl.fill,
+      borderRadius: 3,
+      ...(isActive ? { boxShadow: `0 0 0 1.5px ${hl.ring}` } : null),
+    };
   }
 
   /** Wrap a leaf in a decorative cue segment so its cue can light the full extent later. */
@@ -138,6 +183,8 @@ export function PassageRenderer({
         // the sticky mobile header when scrolled into view.
         id={`notice-badge-${cue.index}`}
         data-testid={`notice-badge-${cue.index}`}
+        // Line-anchor handle for useLineAnchors: its Y position aligns the matching rail item (2.1).
+        data-line-anchor={cue.index}
         className="notice-badge"
         role="button"
         aria-label={`気づき${cue.index} ${noticeStyle(cue.category).label} — 本文の該当箇所`}
@@ -343,8 +390,43 @@ export function PassageRenderer({
     return out;
   }
 
+  if (layout === 'grid') {
+    // Sentence-unit 2-column grid: each sentence is one row, English in the left cell and its
+    // Japanese translation injected into the right cell (renderAside). Correspondence is kept by
+    // construction — a sentence's translation can only land in its own row's right cell (3.1/3.2).
+    return (
+      <div data-testid="passage-prose" data-layout="grid" style={{ ...proseStyle, display: 'block' }}>
+        {passage.sentences.map((sentence) => (
+          <div
+            key={sentence.sentenceIndex}
+            data-testid={`sentence-row-${sentence.sentenceIndex}`}
+            className="sentence-row"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)',
+              columnGap: 26,
+              alignItems: 'start',
+              marginBottom: 14,
+            }}
+          >
+            <div data-testid={`sentence-en-${sentence.sentenceIndex}`} className="sentence-en" style={{ minWidth: 0 }}>
+              {renderSentence(sentence)}
+            </div>
+            <div
+              data-testid={`sentence-aside-${sentence.sentenceIndex}`}
+              className="sentence-aside"
+              style={{ minWidth: 0 }}
+            >
+              {renderAside ? renderAside(sentence.sentenceIndex) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div data-testid="passage-prose" style={proseStyle}>
+    <div data-testid="passage-prose" data-layout="prose" style={proseStyle}>
       {passage.sentences.map((sentence) => (
         <span key={sentence.sentenceIndex}>
           {renderSentence(sentence)}

@@ -71,9 +71,34 @@ export interface PassageMeta {
   approxWords: number;
 }
 
+/**
+ * Translation-side emphasis span (Requirement 4 / 9.5). Marks a slice of the sentence's
+ * `translationJa` that corresponds to an English-side annotated expression, so a「新出」word
+ * can be underlined in the Japanese translation too. Offsets are UTF-16 code-unit positions
+ * into `translationJa` — RE-DERIVED server-side from the model's verbatim JA anchor text (the
+ * model miscounts offsets), mirroring how NoticeCue spans are re-anchored from `anchorText`.
+ */
+export interface TranslationSpan {
+  /** UTF-16 offset of the emphasis start within `translationJa`. */
+  charStart: number;
+  /** UTF-16 offset of the emphasis end (exclusive) within `translationJa`. */
+  charEnd: number;
+  /** Which kind of English-side expression this emphasis mirrors. */
+  refType: 'word' | 'collocation' | 'idiom' | 'grammar';
+  /** Link to the English-side target word (when the emphasis mirrors a TargetSpan, 4.2). */
+  wordId?: string;
+  /** True only for genuinely new elements; review/known elements get no JA emphasis (4.4). */
+  isNew: boolean;
+}
+
 export interface Sentence {
   tokens: string[];
   translationJa: string;
+  /**
+   * Optional translation-side emphasis spans (Requirement 4). Absent ⇒ no JA-side emphasis,
+   * keeping passages generated before this feature valid.
+   */
+  translationSpans?: TranslationSpan[];
 }
 
 /** Half-open token range `[tokenStart, tokenEnd)` within one sentence. */

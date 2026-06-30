@@ -34,6 +34,26 @@ test.describe('mobile reading (iPhone / Safari engine)', () => {
     await expect(page.locator('.reading-layout')).toHaveCSS('flex-direction', 'column');
   });
 
+  test('reflows the sentence grid to one column so the Japanese drops below the English (Req 3.3)', async ({ page }) => {
+    await generateFromSetup(page);
+    await page.waitForURL(/\/read$/);
+
+    // New 3-zone layout is active (grid), but at <=600px the per-sentence grid collapses to a
+    // single column — the right-cell Japanese reflows directly below its English sentence.
+    await expect(page.getByTestId('passage-prose')).toHaveAttribute('data-layout', 'grid');
+    const columns = await page
+      .getByTestId('sentence-row-0')
+      .evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+    // One resolved track (a single "<px>" value), not the wide two-column template.
+    expect(columns.trim().split(/\s+/).length).toBe(1);
+
+    // The English cell and its Japanese aside both render (aside reflowed below, not to the side).
+    await expect(page.getByTestId('sentence-en-0')).toBeVisible();
+    const enBox = await page.getByTestId('sentence-en-0').boundingBox();
+    const asideBox = await page.getByTestId('sentence-aside-0').boundingBox();
+    expect(enBox && asideBox && asideBox.y >= enBox.y).toBeTruthy(); // aside sits at/below the EN
+  });
+
   test('follow-along highlight tracks the playhead on WebKit', async ({ page }) => {
     await generateFromSetup(page);
     await page.waitForURL(/\/read$/);

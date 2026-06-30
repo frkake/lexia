@@ -93,6 +93,38 @@ describe('generatePassage — OpenAI provider (default)', () => {
     expect(res.passage.noticeCues).toEqual([]);
   });
 
+  it('re-derives translationSpans char offsets from the model\'s verbatim JA anchor, dropping unlocatable ones (4.2)', async () => {
+    const passage = {
+      meta: { title: 't', theme: '会議', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 6 },
+      sentences: [
+        {
+          tokens: ['She', 'stayed', 'resilient', '.'],
+          translationJa: '彼女は粘り強いままだった。',
+          // Model quotes the JA verbatim but supplies no offsets; server re-derives them.
+          translationSpans: [
+            { anchorTextJa: '粘り強い', refType: 'word', wordId: 'resilient', isNew: true },
+            { anchorTextJa: '存在しない語', refType: 'word', wordId: 'ghost', isNew: true },
+          ],
+        },
+      ],
+      targetSpans: [],
+      collocationSpans: [],
+      noticeCues: [],
+    };
+    const fetchImpl = vi.fn(async () => openAiCompletion(passage));
+    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, req, fetchImpl as unknown as typeof fetch);
+    // '粘り強い' begins at index 3 of "彼女は粘り強いままだった。" and is 4 chars long.
+    expect(res.passage.sentences[0]!.translationSpans).toEqual([
+      { charStart: 3, charEnd: 7, refType: 'word', wordId: 'resilient', isNew: true },
+    ]);
+  });
+
+  it('leaves a sentence without translationSpans unchanged (back-compat with old passages)', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion(samplePassage));
+    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, req, fetchImpl as unknown as typeof fetch);
+    expect(res.passage.sentences[0]!.translationSpans).toBeUndefined();
+  });
+
   it('unwraps a {meta, passage:{sentences}} shape and backfills missing meta from the request', async () => {
     const wrapped = {
       meta: { newCount: 0, reviewCount: 0, approxWords: 11 }, // no title/theme/level

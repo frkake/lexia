@@ -23,9 +23,19 @@ const TODAY = startOfDay(FIXED_NOW);
 const READING_OUTPUT: PassageOutput = {
   meta: { title: '交渉のテーブルで', theme: '交渉', level: 'B2', newCount: 2, reviewCount: 2, approxWords: 19 },
   sentences: [
-    { tokens: ['The', 'negotiation', 'reached', 'a', 'decisive', 'turning', 'point', '.'], translationJa: '交渉は決定的な転機を迎えた。' },
+    {
+      tokens: ['The', 'negotiation', 'reached', 'a', 'decisive', 'turning', 'point', '.'],
+      translationJa: '交渉は決定的な転機を迎えた。',
+      // 新出語 "decisive" → 和訳「決定的」(chars [3,6)) を新出強調する（要件4）。
+      translationSpans: [{ charStart: 3, charEnd: 6, refType: 'word', wordId: 'decisive', isNew: true }],
+    },
     { tokens: ['Both', 'sides', 'remained', 'cordial', 'throughout', '.'], translationJa: '双方は終始友好的だった。' },
-    { tokens: ['They', 'finally', 'closed', 'the', 'deal', '.'], translationJa: '彼らはついに取引をまとめた。' },
+    {
+      tokens: ['They', 'finally', 'closed', 'the', 'deal', '.'],
+      translationJa: '彼らはついに取引をまとめた。',
+      // 新出語 "deal" → 和訳「取引」(chars [6,8)) を新出強調する（要件4）。
+      translationSpans: [{ charStart: 6, charEnd: 8, refType: 'word', wordId: 'deal', isNew: true }],
+    },
   ],
   targetSpans: [
     { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'negotiation', surface: 'negotiation', masteryDensity: 'review' },

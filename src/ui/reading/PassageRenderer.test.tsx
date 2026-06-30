@@ -27,6 +27,26 @@ function makeMultiTokenCuePassage(): IndexedPassage {
   return tokenizer.index('p-multi', source);
 }
 
+/** A multi-word collocation ("strike a bargain") whose own cue spans the whole chip. */
+function makeMultiWordCollocationPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
+    sentences: [{ tokens: ['They', 'strike', 'a', 'bargain', 'today', '.'], translationJa: '今日、取引をまとめる。' }],
+    targetSpans: [],
+    collocationSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 4, headWordId: 'bargain', collocationId: 'strike a bargain' }],
+    noticeCues: [
+      {
+        index: 1,
+        span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 }, // "strike a bargain"
+        category: 'collocation',
+        anchorText: 'strike a bargain',
+        explanationJa: '交渉して合意する固定表現。',
+      },
+    ],
+  };
+  return tokenizer.index('p-strike', source);
+}
+
 /** A notice cue ("leverage", [2,3)) sitting INSIDE a collocation chip ("leverage our reputation"). */
 function makeCueInsideCollocationPassage(): IndexedPassage {
   const source: PassageOutput = {
@@ -140,6 +160,185 @@ describe('<PassageRenderer/>', () => {
     const { getByTestId } = render(<PassageRenderer passage={makePassage()} fontScale={1.5} />);
     // base prose size is 19px → scaled to 28.5px
     expect(getByTestId('passage-prose').style.fontSize).toBe('28.5px');
+  });
+});
+
+describe('<PassageRenderer/> sentence-level 2-column grid (3.1)', () => {
+  it('renders one row per sentence with an English left cell and a Japanese right cell', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    // Row 0: English left holds the sentence tokens; right cell holds the injected aside.
+    const en0 = getByTestId('sentence-en-0');
+    expect(en0.textContent).toContain('board');
+    expect(en0.textContent).toContain('restless');
+    expect(getByTestId('sentence-aside-0')).toBeTruthy();
+    // A row exists for each sentence.
+    expect(getByTestId('sentence-row-0')).toBeTruthy();
+    expect(getByTestId('sentence-row-1')).toBeTruthy();
+  });
+
+  it('injects the per-sentence translation into the matching right cell (correspondence holds)', () => {
+    const { getByTestId } = render(
+      <PassageRenderer
+        passage={makePassage()}
+        layout="grid"
+        renderAside={(i) => <span data-testid={`ja-${i}`}>訳{i}</span>}
+      />,
+    );
+    expect(getByTestId('sentence-aside-0').textContent).toContain('訳0');
+    expect(getByTestId('sentence-aside-1').textContent).toContain('訳1');
+    // The translation for sentence 1 must NOT leak into row 0's right cell.
+    expect(getByTestId('sentence-aside-0').textContent).not.toContain('訳1');
+  });
+
+  it('tags each notice badge with a line-anchor cue index for measurement (2.1 integration)', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    const badge = getByTestId('notice-badge-1');
+    expect(badge.getAttribute('data-line-anchor')).toBe('1');
+  });
+
+  it('keeps the grid container flagged so the layout can be detected/styled', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid');
+  });
+
+  it('still defaults to flowing prose when no layout is given (old layout preserved)', () => {
+    const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('prose');
+    expect(queryByTestId('sentence-row-0')).toBeNull();
+  });
+});
+
+describe('<PassageRenderer/> always-on annotation + focus escalation (3.2)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('shows every cue span with an always-on faint category FILL, no hover/pin needed (1.1)', () => {
+    const { container } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    // cue #1 = connotation on "restless"; its span is tinted at rest in the new layout.
+    const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
+    expect(seg.style.background).toBe(cueHighlight('connotation').fill);
+    expect(seg.style.boxShadow).toBe(''); // faint fill only at rest — no focus ring yet
+  });
+
+  it('escalates the focused cue to a deep category RING while keeping the always-on fill (1.6)', () => {
+    readingUiStore.getState().setPinned(1);
+    const { container } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
+    // Always-on fill is preserved …
+    expect(seg.style.background).toBe(cueHighlight('connotation').fill);
+    // … and the focus state adds the deep category ring.
+    expect(seg.style.boxShadow).toContain(cueHighlight('connotation').ring);
+  });
+
+  it('does NOT draw a per-word ring inside a collocation chip at rest (chip tint + badge suffice)', () => {
+    // Regression: each word of "strike a bargain" used to get its own inset ring, boxing every
+    // word and cluttering the chip. At rest the chip's tint + number badge mark it — no ring.
+    const { container } = render(<PassageRenderer passage={makeMultiWordCollocationPassage()} layout="grid" />);
+    const segs = Array.from(container.querySelectorAll('[data-cue-index~="1"]')) as HTMLElement[];
+    expect(segs.length).toBeGreaterThan(0);
+    expect(segs.every((s) => s.style.boxShadow === '')).toBe(true); // no boxes per word at rest
+    expect(segs.every((s) => s.style.background === '')).toBe(true); // chip owns the bg channel
+  });
+
+  it('escalates a chip-internal cue to a ring ONLY when focused (1.6)', () => {
+    readingUiStore.getState().setPinned(1);
+    const { container } = render(<PassageRenderer passage={makeMultiWordCollocationPassage()} layout="grid" />);
+    const segs = Array.from(container.querySelectorAll('[data-cue-index~="1"]')) as HTMLElement[];
+    // When focused, the chip's cue shows the inset ring (still no fill — chip owns the bg).
+    expect(segs.some((s) => s.style.boxShadow.includes('inset'))).toBe(true);
+  });
+
+  it('keeps the legacy prose layout ink-free at rest (old behavior preserved)', () => {
+    const { container } = render(<PassageRenderer passage={makePassage()} />);
+    const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
+    expect(seg.style.background).toBe('');
+    expect(seg.style.boxShadow).toBe('');
+  });
+});
+
+/** A cue spanning a discontinuous grammar relation ("no sooner ... than"), including the gap tokens. */
+function makeDiscontinuousCuePassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 9 },
+    sentences: [
+      { tokens: ['No', 'sooner', 'had', 'we', 'left', 'than', 'it', 'rained', '.'], translationJa: '出るやいなや雨が降った。' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [
+      {
+        index: 1,
+        span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 6 }, // "No sooner had we left than"
+        category: 'grammar_pattern',
+        anchorText: 'No sooner had we left than',
+        explanationJa: '過去完了＋倒置の固定表現。',
+      },
+    ],
+  };
+  return tokenizer.index('p-disc', source);
+}
+
+/** Two overlapping cues on the same token range ("set an agenda"): collocation + register. */
+function makeOverlappingCuesPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
+    sentences: [{ tokens: ['We', 'set', 'an', 'agenda', 'today', '.'], translationJa: '今日は議題を決めた。' }],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [
+      {
+        index: 1,
+        span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 }, // "set an agenda"
+        category: 'collocation',
+        anchorText: 'set an agenda',
+        explanationJa: '定型の言い回し。',
+      },
+      {
+        index: 2,
+        span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 4 }, // "agenda" — overlaps cue #1
+        category: 'register',
+        anchorText: 'agenda',
+        explanationJa: '会議で使うフォーマル語。',
+      },
+    ],
+  };
+  return tokenizer.index('p-overlap', source);
+}
+
+describe('<PassageRenderer/> discontinuous links, overlaps, audio non-collision (3.3)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('connects a discontinuous relation across the intervening gap tokens (1.2)', () => {
+    const { container } = render(<PassageRenderer passage={makeDiscontinuousCuePassage()} layout="grid" />);
+    const segs = Array.from(container.querySelectorAll('[data-cue-index~="1"]'));
+    // The full expression — including the in-between words and the spaces — is connected.
+    expect(segs.map((s) => s.textContent).join('')).toBe('No sooner had we left than');
+  });
+
+  it('co-lists a badge for each overlapping cue and tags the shared token with both indices (1.4)', () => {
+    const { getByTestId, container } = render(<PassageRenderer passage={makeOverlappingCuesPassage()} layout="grid" />);
+    // Both badges are present (co-listing) so each annotation stays distinguishable.
+    expect(getByTestId('notice-badge-1').textContent).toBe('1');
+    expect(getByTestId('notice-badge-2').textContent).toBe('2');
+    // "agenda" belongs to both cues → its segment lists both cue indices.
+    const shared = container.querySelector('[data-cue-index~="1"][data-cue-index~="2"]');
+    expect(shared).not.toBeNull();
+    expect(shared!.textContent).toContain('agenda');
+  });
+
+  it('keeps a cue cue-fill AND the audio follow-along emphasis on the same active token (1.3)', () => {
+    // cue #1 = connotation on the target "restless"; make that token the TTS playhead token.
+    const passage = makePassage();
+    const restlessTokenId = passage.tokens.find((t) => t.text === 'restless')!.tokenId;
+    const { container, getByText } = render(
+      <PassageRenderer passage={passage} layout="grid" activeTokenId={restlessTokenId} />,
+    );
+    // Audio follow-along override: the active token renders in primary italic (not lost).
+    const active = container.querySelector('[data-active="true"]') as HTMLElement;
+    expect(active).not.toBeNull();
+    expect(active.style.fontStyle).toBe('italic');
+    // The category cue fill is still present on the wrapping segment (other cues not lost).
+    const seg = getByText('restless').closest('[data-cue-index~="1"]') as HTMLElement;
+    expect(seg.style.background).toBe(cueHighlight('connotation').fill);
   });
 });
 

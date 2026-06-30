@@ -24,7 +24,15 @@ export type SpanViolationKind =
   | 'cue_category_mismatch'
   | 'cue_surface_mismatch'
   | 'cefr_out_of_band'
-  | 'length_out_of_range';
+  | 'length_out_of_range'
+  | 'translation_span_mismatch';
+
+/** Identifies a translation-side span by sentence + JA char range (for last-resort dropping). */
+export interface TranslationSpanRef {
+  sentenceIndex: number;
+  charStart: number;
+  charEnd: number;
+}
 
 export interface SpanViolation {
   kind: SpanViolationKind;
@@ -36,6 +44,11 @@ export interface SpanViolation {
    * target/collocation span errors, which are not droppable.
    */
   cueIndex?: number;
+  /**
+   * Set for a `translation_span_mismatch`: the offending JA-side span (by sentence + char range)
+   * so the orchestrator can drop just that emphasis as a last resort, leaving the body intact.
+   */
+  translationSpan?: TranslationSpanRef;
 }
 
 export interface ValidationTarget {
@@ -184,6 +197,31 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
           kind: 'cue_unattested',
           detail: `cue #${cue.index} ${cue.category} not grounded for ${cue.wordId}`,
           cueIndex: cue.index,
+        });
+      }
+    }
+  }
+
+  // Translation-side new-element consistency: a JA span flagged isNew=true must correspond to an
+  // English-side target word whose masteryDensity is 'new' (4.4). A genuinely-new emphasis on a
+  // review/known word is the mismatch this guards. Each violation carries the offending span so the
+  // orchestrator can drop just that emphasis as a last resort (harmless: the body text is kept).
+  const newWordIds = new Set(
+    candidate.targetSpans.filter((s) => s.masteryDensity === 'new').map((s) => s.wordId),
+  );
+  for (let si = 0; si < sentences.length; si += 1) {
+    const spans = sentences[si]!.translationSpans;
+    if (!spans) continue;
+    for (const span of spans) {
+      if (!span.isNew) continue; // only "new"-flagged emphasis is constrained
+      const linkedIsNew = span.wordId !== undefined && newWordIds.has(span.wordId);
+      if (!linkedIsNew) {
+        violations.push({
+          kind: 'translation_span_mismatch',
+          detail: `translation span @${si}[${span.charStart},${span.charEnd}) flagged new but ${
+            span.wordId ? `target "${span.wordId}" is not new` : 'has no new target'
+          }`,
+          translationSpan: { sentenceIndex: si, charStart: span.charStart, charEnd: span.charEnd },
         });
       }
     }
