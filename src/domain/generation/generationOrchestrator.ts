@@ -19,7 +19,6 @@ import type {
   ValidationReport,
   ValidationTarget,
 } from './passageValidator';
-import { APPROX_WORDS } from './lengthSpec';
 import { ok, err, type Result } from '../../types/result';
 import type { ContentGateway } from '../../types/ports';
 import type { Cefr, GenerationRequest, IndexedPassage, PassageOutput } from '../../types/domain';
@@ -58,7 +57,7 @@ function contextFor(req: GenerationRequest, cefrOf?: OrchestratorDeps['cefrOf'])
   return {
     level: req.level,
     targets,
-    approxWords: APPROX_WORDS[req.length],
+    approxWords: req.wordTarget,
     cefrOf,
   };
 }
@@ -75,6 +74,8 @@ const REPAIR_HINT: Record<SpanViolationKind, string> = {
     "Set each notice cue's anchorText to the exact word(s) it is about, copied verbatim from that sentence, and place its span on exactly those tokens.",
   translation_span_mismatch:
     'Only flag a translation span as new when it corresponds to a target word whose masteryDensity is "new"; remove the emphasis otherwise.',
+  verbatim_copy:
+    'Do not copy sentences verbatim from the referenced work; write original prose that only echoes its style and motifs.',
 };
 
 function describeViolation(v: SpanViolation): string {
@@ -123,6 +124,15 @@ function dropFailingCues(passage: PassageOutput, report: ValidationReport): Pass
 /** Default repair: re-issue the request annotated with what failed so the retry is guided, not blind. */
 function defaultBuildRepair(req: GenerationRequest, report: ValidationReport): GenerationRequest {
   return { ...req, repairFeedback: report.violations.map(describeViolation) };
+}
+
+/**
+ * True when the only thing wrong with a passage is that its word count missed the requested band
+ * (`length_out_of_range`) — the body text and every span/cue are valid. Such a passage is readable
+ * and worth shipping as a last resort rather than failing the whole generation over length alone.
+ */
+function isLengthOnly(report: ValidationReport): boolean {
+  return report.violations.length > 0 && report.violations.every((v) => v.kind === 'length_out_of_range');
 }
 
 export function createGenerationOrchestrator(deps: OrchestratorDeps): GenerationOrchestrator {
@@ -186,6 +196,15 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
         const salvaged = dropFailingCues(resp.passage, report);
         if (salvaged && validator.validate(salvaged, ctx).ok) {
           return finalize(salvaged);
+        }
+        // Degrade over length: a passage that is ONLY out of the requested word band (body text and
+        // every span/cue valid) is still readable, so ship it rather than failing the whole
+        // generation. Models systematically under-produce; hard-failing here is the worse outcome
+        // (it surfaces as "生成文の検証に失敗"). Any OTHER violation still blocks acceptance.
+        const residual = salvaged ?? resp.passage;
+        const residualReport = validator.validate(residual, ctx);
+        if (isLengthOnly(residualReport)) {
+          return finalize(residual);
         }
         return err({ kind: 'validation_exhausted', lastReport: report });
       }

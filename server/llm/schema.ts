@@ -11,11 +11,18 @@
  * half-open `[tokenStart, tokenEnd)` token ranges within one sentence.
  */
 
-import type { GenerationRequest, PassageAnnotationRequest, Sentence } from '../../src/types/domain';
-import { APPROX_WORDS } from '../../src/domain/generation/lengthSpec';
+import type { GenerationRequest, LearningIntent, PassageAnnotationRequest, Sentence } from '../../src/types/domain';
+import { lengthSpec } from '../../src/domain/generation/lengthSpec';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 
 const CEFR = ['A2', 'B1', 'B2', 'C1', 'C2'] as const;
+const LEARNING_INTENTS = ['business', 'daily', 'toeic', 'eiken', 'academic', 'travel'] as const;
+
+/** Exam-style intents whose passages should bias toward that exam's high-frequency vocab/format (8.4). */
+const EXAM_INTENTS: Partial<Record<LearningIntent, string>> = {
+  toeic: 'TOEIC (business correspondence, workplace scenarios, and TOEIC-frequent vocabulary and question-style phrasing)',
+  eiken: '英検 (Eiken exam topics, essay/opinion registers, and Eiken-frequent vocabulary)',
+};
 const NOTICE_CATEGORIES = [
   'connotation',
   'collocation',
@@ -47,13 +54,13 @@ export const PASSAGE_JSON_SCHEMA = {
       additionalProperties: false,
       properties: {
         title: { type: 'string' },
-        theme: { type: 'string' },
+        intent: { type: 'string', enum: [...LEARNING_INTENTS] },
         level: { type: 'string', enum: [...CEFR] },
         newCount: { type: 'integer' },
         reviewCount: { type: 'integer' },
         approxWords: { type: 'integer' },
       },
-      required: ['title', 'theme', 'level', 'newCount', 'reviewCount', 'approxWords'],
+      required: ['title', 'intent', 'level', 'newCount', 'reviewCount', 'approxWords'],
     },
     sentences: {
       type: 'array',
@@ -221,11 +228,9 @@ export const WORD_DATA_JSON_SCHEMA = {
   required: ['wordId', 'headword', 'ipa', 'pos', 'register', 'connotation', 'frequency', 'core', 'more'],
 } as const;
 
-/** Output-token budget per requested length (generous; passages stay well under). */
-export function maxTokensForLength(length: GenerationRequest['length']): number {
-  if (length === 'long') return 3600;
-  if (length === 'medium') return 2400;
-  return 1400;
+/** Output-token budget for a word target (continuous; replaces the legacy 3-value length budget). */
+export function maxTokensForWordTarget(wordTarget: number): number {
+  return lengthSpec.tokenBudgetFor(wordTarget);
 }
 
 const PASSAGE_SYSTEM = [
@@ -258,13 +263,15 @@ const PASSAGE_SYSTEM = [
   'masteryDensity copies the requested value.',
   '',
   'Constraints (the request fields are hard requirements, not hints — satisfy ALL of them):',
-  '- Theme: set the passage in / about the requested theme(s). The situation, roles, named',
-  '  entities, and domain vocabulary must clearly belong to that theme. Put the primary theme',
-  '  in meta.theme and give a title that fits it. (If no theme is given, pick a coherent one.)',
-  '- Length: the total number of words across all sentences MUST be close to approxWords (aim',
-  '  within ±20%): short≈120 (about 8-12 sentences), medium≈250 (about 16-22 sentences),',
-  '  long≈400 (about 26-34 sentences). Keep writing sentences until you reach that word count —',
-  '  do not stop early. meta.approxWords MUST equal the actual number of words you wrote.',
+  '- Intent: set the passage in / about the requested learning intent (business / daily / toeic /',
+  '  eiken / academic / travel). The situation, roles, named entities, register and domain',
+  '  vocabulary must clearly fit that intent. Put the intent in meta.intent and give a fitting title.',
+  '  For exam intents (toeic / eiken), PRIORITIZE that exam\'s high-frequency vocabulary and typical',
+  '  formats/registers.',
+  '- Length: the total number of words across all sentences MUST be close to the requested',
+  '  approxWords (aim within ±20%). Roughly one sentence per 12-15 words. Keep writing sentences',
+  '  until you reach that word count — do not stop early. meta.approxWords MUST equal the actual',
+  '  number of words you wrote.',
   '- Level: keep ALL non-target vocabulary at or below the requested CEFR level; only the listed',
   '  target words may exceed it. Prefer a simpler synonym over a more advanced word.',
   '- Target words & ratio: include EVERY requested target word at least once, copying its',
@@ -292,9 +299,9 @@ function passageUser(req: GenerationRequest): string {
   }));
   const request = {
     level: req.level,
-    themes: req.themes,
-    length: req.length,
-    approxWords: APPROX_WORDS[req.length],
+    intent: req.intent,
+    contentType: req.contentType,
+    approxWords: req.wordTarget,
     newWordRatio: req.newWordRatio,
     targetWords: targets,
   };
@@ -302,6 +309,28 @@ function passageUser(req: GenerationRequest): string {
     'Generate one PassageOutput JSON that satisfies ALL of these constraints:',
     JSON.stringify(request, null, 2),
   ];
+  const examBias = EXAM_INTENTS[req.intent];
+  if (examBias) {
+    lines.push('', `This is an exam-prep passage: prioritize high-frequency vocabulary and formats for ${examBias}.`);
+  }
+  if (req.storyContext) {
+    lines.push(
+      '',
+      'This passage is one chapter of a longer story. Keep it consistent with this plot and prior context',
+      '(reuse the same characters and setting; continue the plot; do NOT copy any source text verbatim):',
+      JSON.stringify(
+        {
+          chapterIndex: req.storyContext.chapterIndex,
+          synopsisJa: req.storyContext.plan.synopsisJa,
+          characters: req.storyContext.plan.characters,
+          chapter: req.storyContext.plan.chapters.find((c) => c.index === req.storyContext!.chapterIndex),
+          priorSummaryJa: req.storyContext.priorSummaryJa ?? '',
+        },
+        null,
+        2,
+      ),
+    );
+  }
   if (req.repairFeedback && req.repairFeedback.length > 0) {
     lines.push(
       '',
@@ -502,24 +531,107 @@ export const WORD_SUGGESTION_JSON_SCHEMA = {
   required: ['words'],
 } as const;
 
+// ── Story plan (Requirement 6.2 / 13.2) ──────────────────────────────────────
+
+/** JSON Schema for a StoryPlan reply (characters, synopsis, chapters). */
+export const STORY_PLAN_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    titleJa: { type: 'string' },
+    synopsisJa: { type: 'string' },
+    characters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          role: { type: 'string' },
+          descriptionJa: { type: 'string' },
+        },
+        required: ['name', 'role', 'descriptionJa'],
+      },
+    },
+    chapters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          index: { type: 'integer' },
+          headingJa: { type: 'string' },
+          beatJa: { type: 'string' },
+        },
+        required: ['index', 'headingJa', 'beatJa'],
+      },
+    },
+  },
+  required: ['titleJa', 'synopsisJa', 'characters', 'chapters'],
+} as const;
+
+const STORY_PLAN_SYSTEM = [
+  'You are a story architect for a Japanese-audience English reading app. Given a story type, genre',
+  'and optional homage, you design a story PLAN — NOT the prose. Reply with a single JSON object',
+  'matching the StoryPlan schema — no prose, no markdown, no code fences. All human-readable fields',
+  '(titleJa, synopsisJa, character descriptionJa, chapter headingJa/beatJa) are written in Japanese.',
+  '',
+  '- characters: a small cast (2-5) with a name, a role, and a short Japanese description each.',
+  '- synopsisJa: a 2-4 sentence Japanese plot summary consistent with the genre.',
+  '- chapters: a short story has EXACTLY ONE chapter (index 0); a long story has several (index 0..n)',
+  '  each with a Japanese heading and a one-line beat describing what happens.',
+  '',
+  'HOMAGE (copyright): when a homage work is named, you may echo only its STYLE and MOTIFS. You MUST',
+  'invent original characters and plot — never reuse the source work\'s proper nouns, character names,',
+  'or its actual events, and never reproduce its text.',
+].join('\n');
+
+export function buildStoryPlanMessages(req: {
+  contentType: 'short_story' | 'long_story';
+  genre: string;
+  homageTitle?: string;
+  intent: string;
+  level: string;
+}): { system: string; user: string } {
+  const ask = {
+    contentType: req.contentType,
+    genre: req.genre,
+    homage: req.homageTitle ?? null,
+    intent: req.intent,
+    level: req.level,
+    chapters: req.contentType === 'short_story' ? 1 : 'several (3-6)',
+  };
+  return {
+    system: STORY_PLAN_SYSTEM,
+    user: `Design a StoryPlan for this request:\n${JSON.stringify(ask, null, 2)}`,
+  };
+}
+
+/** Output-token budget for a story plan (scaffold only, not prose). */
+export function storyPlanMaxTokens(): number {
+  return 1600;
+}
+
 const SUGGEST_SYSTEM = [
   'You curate vocabulary for a CEFR-graded English reading app whose users are Japanese speakers.',
-  'Given a CEFR level and theme(s), propose distinct English words a learner at that level should',
-  'study next. Choose words that clearly belong to the theme/domain and sit AT or slightly ABOVE',
-  'the given level — useful and worth learning, not trivial function words (the, go, very) and not',
-  'absurdly rare. Each must be a single base-form lemma (no spaces), lowercase. Never include any',
-  'word from the exclude list. Reply with JSON {"words":[...]} only — no prose, no code fences.',
+  'Given a CEFR level and a learning intent (business / daily / toeic / eiken / academic / travel),',
+  'propose distinct English words a learner at that level should study next. Choose words that',
+  'clearly fit the intent and sit AT or slightly ABOVE the given level — useful and worth learning,',
+  'not trivial function words (the, go, very) and not absurdly rare. For exam intents (toeic / eiken)',
+  'prefer that exam\'s high-frequency vocabulary. Each must be a single base-form lemma (no spaces),',
+  'lowercase. Never include any word from the exclude list. Reply with JSON {"words":[...]} only —',
+  'no prose, no code fences.',
 ].join('\n');
 
 export function buildSuggestionMessages(req: {
   level: string;
-  themes: string[];
+  intent: LearningIntent;
   count: number;
   exclude?: string[];
 }): { system: string; user: string } {
   const ask = {
     level: req.level,
-    themes: req.themes,
+    intent: req.intent,
     count: req.count,
     exclude: req.exclude ?? [],
   };

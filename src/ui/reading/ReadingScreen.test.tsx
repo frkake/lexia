@@ -11,7 +11,7 @@ import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
 function makePassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'The Restless Boardroom', theme: 'negotiation', level: 'B2', newCount: 4, reviewCount: 6, approxWords: 12 },
+    meta: { title: 'The Restless Boardroom', intent: 'business', level: 'B2', newCount: 4, reviewCount: 6, approxWords: 12 },
     sentences: [{ tokens: ['The', 'board', 'was', 'growing', 'restless', '.'], translationJa: '取締役会は苛立っていた。' }],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 4, tokenEnd: 5, wordId: 'restless', surface: 'restless', masteryDensity: 'review' }],
     collocationSpans: [],

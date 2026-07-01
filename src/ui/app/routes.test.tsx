@@ -37,7 +37,7 @@ const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.
 
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 245 },
+    meta: { title: '取引の成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 245 },
     sentences: [
       { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
       ...Array.from({ length: 30 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
@@ -208,7 +208,8 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     fireEvent.click(screen.getByText('文章を生成する'));
 
     await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
-    expect(suggestCalls).toBe(1);
+    // Suggestion is consulted (on setup open for the initial candidates and/or at generate time).
+    expect(suggestCalls).toBeGreaterThanOrEqual(1);
     // The auto-proposed word is woven in AND tracked in the SRS so it can reappear later.
     await waitFor(async () => {
       const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
@@ -278,7 +279,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await screen.findByTestId('level-B1'));
+    fireEvent.click(await screen.findByTestId('exam-value-2')); // choose a level (英検2級)
     fireEvent.click(screen.getByText('文章を生成する'));
 
     // No mock passage: the connection error is shown and we stay on Setup.

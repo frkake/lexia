@@ -64,7 +64,7 @@ describe('settingsStore', () => {
       rate: 1.5,
       theme: 'light',
       locale: 'ja',
-      lastSetup: { level: 'B2', themes: ['email'], newWordRatio: 0.4, length: 'long', targetWordIds: ['w9'], excludedWordIds: [] },
+      lastSetup: { examTarget: { kind: 'eiken', value: '準1' }, intent: 'business', newWordRatio: 0.4, wordTarget: 800, contentType: 'article', targetWordIds: ['w9'], excludedWordIds: [] },
     });
 
     const storage = memoryStorage({ [THEME_KEY]: 'dark', [LOCALE_KEY]: 'en' });
@@ -76,7 +76,7 @@ describe('settingsStore', () => {
     expect(s.ready).toBe(true);
     expect(s.translationMode).toBe('per_sentence');
     expect(s.voiceId).toBe('matthew');
-    expect(s.lastSetup.level).toBe('B2');
+    expect(s.lastSetup.examTarget).toEqual({ kind: 'eiken', value: '準1' });
     // theme/locale come from the synchronous localStorage source.
     expect(s.theme).toBe('dark');
     expect(s.locale).toBe('en');

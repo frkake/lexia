@@ -52,7 +52,7 @@ const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.
 
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 117 },
+    meta: { title: '取引の成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 117 },
     sentences: [
       { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
       ...Array.from({ length: 14 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
@@ -73,10 +73,11 @@ function invalidPassage(): PassageOutput {
 }
 
 const SETUP: SetupConfig = {
-  level: 'B1',
-  themes: ['交渉'],
+  examTarget: { kind: 'eiken', value: '2' },
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWordIds: ['deal'],
   excludedWordIds: [],
 };

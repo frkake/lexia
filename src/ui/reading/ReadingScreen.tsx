@@ -127,7 +127,7 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
     settingsStore.getState().setFontScale(next);
   };
 
-  const metaLine = `${meta.theme} · LEVEL ${meta.level} · 新出 ${meta.newCount} / 復習 ${meta.reviewCount}`;
+  const metaLine = `${meta.intent} · LEVEL ${meta.level} · 新出 ${meta.newCount} / 復習 ${meta.reviewCount}`;
   const selectWord = (wordId: string): void => {
     onLookup?.(wordId); // a tap is a lookup → grade Again (RecallEventService, 10.2)
     sessionStore.getState().setActiveWord(wordId);

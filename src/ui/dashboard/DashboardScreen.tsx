@@ -237,7 +237,7 @@ export function DashboardScreen({
               <button key={p.passageId} type="button" onClick={() => openPassage(p.passageId)} style={recentRowStyle}>
                 <div style={{ fontFamily: fonts.serifJp, fontSize: 15, color: colors.ink }}>{p.title}</div>
                 <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginTop: 2 }}>
-                  {p.theme} · {p.completed ? '完了' : '読書中'}
+                  {p.intent} · {p.completed ? '完了' : '読書中'}
                 </div>
               </button>
             ))}

@@ -1,17 +1,19 @@
 /**
- * L4 — SetupScreen (design.md "SetupScreen", 2.1–2.7; Setup frame). Lets the learner
- * pick a CEFR level (single), themes (multi), the new-word ratio and passage length, and
- * curate the auto-selected target words (exclude a candidate, add a manual one). The
- * required condition — a selected level — gates generation: when unmet the
- * screen surfaces the missing items instead of generating (2.7); when met it emits the
- * assembled SetupConfig via `onGenerate` (the wiring layer hands it to SessionPlanner).
- * Presentational: candidates are injected (SessionPlanner.selectCandidates) and the
- * generation/persistence wiring lives in task 10.
+ * L4 — SetupScreen (design.md "SetupScreen"; overhauled for the learning-experience-overhaul spec).
+ * Lets the learner pick a learning intent (single, Requirement 8), an exam-based difficulty
+ * (Requirement 9, via ExamLevelPicker), a 100-word-step word target (Requirement 7, via
+ * WordTargetSlider), a content type (article / short / long story, Requirement 6) with genre +
+ * homage for stories, the new-word ratio, and curate the auto-selected target words. The required
+ * condition — a chosen exam target — gates generation; when met it emits the assembled SetupConfig
+ * via `onGenerate`. Presentational: candidates are injected and generation/persistence live in the
+ * route wiring.
  */
 
 import { useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
-import type { Cefr, SetupConfig } from '../../types/domain';
+import { ExamLevelPicker } from './ExamLevelPicker';
+import { WordTargetSlider } from './WordTargetSlider';
+import type { ContentType, ExamCriterion, LearningIntent, SetupConfig, StoryGenre } from '../../types/domain';
 
 export interface CandidateWord {
   wordId: string;
@@ -19,9 +21,11 @@ export interface CandidateWord {
 }
 
 export interface SetupScreenProps {
-  /** Auto-selected candidate words (SessionPlanner.selectCandidates). */
+  /** Auto-selected candidate words (WordSuggestionService / SessionPlanner). */
   candidates?: CandidateWord[];
-  /** Seed values (e.g. settingsStore.lastSetup); level may be unset to force a choice. */
+  /** Notice shown when fewer candidates than requested were available (Requirement 5.5). */
+  suggestionShortfall?: string | null;
+  /** Seed values (e.g. settingsStore.lastSetup); examTarget may be unset to force a choice. */
   initial?: Partial<SetupConfig>;
   /** Receives the assembled config once required conditions are met. */
   onGenerate?: (setup: SetupConfig) => void;
@@ -29,39 +33,58 @@ export interface SetupScreenProps {
   generationError?: string | null;
 }
 
-const LEVELS: { level: Cefr; toeic: string }[] = [
-  { level: 'A2', toeic: '~450' },
-  { level: 'B1', toeic: '~600' },
-  { level: 'B2', toeic: '~785' },
-  { level: 'C1', toeic: '~945' },
-  { level: 'C2', toeic: '945+' },
+const DEFAULT_EXAM: ExamCriterion = { kind: 'eiken', value: '2' };
+
+const INTENTS: { value: LearningIntent; label: string }[] = [
+  { value: 'business', label: 'ビジネス' },
+  { value: 'daily', label: '日常会話' },
+  { value: 'toeic', label: 'TOEIC' },
+  { value: 'eiken', label: '英検' },
+  { value: 'academic', label: 'アカデミック' },
+  { value: 'travel', label: '旅行' },
 ];
 
-const THEMES = ['交渉', '会議', 'メール', 'プレゼン', '財務', 'マーケティング', '人事', '出張'];
-
-const LENGTHS: { value: SetupConfig['length']; label: string }[] = [
-  { value: 'short', label: '短 · 約120語' },
-  { value: 'medium', label: '中 · 約250語' },
-  { value: 'long', label: '長 · 約400語' },
+const CONTENT_TYPES: { value: ContentType; label: string }[] = [
+  { value: 'article', label: '単発記事' },
+  { value: 'short_story', label: '短編物語' },
+  { value: 'long_story', label: '長編物語' },
 ];
 
-/** Which required conditions are still unmet (2.7). Target words are optional. */
-export function setupMissing(level: Cefr | undefined, targetWordIds: string[]): string[] {
+const GENRES: { value: StoryGenre; label: string }[] = [
+  { value: 'fantasy', label: 'ファンタジー' },
+  { value: 'sci_fi', label: 'SF' },
+  { value: 'mystery', label: 'ミステリー' },
+];
+
+/** Default word target when none is seeded (mid of the article range). */
+const DEFAULT_WORD_TARGET = 400;
+
+/** Which required conditions are still unmet. Target words are optional. */
+export function setupMissing(examTarget: ExamCriterion | undefined, targetWordIds: string[]): string[] {
   const missing: string[] = [];
-  if (!level) missing.push('レベル');
+  if (!examTarget) missing.push('レベル');
   void targetWordIds;
   return missing;
 }
 
-export function SetupScreen({ candidates = [], initial, onGenerate, generating = false, generationError = null }: SetupScreenProps) {
+export function SetupScreen({
+  candidates = [],
+  suggestionShortfall = null,
+  initial,
+  onGenerate,
+  generating = false,
+  generationError = null,
+}: SetupScreenProps) {
   const candidateIds = useMemo(() => new Set(candidates.map((c) => c.wordId)), [candidates]);
 
-  const [level, setLevel] = useState<Cefr | undefined>(initial?.level);
-  const [themes, setThemes] = useState<string[]>(initial?.themes ?? []);
+  const [examTarget, setExamTarget] = useState<ExamCriterion | undefined>(initial?.examTarget);
+  const [intent, setIntent] = useState<LearningIntent>(initial?.intent ?? 'daily');
   const [newWordRatio, setNewWordRatio] = useState<number>(initial?.newWordRatio ?? 0.3);
-  const [length, setLength] = useState<SetupConfig['length']>(initial?.length ?? 'medium');
+  const [contentType, setContentType] = useState<ContentType>(initial?.contentType ?? 'article');
+  const [wordTarget, setWordTarget] = useState<number>(initial?.wordTarget ?? DEFAULT_WORD_TARGET);
+  const [genre, setGenre] = useState<StoryGenre>(initial?.storyOptions?.genre ?? 'fantasy');
+  const [homageTitle, setHomageTitle] = useState<string>(initial?.storyOptions?.homageTitle ?? '');
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.excludedWordIds ?? []));
-  // Manually added words = seeded targets not present among the auto-selected candidates.
   const [added, setAdded] = useState<string[]>(
     () => (initial?.targetWordIds ?? []).filter((id) => !candidateIds.has(id)),
   );
@@ -69,16 +92,15 @@ export function SetupScreen({ candidates = [], initial, onGenerate, generating =
   const [draft, setDraft] = useState('');
   const [attempted, setAttempted] = useState(false);
 
+  const isStory = contentType !== 'article';
+
   const targetWordIds = useMemo(() => {
     const ids = candidates.filter((c) => !excluded.has(c.wordId)).map((c) => c.wordId);
     for (const id of added) if (!ids.includes(id)) ids.push(id);
     return ids;
   }, [candidates, excluded, added]);
 
-  const missing = setupMissing(level, targetWordIds);
-
-  const toggleTheme = (t: string): void =>
-    setThemes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const missing = setupMissing(examTarget, targetWordIds);
 
   const toggleExclude = (wordId: string): void =>
     setExcluded((prev) => {
@@ -100,12 +122,16 @@ export function SetupScreen({ candidates = [], initial, onGenerate, generating =
 
   const generate = (): void => {
     setAttempted(true);
-    if (missing.length > 0) return;
+    if (missing.length > 0 || !examTarget) return;
     onGenerate?.({
-      level: level!,
-      themes,
+      examTarget,
+      intent,
       newWordRatio,
-      length,
+      wordTarget,
+      contentType,
+      ...(isStory
+        ? { storyOptions: { genre, ...(homageTitle.trim() ? { homageTitle: homageTitle.trim() } : {}) } }
+        : {}),
       targetWordIds,
       excludedWordIds: [...excluded],
     });
@@ -124,54 +150,91 @@ export function SetupScreen({ candidates = [], initial, onGenerate, generating =
         </div>
 
         <div style={{ padding: '0 40px 36px', display: 'flex', flexDirection: 'column', gap: 30 }}>
-          {/* Level */}
+          {/* Learning intent (single-select) */}
           <section>
-            <Label text="レベル" hint="CEFR / TOEIC" />
-            <div className="setup-levels" style={{ display: 'flex', gap: 8 }}>
-              {LEVELS.map(({ level: l, toeic }) => {
-                const on = level === l;
+            <Label text="学びたい内容" hint="目的・題材" />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {INTENTS.map(({ value, label }) => {
+                const on = intent === value;
                 return (
                   <button
-                    key={l}
+                    key={value}
                     type="button"
-                    data-testid={`level-${l}`}
+                    data-testid={`intent-${value}`}
                     aria-pressed={on}
-                    onClick={() => setLevel(l)}
-                    style={levelStyle(on)}
+                    onClick={() => setIntent(value)}
+                    style={pillStyle(on)}
                   >
-                    <div style={{ fontFamily: fonts.num, fontSize: 14, fontWeight: on ? 700 : 600, color: on ? colors.primaryDeep : colors.faint }}>
-                      {l}
-                    </div>
-                    <div style={{ fontFamily: fonts.num, fontSize: 11, color: on ? colors.primarySoft : colors.fainter, marginTop: 2 }}>
-                      {toeic}
-                    </div>
+                    {label}
                   </button>
                 );
               })}
             </div>
           </section>
 
-          {/* Themes */}
+          {/* Difficulty (exam-based) */}
           <section>
-            <Label text="テーマ・分野" hint="複数選択可" />
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {THEMES.map((t) => {
-                const on = themes.includes(t);
+            <Label text="目標レベル" hint="英検 / TOEIC / TOEFL / IELTS" />
+            <ExamLevelPicker value={examTarget ?? DEFAULT_EXAM} onChange={setExamTarget} />
+            {!examTarget ? (
+              <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginTop: 8 }}>
+                目標レベルを選ぶと生成できます。
+              </div>
+            ) : null}
+          </section>
+
+          {/* Content type */}
+          <section>
+            <Label text="コンテンツ種別" />
+            <div style={{ display: 'flex', gap: 8 }}>
+              {CONTENT_TYPES.map(({ value, label }) => {
+                const on = contentType === value;
                 return (
                   <button
-                    key={t}
+                    key={value}
                     type="button"
-                    data-testid={`theme-${t}`}
+                    data-testid={`content-type-${value}`}
                     aria-pressed={on}
-                    onClick={() => toggleTheme(t)}
-                    style={pillStyle(on)}
+                    onClick={() => setContentType(value)}
+                    style={contentTypeStyle(on)}
                   >
-                    {t}
+                    {label}
                   </button>
                 );
               })}
             </div>
           </section>
+
+          {/* Genre + homage (stories only) */}
+          {isStory ? (
+            <section>
+              <Label text="ジャンル" hint="物語の作風" />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                {GENRES.map(({ value, label }) => {
+                  const on = genre === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      data-testid={`genre-${value}`}
+                      aria-pressed={on}
+                      onClick={() => setGenre(value)}
+                      style={pillStyle(on)}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <input
+                aria-label="オマージュ作品（任意）"
+                placeholder="オマージュ作品（任意）"
+                value={homageTitle}
+                onChange={(e) => setHomageTitle(e.target.value)}
+                style={homageInputStyle}
+              />
+            </section>
+          ) : null}
 
           {/* Sliders */}
           <section className="setup-sliders" style={{ display: 'flex', gap: 30 }}>
@@ -196,33 +259,21 @@ export function SetupScreen({ candidates = [], initial, onGenerate, generating =
               </div>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={sliderHeadStyle}>
-                <span style={sliderLabelStyle}>文章の長さ</span>
-                <span style={sliderValueStyle}>{LENGTHS.find((x) => x.value === length)?.label}</span>
-              </div>
-              <input
-                type="range"
-                aria-label="文章の長さ"
-                min={0}
-                max={2}
-                step={1}
-                value={LENGTHS.findIndex((x) => x.value === length)}
-                onChange={(e) => setLength(LENGTHS[Number(e.target.value)]!.value)}
-                style={{ width: '100%', accentColor: colors.primary }}
-              />
-              <div style={sliderEndsStyle}>
-                <span>短</span>
-                <span>長</span>
-              </div>
+              <WordTargetSlider contentType={contentType} value={wordTarget} onChange={setWordTarget} />
             </div>
           </section>
 
           {/* Target words */}
           <section>
-            <Label text="今回織り込む単語" hint="未学習・苦手から自動選定" mb={5} />
+            <Label text="今回織り込む単語" hint="未学習・苦手から自動提案" mb={5} />
             <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 12 }}>
-              指定しない場合は、選んだレベルとテーマに合わせた文章を生成します
+              指定しない場合は、選んだレベルと趣向に合わせた文章を生成します
             </div>
+            {suggestionShortfall ? (
+              <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.terracotta, marginBottom: 12 }}>
+                {suggestionShortfall}
+              </div>
+            ) : null}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {candidates.map((c) => {
                 const off = excluded.has(c.wordId);
@@ -253,13 +304,7 @@ export function SetupScreen({ candidates = [], initial, onGenerate, generating =
               ))}
               {adding ? (
                 <form aria-label="単語を追加するフォーム" onSubmit={commitAdd} style={{ display: 'inline-flex', gap: 6 }}>
-                  <input
-                    aria-label="追加する単語"
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    style={addInputStyle}
-                  />
+                  <input aria-label="追加する単語" autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} style={addInputStyle} />
                   <button type="submit" style={addChipStyle}>
                     追加
                   </button>
@@ -311,16 +356,6 @@ const cardStyle: CSSProperties = {
   overflow: 'hidden',
 };
 
-const levelStyle = (on: boolean): CSSProperties => ({
-  flex: 1,
-  textAlign: 'center',
-  border: on ? `1.5px solid ${colors.primary}` : `1px solid ${colors.borderControl}`,
-  background: on ? colors.surfaceBlue : colors.surfaceCard,
-  borderRadius: radius.control,
-  padding: '11px 6px',
-  cursor: 'pointer',
-});
-
 const pillStyle = (on: boolean): CSSProperties => ({
   fontFamily: fonts.ui,
   fontSize: 13,
@@ -329,6 +364,20 @@ const pillStyle = (on: boolean): CSSProperties => ({
   border: on ? '1px solid transparent' : `1px solid ${colors.borderControl}`,
   borderRadius: 18,
   padding: '7px 15px',
+  cursor: 'pointer',
+});
+
+const contentTypeStyle = (on: boolean): CSSProperties => ({
+  flex: 1,
+  textAlign: 'center',
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: on ? 700 : 500,
+  color: on ? colors.primaryDeep : colors.faint,
+  border: on ? `1.5px solid ${colors.primary}` : `1px solid ${colors.borderControl}`,
+  background: on ? colors.surfaceBlue : colors.surfaceCard,
+  borderRadius: radius.control,
+  padding: '11px 6px',
   cursor: 'pointer',
 });
 
@@ -362,6 +411,16 @@ const addInputStyle: CSSProperties = {
   borderRadius: radius.chip,
   padding: '6px 10px',
   width: 120,
+};
+
+const homageInputStyle: CSSProperties = {
+  fontFamily: fonts.serif,
+  fontSize: 14,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  padding: '9px 12px',
+  width: '100%',
+  boxSizing: 'border-box',
 };
 
 const sliderHeadStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', marginBottom: 12 };

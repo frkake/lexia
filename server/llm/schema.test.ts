@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { buildAnnotationMessages, buildPassageMessages } from './schema';
+import { buildAnnotationMessages, buildPassageMessages, buildSuggestionMessages, maxTokensForWordTarget } from './schema';
 import type { GenerationRequest, PassageAnnotationRequest } from '../../src/types/domain';
 
 describe('buildPassageMessages — translationSpans guidance (Requirement 4)', () => {
   const req: GenerationRequest = {
     level: 'B1',
-    themes: ['会議'],
+    intent: 'business',
     newWordRatio: 0.3,
-    length: 'short',
+    wordTarget: 200,
+    contentType: 'article',
     targetWords: [{ wordId: 'resilient', surface: 'resilient', masteryDensity: 'new' }],
   };
 
@@ -29,6 +30,69 @@ describe('buildPassageMessages — translationSpans guidance (Requirement 4)', (
   it('tells the model to emit an empty translationSpans array when a sentence has no new elements', () => {
     const { system } = buildPassageMessages(req);
     expect(system.toLowerCase()).toMatch(/empty|空/);
+  });
+});
+
+describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6)', () => {
+  const base: GenerationRequest = {
+    level: 'B1',
+    intent: 'business',
+    newWordRatio: 0.3,
+    wordTarget: 300,
+    contentType: 'article',
+    targetWords: [],
+  };
+
+  it('passes the numeric word target through as the approxWords constraint (7.4)', () => {
+    const { user } = buildPassageMessages({ ...base, wordTarget: 900 });
+    expect(user).toContain('900');
+    expect(user).toContain('article');
+  });
+
+  it('biases toward exam-frequent vocabulary/formats for exam intents (8.4)', () => {
+    const toeic = buildPassageMessages({ ...base, intent: 'toeic' }).user;
+    expect(toeic.toLowerCase()).toContain('toeic');
+    expect(toeic.toLowerCase()).toMatch(/high-frequency|frequent|prioritize/);
+    const eiken = buildPassageMessages({ ...base, intent: 'eiken' }).user;
+    expect(eiken.toLowerCase()).toMatch(/high-frequency|frequent|prioritize/);
+  });
+
+  it('injects the story consistency context for a chapter request (6.6)', () => {
+    const { user } = buildPassageMessages({
+      ...base,
+      contentType: 'long_story',
+      storyContext: {
+        storyId: 's1',
+        chapterIndex: 2,
+        plan: {
+          storyId: 's1',
+          contentType: 'long_story',
+          genre: 'fantasy',
+          titleJa: '竜の物語',
+          synopsisJa: '竜と少女の冒険。',
+          characters: [{ name: 'Aria', role: 'hero', descriptionJa: '勇敢な少女' }],
+          chapters: [{ index: 2, headingJa: '第二章', beatJa: '洞窟へ' }],
+        },
+        priorSummaryJa: '少女は旅に出た。',
+      },
+    });
+    expect(user).toContain('竜と少女の冒険。'); // synopsis threaded in
+    expect(user).toContain('少女は旅に出た。'); // prior-chapter summary threaded in
+  });
+});
+
+describe('maxTokensForWordTarget', () => {
+  it('is monotonic in the word target', () => {
+    expect(maxTokensForWordTarget(800)).toBeGreaterThan(maxTokensForWordTarget(200));
+  });
+});
+
+describe('buildSuggestionMessages — intent replaces themes (Requirement 8/5)', () => {
+  it('passes the learning intent (not theme tags) to the suggester', () => {
+    const { user, system } = buildSuggestionMessages({ level: 'B2', intent: 'toeic', count: 5 });
+    expect(user).toContain('toeic');
+    expect(user).not.toContain('themes');
+    expect(system.toLowerCase()).toContain('intent');
   });
 });
 

@@ -21,10 +21,11 @@ export interface KeyValueStorage {
 }
 
 const DEFAULT_SETUP: SetupConfig = {
-  level: 'B1',
-  themes: [],
+  examTarget: { kind: 'eiken', value: '2' }, // 英検2級 ≒ CEFR B1 (mid default)
+  intent: 'daily',
   newWordRatio: 0.3,
-  length: 'medium',
+  wordTarget: 400,
+  contentType: 'article',
   targetWordIds: [],
   excludedWordIds: [],
 };

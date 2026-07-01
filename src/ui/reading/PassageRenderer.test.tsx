@@ -10,7 +10,7 @@ import type { IndexedPassage, PassageOutput } from '../../types/domain';
 /** A sentence whose notice cue spans three PLAIN (non-target, non-collocation) tokens. */
 function makeMultiTokenCuePassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'T', theme: 'negotiation', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 5 },
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 5 },
     sentences: [{ tokens: ['We', 'leverage', 'our', 'reputation', '.'], translationJa: '評判を活かす。' }],
     targetSpans: [],
     collocationSpans: [],
@@ -30,7 +30,7 @@ function makeMultiTokenCuePassage(): IndexedPassage {
 /** A multi-word collocation ("strike a bargain") whose own cue spans the whole chip. */
 function makeMultiWordCollocationPassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
     sentences: [{ tokens: ['They', 'strike', 'a', 'bargain', 'today', '.'], translationJa: '今日、取引をまとめる。' }],
     targetSpans: [],
     collocationSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 4, headWordId: 'bargain', collocationId: 'strike a bargain' }],
@@ -50,7 +50,7 @@ function makeMultiWordCollocationPassage(): IndexedPassage {
 /** A notice cue ("leverage", [2,3)) sitting INSIDE a collocation chip ("leverage our reputation"). */
 function makeCueInsideCollocationPassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'T', theme: 'negotiation', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
     sentences: [{ tokens: ['We', 'can', 'leverage', 'our', 'reputation', '.'], translationJa: '評判を活かせる。' }],
     targetSpans: [
       { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'leverage', surface: 'leverage', masteryDensity: 'new' },
@@ -71,7 +71,7 @@ function makeCueInsideCollocationPassage(): IndexedPassage {
 
 function makePassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'The Restless Boardroom', theme: 'negotiation', level: 'B2', newCount: 1, reviewCount: 2, approxWords: 12 },
+    meta: { title: 'The Restless Boardroom', intent: 'business', level: 'B2', newCount: 1, reviewCount: 2, approxWords: 12 },
     sentences: [
       // s0: "The board was growing restless ." → target "restless" + notice #1
       { tokens: ['The', 'board', 'was', 'growing', 'restless', '.'], translationJa: '取締役会は苛立っていた。' },
@@ -134,7 +134,7 @@ describe('<PassageRenderer/>', () => {
     // chip "leverage our reputation" (tokens [2,5)). The badge must not be swallowed by the
     // chip — otherwise the in-text marker disappears while NoticeRail still lists the cue.
     const source: PassageOutput = {
-      meta: { title: 'T', theme: 'negotiation', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
+      meta: { title: 'T', intent: 'business', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
       sentences: [{ tokens: ['We', 'can', 'leverage', 'our', 'reputation', '.'], translationJa: '評判を活かせる。' }],
       targetSpans: [
         { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'leverage', surface: 'leverage', masteryDensity: 'new' },
@@ -258,7 +258,7 @@ describe('<PassageRenderer/> always-on annotation + focus escalation (3.2)', () 
 /** A cue spanning a discontinuous grammar relation ("no sooner ... than"), including the gap tokens. */
 function makeDiscontinuousCuePassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 9 },
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 9 },
     sentences: [
       { tokens: ['No', 'sooner', 'had', 'we', 'left', 'than', 'it', 'rained', '.'], translationJa: '出るやいなや雨が降った。' },
     ],
@@ -280,7 +280,7 @@ function makeDiscontinuousCuePassage(): IndexedPassage {
 /** Two overlapping cues on the same token range ("set an agenda"): collocation + register. */
 function makeOverlappingCuesPassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 'T', theme: 'x', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
     sentences: [{ tokens: ['We', 'set', 'an', 'agenda', 'today', '.'], translationJa: '今日は議題を決めた。' }],
     targetSpans: [],
     collocationSpans: [],

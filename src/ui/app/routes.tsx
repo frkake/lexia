@@ -15,6 +15,7 @@ import { useStore } from 'zustand';
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { DashboardScreen } from '../dashboard/DashboardScreen';
 import { SetupScreen, type CandidateWord } from '../setup/SetupScreen';
+import { StoryPlanReview } from '../setup/StoryPlanReview';
 import { ReadingScreen } from '../reading/ReadingScreen';
 import { StudyWordsList, type StudyWord } from '../reading/StudyWordsList';
 import { resolveFeatureFlags } from './featureFlags';
@@ -30,14 +31,13 @@ import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
 import { restoreReadingSession } from '../../state/controllers/sessionBootstrap';
 import { sessionPlanner } from '../../domain/session/sessionPlanner';
+import { examScale } from '../../domain/difficulty/examScale';
+import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
 import { colors, fonts } from '../theme/tokens';
-import type { IndexedPassage, MasteryStage, Rating, SetupConfig, WordData, WordSchedulingState } from '../../types/domain';
+import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, WordData, WordSchedulingState } from '../../types/domain';
 
 const CANDIDATE_LIMIT = 12;
-
-/** How many new words to auto-propose (by passage length) when the learner picks none. */
-const NEW_WORDS_BY_LENGTH: Record<SetupConfig['length'], number> = { short: 4, medium: 6, long: 8 };
 
 function stripCacheNamespace(data: WordData): WordData {
   const copy = { ...data } as WordData & { userId?: unknown };
@@ -66,9 +66,9 @@ async function resolveTargetWordIds(c: Container, setup: SetupConfig): Promise<s
   if (setup.targetWordIds.length > 0 || !c.content.suggestWords) return setup.targetWordIds;
   try {
     const suggested = await c.content.suggestWords({
-      level: setup.level,
-      themes: setup.themes,
-      count: NEW_WORDS_BY_LENGTH[setup.length],
+      level: examScale.examToCefr(setup.examTarget),
+      intent: setup.intent,
+      count: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
       exclude: setup.excludedWordIds,
     });
     return suggested.length > 0 ? suggested : setup.targetWordIds;
@@ -190,11 +190,85 @@ export function SetupRoute() {
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
-  const candidates =
-    useLiveQuery<CandidateWord[]>(async () => {
-      const states = await sessionPlanner.selectCandidates(c.repos.scheduling, c.userId, c.now(), CANDIDATE_LIMIT);
-      return states.map((s) => ({ wordId: s.wordId, surface: s.wordId }));
-    }, [c]) ?? [];
+  // Setup-open auto-suggestion (Requirement 5.1): ask the WordSuggestionService for ABC-ordered
+  // "next to learn" words (introduced/excluded removed), surfacing a shortfall notice when the
+  // gateway can't fill the request. Falls back to the due/weak candidates if suggestion yields none.
+  const [candidates, setCandidates] = useState<CandidateWord[]>([]);
+  const [suggestionShortfall, setSuggestionShortfall] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await c.suggestions.suggest(
+          {
+            userId: c.userId,
+            level: examScale.examToCefr(lastSetup.examTarget),
+            intent: lastSetup.intent,
+            excludedWordIds: lastSetup.excludedWordIds ?? [],
+            count: CANDIDATE_LIMIT,
+          },
+          c.repos.scheduling,
+        );
+        if (cancelled) return;
+        if (result.candidates.length > 0) {
+          setCandidates(result.candidates);
+          setSuggestionShortfall(
+            result.shortfall ? '提案できる新しい単語が不足しています。手動で追加できます。' : null,
+          );
+          return;
+        }
+        // Suggestion empty (gateway unavailable / exhausted): fall back to due/weak candidates.
+        const states = await sessionPlanner.selectCandidates(c.repos.scheduling, c.userId, c.now(), CANDIDATE_LIMIT);
+        if (cancelled) return;
+        setCandidates(states.map((s) => ({ wordId: s.wordId, surface: s.wordId })));
+        setSuggestionShortfall(
+          result.shortfall?.reason === 'gateway_unavailable'
+            ? '単語提案サービスに接続できませんでした。手動で追加できます。'
+            : null,
+        );
+      } catch {
+        if (!cancelled) setCandidates([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when the difficulty/intent seed changes.
+  }, [c, lastSetup.examTarget, lastSetup.intent, lastSetup.excludedWordIds]);
+
+  // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
+  // learner to confirm before any chapter body is produced. Only active when storyMode is on.
+  const { storyMode } = resolveFeatureFlags();
+  const [pendingPlan, setPendingPlan] = useState<StoryPlan | null>(null);
+  const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
+
+  /** Run the standard article generate → validate → persist → render pipeline. */
+  const runArticlePipeline = async (setup: SetupConfig): Promise<void> => {
+    const targetWordIds = await resolveTargetWordIds(c, setup);
+    const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+    const wordData = await loadWordDataMap(c, targetWordIds);
+    const outcome = await runGenerationPipeline(
+      {
+        createOrchestrator: c.createOrchestrator,
+        scheduling: c.repos.scheduling,
+        passages: c.repos.passages,
+        progress: c.repos.progress,
+        timingMaps: c.repos.timingMaps,
+        tts: c.tts,
+        session: c.session,
+        player: c.player,
+        now: c.now,
+        genId: c.genId,
+        voiceId: voiceId || c.voiceId,
+        wordData,
+      },
+      effectiveSetup,
+      c.userId,
+    );
+    if (outcome.ok) navigate('/read');
+    else setGenerationError(generationErrorMessage(outcome.error));
+  };
 
   const onGenerate = async (setup: SetupConfig): Promise<void> => {
     if (generating) return;
@@ -202,30 +276,24 @@ export function SetupRoute() {
     setGenerationError(null);
     c.settings.getState().setLastSetup(setup);
     try {
-      // No hand-picked words → auto-propose new vocabulary to teach for this level + theme.
-      const targetWordIds = await resolveTargetWordIds(c, setup);
-      const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
-      const wordData = await loadWordDataMap(c, targetWordIds);
-      const outcome = await runGenerationPipeline(
-        {
-          createOrchestrator: c.createOrchestrator,
-          scheduling: c.repos.scheduling,
-          passages: c.repos.passages,
-          progress: c.repos.progress,
-          timingMaps: c.repos.timingMaps,
-          tts: c.tts,
-          session: c.session,
-          player: c.player,
-          now: c.now,
-          genId: c.genId,
-          voiceId: voiceId || c.voiceId,
-          wordData,
-        },
-        effectiveSetup,
-        c.userId,
-      );
-      if (outcome.ok) navigate('/read');
-      else setGenerationError(generationErrorMessage(outcome.error));
+      // Story path: generate the plan and STOP at the confirmation gate (no body yet, 6.3).
+      if (storyMode && setup.contentType !== 'article') {
+        const planned = await c.storyPlanner.planStory({
+          contentType: setup.contentType,
+          genre: setup.storyOptions?.genre ?? 'fantasy',
+          homageTitle: setup.storyOptions?.homageTitle,
+          intent: setup.intent,
+          level: examScale.examToCefr(setup.examTarget),
+        });
+        if (planned.ok) {
+          setPendingSetup(setup);
+          setPendingPlan(planned.value);
+        } else {
+          setGenerationError(generationErrorMessage(planned.error));
+        }
+        return;
+      }
+      await runArticlePipeline(setup);
     } catch (error) {
       setGenerationError(generationErrorMessage(error));
     } finally {
@@ -233,9 +301,55 @@ export function SetupRoute() {
     }
   };
 
+  // Confirmation gate passed: persist the plan, then generate + persist the first chapter and read it.
+  const onConfirmPlan = async (plan: StoryPlan): Promise<void> => {
+    if (!pendingSetup) return;
+    setGenerating(true);
+    setGenerationError(null);
+    try {
+      await c.storyPlanner.confirmPlan(c.userId, plan);
+      const setup = pendingSetup;
+      const base = sessionPlanner.buildRequest(setup, [], undefined);
+      const result = await c.storyPlanner.generateChapter(plan, 0, base);
+      if (!result.ok) {
+        setGenerationError(generationErrorMessage(result.error));
+        return;
+      }
+      const indexed = result.value;
+      await c.repos.passages.put({
+        passageId: indexed.passageId,
+        userId: c.userId,
+        createdAt: c.now(),
+        passage: indexed.source,
+      });
+      c.session.getState().startPassage(indexed, c.now());
+      setPendingPlan(null);
+      setPendingSetup(null);
+      navigate('/read');
+    } catch (error) {
+      setGenerationError(generationErrorMessage(error));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  if (pendingPlan) {
+    return (
+      <StoryPlanReview
+        plan={pendingPlan}
+        onConfirm={(p) => void onConfirmPlan(p)}
+        onCancel={() => {
+          setPendingPlan(null);
+          setPendingSetup(null);
+        }}
+      />
+    );
+  }
+
   return (
     <SetupScreen
       candidates={candidates}
+      suggestionShortfall={suggestionShortfall}
       initial={lastSetup}
       generating={generating}
       generationError={generationError}

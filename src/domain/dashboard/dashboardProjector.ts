@@ -44,7 +44,8 @@ export interface ReadingNowItem {
 export interface RecentPassageItem {
   passageId: string;
   title: string;
-  theme: string;
+  /** Learning intent this passage served (was: `theme`, migrated with PassageMeta). */
+  intent: string;
   createdAt: number;
   completed: boolean;
 }
@@ -153,7 +154,7 @@ function project(input: DashboardInput): DashboardSnapshot {
     .map((p) => ({
       passageId: p.passageId,
       title: p.passage.meta.title,
-      theme: p.passage.meta.theme,
+      intent: p.passage.meta.intent,
       createdAt: p.createdAt,
       completed: completed.has(p.passageId),
     }));

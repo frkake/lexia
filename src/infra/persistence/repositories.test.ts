@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { LexiaDb } from './lexiaDb';
+import { LexiaDb, APP_SCHEMA_VERSION } from './lexiaDb';
 import { createRepositories } from './repositories';
 import type { UserId, WordSchedulingState, ReadingProgress } from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
@@ -116,7 +116,7 @@ describe('PassageRepository', () => {
       userId,
       createdAt,
       passage: {
-        meta: { title: id, theme: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+        meta: { title: id, intent: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
         sentences: [],
         targetSpans: [],
         collocationSpans: [],
@@ -182,10 +182,11 @@ describe('SettingsRepository', () => {
       theme: 'light',
       locale: 'ja',
       lastSetup: {
-        level: 'B2',
-        themes: ['travel'],
+        examTarget: { kind: 'eiken', value: '準1' },
+        intent: 'travel',
         newWordRatio: 0.3,
-        length: 'medium',
+        wordTarget: 250,
+        contentType: 'article',
         targetWordIds: ['w1'],
         excludedWordIds: [],
       },
@@ -195,7 +196,7 @@ describe('SettingsRepository', () => {
     expect(got?.fontScale).toBe(1.2);
     // The persisted row carries the schema version even though the port returns Settings.
     const raw = await db.settings.get(userId);
-    expect(raw?.appSchemaVersion).toBe(1);
+    expect(raw?.appSchemaVersion).toBe(APP_SCHEMA_VERSION);
     db.close();
   });
 });

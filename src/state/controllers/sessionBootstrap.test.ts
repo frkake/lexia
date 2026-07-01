@@ -18,7 +18,7 @@ async function freshEnv() {
 
 function passageOutput(): PassageOutput {
   return {
-    meta: { title: '続きの物語', theme: '会議', level: 'B2', newCount: 0, reviewCount: 2, approxWords: 8 },
+    meta: { title: '続きの物語', intent: 'business', level: 'B2', newCount: 0, reviewCount: 2, approxWords: 8 },
     sentences: [
       { tokens: ['First', 'sentence', '.'], translationJa: '一文目。' },
       { tokens: ['Second', 'sentence', 'here', '.'], translationJa: '二文目。' },
@@ -73,7 +73,7 @@ describe('hydrateSettings (revisit restore of preferences, task 10.4)', () => {
       rate: 1.25,
       theme: 'dark',
       locale: 'ja',
-      lastSetup: { level: 'C1', themes: ['財務'], newWordRatio: 0.2, length: 'long', targetWordIds: ['x'], excludedWordIds: [] },
+      lastSetup: { examTarget: { kind: 'eiken', value: '1' }, intent: 'business', newWordRatio: 0.2, wordTarget: 800, contentType: 'article', targetWordIds: ['x'], excludedWordIds: [] },
     };
     await repos.settings.put(stored);
 
@@ -85,7 +85,7 @@ describe('hydrateSettings (revisit restore of preferences, task 10.4)', () => {
     expect(s.fontScale).toBe(1.3);
     expect(s.translationMode).toBe('per_sentence');
     expect(s.voiceId).toBe('Matthew');
-    expect(s.lastSetup.level).toBe('C1');
+    expect(s.lastSetup.examTarget).toEqual({ kind: 'eiken', value: '1' });
   });
 });
 

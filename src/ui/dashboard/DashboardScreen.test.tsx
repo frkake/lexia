@@ -21,7 +21,7 @@ function snapshot(): DashboardSnapshot {
     ],
     streakDays: 12,
     recent: [
-      { passageId: 'p2', title: 'A Quiet Negotiation', theme: '交渉', createdAt: NOW - DAY_MS, completed: true },
+      { passageId: 'p2', title: 'A Quiet Negotiation', intent: 'business', createdAt: NOW - DAY_MS, completed: true },
     ],
   };
 }
@@ -77,6 +77,6 @@ describe('<DashboardScreen/>', () => {
   it('shows recently read passages with completion (10.6)', () => {
     const { getByText } = renderScreen();
     expect(getByText('A Quiet Negotiation')).toBeTruthy();
-    expect(getByText(/交渉/)).toBeTruthy();
+    expect(getByText(/business/)).toBeTruthy();
   });
 });

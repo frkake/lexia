@@ -1,17 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ProviderError, generatePassage, getWordData, suggestWords, annotatePassage, type Env } from './providers';
+import { ProviderError, generatePassage, getWordData, suggestWords, annotatePassage, planStory, type Env } from './providers';
 import type { GenerationRequest } from '../../src/types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
-  themes: ['会議'],
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWords: [],
 };
 
 const samplePassage = {
-  meta: { title: 't', theme: '会議', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 11 },
+  meta: { title: 't', intent: 'business', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 11 },
   sentences: [{ tokens: ['A', 'small', 'team', 'met', '.'], translationJa: '小さなチームが集まった。' }],
   targetSpans: [],
   collocationSpans: [],
@@ -72,13 +73,14 @@ describe('generatePassage — OpenAI provider (default)', () => {
   it('re-anchors mis-indexed target and collocation spans by their declared text', async () => {
     const reqWithTargets: GenerationRequest = {
       level: 'B1',
-      themes: ['会議'],
+      intent: 'business',
       newWordRatio: 0.3,
-      length: 'short',
+      wordTarget: 200,
+      contentType: 'article',
       targetWords: [{ wordId: 'agenda', surface: 'agenda', masteryDensity: 'new', attributes: { connotation: 'neutral' } }],
     };
     const passage = {
-      meta: { title: 't', theme: '会議', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 9 },
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 9 },
       sentences: [{ tokens: ['We', 'set', 'an', 'agenda', 'for', 'the', 'team', 'meeting', '.'], translationJa: '' }],
       // Wrong indices: "agenda" declared at [0,1) ("We"); collocation declared at [5,9).
       targetSpans: [{ sentenceIndex: 0, tokenStart: 0, tokenEnd: 1, wordId: 'agenda', surface: 'agenda', masteryDensity: 'new' }],
@@ -95,7 +97,7 @@ describe('generatePassage — OpenAI provider (default)', () => {
 
   it('re-derives translationSpans char offsets from the model\'s verbatim JA anchor, dropping unlocatable ones (4.2)', async () => {
     const passage = {
-      meta: { title: 't', theme: '会議', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 6 },
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 6 },
       sentences: [
         {
           tokens: ['She', 'stayed', 'resilient', '.'],
@@ -127,14 +129,14 @@ describe('generatePassage — OpenAI provider (default)', () => {
 
   it('unwraps a {meta, passage:{sentences}} shape and backfills missing meta from the request', async () => {
     const wrapped = {
-      meta: { newCount: 0, reviewCount: 0, approxWords: 11 }, // no title/theme/level
+      meta: { newCount: 0, reviewCount: 0, approxWords: 11 }, // no title/intent/level
       passage: { sentences: samplePassage.sentences },
     };
     const fetchImpl = vi.fn(async () => openAiCompletion(wrapped));
     const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
     const res = await generatePassage(env, req, fetchImpl as unknown as typeof fetch);
     expect(res.passage.sentences[0]!.tokens).toContain('team');
-    expect(res.passage.meta.theme).toBe('会議'); // backfilled from request
+    expect(res.passage.meta.intent).toBe('business'); // backfilled from request
     expect(res.passage.meta.level).toBe('B1');
   });
 });
@@ -263,7 +265,7 @@ describe('suggestWords', () => {
     const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
     const words = await suggestWords(
       env,
-      { level: 'B1', themes: ['会議'], count: 3, exclude: ['Stakeholder'] },
+      { level: 'B1', intent: 'business', count: 3, exclude: ['Stakeholder'] },
       fetchImpl as unknown as typeof fetch,
     );
     expect(words).toEqual(['agenda', 'consensus', 'defer']);
@@ -272,8 +274,69 @@ describe('suggestWords', () => {
   it('tolerates a non-array reply and returns an empty list', async () => {
     const fetchImpl = vi.fn(async () => openAiCompletion({ words: null }));
     const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
-    const words = await suggestWords(env, { level: 'B1', themes: ['x'], count: 5 }, fetchImpl as unknown as typeof fetch);
+    const words = await suggestWords(env, { level: 'B1', intent: 'business', count: 5 }, fetchImpl as unknown as typeof fetch);
     expect(words).toEqual([]);
+  });
+});
+
+describe('planStory (Requirement 6.2 / 13.2)', () => {
+  const planReply = {
+    titleJa: '竜の物語',
+    synopsisJa: '竜と少女の冒険。',
+    characters: [
+      { name: 'Aria', role: 'hero', descriptionJa: '勇敢な少女' },
+      { name: 'Draco', role: 'dragon', descriptionJa: '孤独な竜' },
+    ],
+    chapters: [
+      { index: 0, headingJa: '第一章', beatJa: '出会い' },
+      { index: 1, headingJa: '第二章', beatJa: '試練' },
+    ],
+  };
+
+  it('returns a plan with characters, synopsis and chapters, assigning a storyId', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion(planReply));
+    const plan = await planStory(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      { contentType: 'long_story', genre: 'fantasy', intent: 'daily', level: 'B1' },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(plan.storyId).toBeTruthy();
+    expect(plan.contentType).toBe('long_story');
+    expect(plan.characters).toHaveLength(2);
+    expect(plan.chapters.map((c) => c.index)).toEqual([0, 1]);
+    expect(plan.synopsisJa).toBe('竜と少女の冒険。');
+  });
+
+  it('collapses a short story to a single chapter regardless of the model reply', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion(planReply)); // reply has 2 chapters
+    const plan = await planStory(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      { contentType: 'short_story', genre: 'mystery', intent: 'daily', level: 'B1' },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(plan.contentType).toBe('short_story');
+    expect(plan.chapters).toHaveLength(1);
+  });
+
+  it('carries the homage reference through to the plan', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion(planReply));
+    const plan = await planStory(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      { contentType: 'short_story', genre: 'mystery', homageTitle: 'Sherlock Holmes', intent: 'daily', level: 'B2' },
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(plan.homage?.title).toBe('Sherlock Holmes');
+  });
+
+  it('throws when the plan has no chapters', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion({ ...planReply, chapters: [] }));
+    await expect(
+      planStory(
+        { OPENAI_API_KEY: 'sk-real-key' },
+        { contentType: 'long_story', genre: 'fantasy', intent: 'daily', level: 'B1' },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
   });
 });
 

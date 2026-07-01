@@ -9,14 +9,28 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { GenerationRequest, PassageAnnotationRequest, WordSuggestionRequest } from '../../src/types/domain';
-import { type Env, ProviderError, annotatePassage, generatePassage, getWordData, suggestWords } from './providers';
+import type {
+  GenerationRequest,
+  PassageAnnotationRequest,
+  StoryPlanRequest,
+  WordSuggestionRequest,
+} from '../../src/types/domain';
+import {
+  type Env,
+  ProviderError,
+  annotatePassage,
+  generatePassage,
+  getWordData,
+  planStory,
+  suggestWords,
+} from './providers';
 
 type Next = (err?: unknown) => void;
 
 const GENERATE_PATH = '/api/passages:generate';
 const ANNOTATE_PATH = '/api/passages:annotate';
 const SUGGEST_PATH = '/api/words:suggest';
+const STORY_PLAN_PATH = '/api/story:plan';
 const WORDS_PREFIX = '/api/words/';
 
 export function createApiHandler(getEnv: () => Env) {
@@ -33,7 +47,7 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
   if (path === GENERATE_PATH) {
     if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
     const body = await readJson<GenerationRequest>(req);
-    if (!body || !body.level || !Array.isArray(body.themes)) {
+    if (!body || !body.level || !body.intent || typeof body.wordTarget !== 'number') {
       throw new ProviderError(400, 'Invalid GenerationRequest body.');
     }
     const result = await generatePassage(env, body);
@@ -53,11 +67,21 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
   if (path === SUGGEST_PATH) {
     if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
     const body = await readJson<WordSuggestionRequest>(req);
-    if (!body || !body.level || !Array.isArray(body.themes)) {
+    if (!body || !body.level || !body.intent) {
       throw new ProviderError(400, 'Invalid WordSuggestionRequest body.');
     }
     const words = await suggestWords(env, { ...body, count: body.count || 6 });
     return sendJson(res, 200, { words });
+  }
+
+  if (path === STORY_PLAN_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<StoryPlanRequest>(req);
+    if (!body || !body.contentType || !body.genre || !body.level) {
+      throw new ProviderError(400, 'Invalid StoryPlanRequest body.');
+    }
+    const storyPlan = await planStory(env, body);
+    return sendJson(res, 200, { storyPlan });
   }
 
   if (path.startsWith(WORDS_PREFIX)) {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { dashboardProjector } from './dashboardProjector';
 import { DAY_MS, HOUR_MS } from '../srs/parameters';
-import type { UserId, WordSchedulingState, ReadingProgress, ReviewLogEntry } from '../../types/domain';
+import type { UserId, WordSchedulingState, ReadingProgress, ReviewLogEntry, LearningIntent } from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
 
 const U = 'u1' as UserId;
@@ -29,13 +29,13 @@ function log(wordId: string, at: number): ReviewLogEntry {
   return { userId: U, wordId, rating: 3, source: 'review', at };
 }
 
-function passageRecord(passageId: string, createdAt: number, title: string, theme: string): PassageRecord {
+function passageRecord(passageId: string, createdAt: number, title: string, intent: LearningIntent): PassageRecord {
   return {
     passageId,
     userId: U,
     createdAt,
     passage: {
-      meta: { title, theme, level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+      meta: { title, intent, level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
       sentences: [],
       targetSpans: [],
       collocationSpans: [],

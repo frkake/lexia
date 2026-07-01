@@ -33,7 +33,7 @@ const PASSAGE_ID = 'p1';
 
 function passageOutput(): PassageOutput {
   return {
-    meta: { title: '取引成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
+    meta: { title: '取引成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
     sentences: [{ tokens: ['The', 'deal', 'closed', '.'], translationJa: '取引が成立した。' }],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [],
@@ -46,10 +46,11 @@ function indexedPassage(): IndexedPassage {
 }
 
 const SETUP: SetupConfig = {
-  level: 'B1',
-  themes: ['交渉'],
+  examTarget: { kind: 'eiken', value: '2' },
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWordIds: ['deal'],
   excludedWordIds: [],
 };

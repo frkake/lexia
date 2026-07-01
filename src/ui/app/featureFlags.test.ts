@@ -8,14 +8,14 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     expect(values.every((v) => typeof v === 'boolean')).toBe(true);
   });
 
-  it('ships the completed display-improvement cluster ON by default (newReadingLayout)', () => {
-    // The reading-layout cluster (Requirements 1–4) is implemented end-to-end, so it ships on.
+  it('ships the completed display + generation clusters ON by default', () => {
+    // Reading layout (Req 1–4) and generation setup (Req 5/7/8/9) are implemented end-to-end.
     expect(DEFAULT_FEATURE_FLAGS.newReadingLayout).toBe(true);
+    expect(DEFAULT_FEATURE_FLAGS.newGenerationSetup).toBe(true);
   });
 
-  it('keeps the not-yet-built generation/story clusters OFF by default', () => {
-    // These phases are not implemented yet, so they stay default-off to preserve behavior.
-    expect(DEFAULT_FEATURE_FLAGS.newGenerationSetup).toBe(false);
+  it('keeps the not-yet-built story cluster OFF by default', () => {
+    // The story flow (Requirement 6) is not fully wired yet, so it stays default-off.
     expect(DEFAULT_FEATURE_FLAGS.storyMode).toBe(false);
   });
 
@@ -27,8 +27,8 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     // Override the default-on flag OFF to prove the override path works (kill-switch).
     const resolved = resolveFeatureFlags({ newReadingLayout: false });
     expect(resolved.newReadingLayout).toBe(false);
-    // Other flags stay at their default.
-    expect(resolved.newGenerationSetup).toBe(false);
+    // Other flags stay at their default (storyMode is still off).
+    expect(resolved.storyMode).toBe(false);
     // The shared default object is not mutated.
     expect(DEFAULT_FEATURE_FLAGS.newReadingLayout).toBe(true);
   });

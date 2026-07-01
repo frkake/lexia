@@ -46,7 +46,7 @@ describe('ports', () => {
     const gw: ContentGateway = {
       generatePassage: async () => ({
         passage: {
-          meta: { title: '', theme: '', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+          meta: { title: '', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
           sentences: [],
           targetSpans: [],
           collocationSpans: [],

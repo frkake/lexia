@@ -21,7 +21,7 @@ const TODAY = startOfDay(FIXED_NOW);
 // ── Reading (rich annotations: 3 densities + collocations + 3 notice categories) ──
 
 const READING_OUTPUT: PassageOutput = {
-  meta: { title: '交渉のテーブルで', theme: '交渉', level: 'B2', newCount: 2, reviewCount: 2, approxWords: 19 },
+  meta: { title: '交渉のテーブルで', intent: 'business', level: 'B2', newCount: 2, reviewCount: 2, approxWords: 19 },
   sentences: [
     {
       tokens: ['The', 'negotiation', 'reached', 'a', 'decisive', 'turning', 'point', '.'],
@@ -101,8 +101,8 @@ export const dashboardSnapshot: DashboardSnapshot = {
   ],
   streakDays: 6,
   recent: [
-    { passageId: 'p1', title: '交渉のテーブルで', theme: '交渉', createdAt: FIXED_NOW - DAY_MS, completed: false },
-    { passageId: 'p2', title: '四半期レビュー', theme: '財務', createdAt: FIXED_NOW - 2 * DAY_MS, completed: true },
+    { passageId: 'p1', title: '交渉のテーブルで', intent: 'business', createdAt: FIXED_NOW - DAY_MS, completed: false },
+    { passageId: 'p2', title: '四半期レビュー', intent: 'business', createdAt: FIXED_NOW - 2 * DAY_MS, completed: true },
   ],
 };
 
@@ -163,10 +163,11 @@ export const setupCandidates: CandidateWord[] = [
 ];
 
 export const setupInitial: Partial<SetupConfig> = {
-  level: 'B2',
-  themes: ['交渉', '会議'],
+  examTarget: { kind: 'eiken', value: '準1' },
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'medium',
+  wordTarget: 250,
+  contentType: 'article',
 };
 
 // ── Wordbook ─────────────────────────────────────────────────────────────────

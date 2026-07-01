@@ -41,10 +41,11 @@ function mockRepo(states: WordSchedulingState[]): SchedulingRepository {
 }
 
 const setup: SetupConfig = {
-  level: 'B2',
-  themes: ['negotiation', 'email'],
+  examTarget: { kind: 'eiken', value: '準1' }, // → CEFR B2
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'medium',
+  wordTarget: 400,
+  contentType: 'article',
   targetWordIds: ['w1', 'w2', 'w3'],
   excludedWordIds: ['w2'],
 };
@@ -92,12 +93,40 @@ describe('SessionPlanner.buildRequest', () => {
   it('reflects setup conditions and drops excluded target words', () => {
     const states = [sched('w1', { stability: 40, mastery: 'Consolidating' })];
     const req = sessionPlanner.buildRequest(setup, states);
-    expect(req.level).toBe('B2');
-    expect(req.themes).toEqual(['negotiation', 'email']);
+    // examTarget resolves to the internal CEFR pivot; intent/wordTarget/contentType pass through.
+    expect(req.level).toBe('B2'); // eiken 準1 → B2
+    expect(req.intent).toBe('business');
     expect(req.newWordRatio).toBe(0.3);
-    expect(req.length).toBe('medium');
+    expect(req.wordTarget).toBe(400);
+    expect(req.contentType).toBe('article');
+    expect((req as { themes?: unknown }).themes).toBeUndefined(); // legacy field gone
     // w2 excluded; w1 + w3 remain.
     expect(req.targetWords.map((t) => t.wordId)).toEqual(['w1', 'w3']);
+  });
+
+  it('passes a story consistency context through untouched when present', () => {
+    const storyContext = {
+      storyId: 's1',
+      chapterIndex: 1,
+      plan: {
+        storyId: 's1',
+        contentType: 'long_story' as const,
+        genre: 'fantasy',
+        titleJa: '物語',
+        synopsisJa: 'あらすじ',
+        characters: [],
+        chapters: [{ index: 1, headingJa: '第一章', beatJa: 'ビート' }],
+      },
+      priorSummaryJa: '前章の要約',
+    };
+    const req = sessionPlanner.buildRequest(
+      { ...setup, contentType: 'long_story' },
+      [],
+      undefined,
+      storyContext,
+    );
+    expect(req.contentType).toBe('long_story');
+    expect(req.storyContext).toBe(storyContext);
   });
 
   it('derives masteryDensity from scheduling state and defaults unknown words to new', () => {

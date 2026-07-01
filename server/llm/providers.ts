@@ -19,6 +19,8 @@ import type {
   PassageOutput,
   Sentence,
   StopReason,
+  StoryPlan,
+  StoryPlanRequest,
   TranslationSpan,
   WordData,
   WordSuggestionRequest,
@@ -27,14 +29,17 @@ import {
   ANNOTATION_CATEGORIES,
   ANNOTATION_JSON_SCHEMA,
   PASSAGE_JSON_SCHEMA,
+  STORY_PLAN_JSON_SCHEMA,
   WORD_DATA_JSON_SCHEMA,
   WORD_SUGGESTION_JSON_SCHEMA,
   annotationMaxTokens,
   buildAnnotationMessages,
   buildPassageMessages,
+  buildStoryPlanMessages,
   buildSuggestionMessages,
   buildWordMessages,
-  maxTokensForLength,
+  maxTokensForWordTarget,
+  storyPlanMaxTokens,
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 
@@ -261,8 +266,8 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
   const distinct = new Map(targetSpans.map((s) => [s.wordId, s.masteryDensity]));
   const newCount = [...distinct.values()].filter((d) => d === 'new').length;
   const meta: PassageOutput['meta'] = {
-    title: metaIn.title || (req.themes[0] ?? 'Reading'),
-    theme: metaIn.theme || req.themes[0] || '',
+    title: metaIn.title || 'Reading',
+    intent: metaIn.intent || req.intent,
     level: metaIn.level || req.level,
     newCount: typeof metaIn.newCount === 'number' ? metaIn.newCount : newCount,
     reviewCount: typeof metaIn.reviewCount === 'number' ? metaIn.reviewCount : distinct.size - newCount,
@@ -403,7 +408,7 @@ export async function generatePassage(
     fetchImpl,
     system,
     user,
-    maxTokensForLength(req.length),
+    maxTokensForWordTarget(req.wordTarget),
     PASSAGE_JSON_SCHEMA,
     'passage_output',
   );
@@ -420,7 +425,7 @@ export async function generatePassage(
 
 function emptyPassage(req: GenerationRequest): PassageOutput {
   return {
-    meta: { title: '', theme: req.themes[0] ?? '', level: req.level, newCount: 0, reviewCount: 0, approxWords: 0 },
+    meta: { title: '', intent: req.intent, level: req.level, newCount: 0, reviewCount: 0, approxWords: 0 },
     sentences: [],
     targetSpans: [],
     collocationSpans: [],
@@ -499,6 +504,66 @@ export async function suggestWords(
     if (out.length >= count) break;
   }
   return out;
+}
+
+/** Monotonic-ish story id (server-side; the client persists it under this key). */
+let storyCounter = 0;
+function nextStoryId(): string {
+  storyCounter += 1;
+  return `story_${Date.now()}_${storyCounter}`;
+}
+
+/** Generate a story plan (characters/synopsis/chapters) — Requirement 6.2. */
+export async function planStory(
+  env: Env,
+  req: StoryPlanRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<StoryPlan> {
+  const contentType = req.contentType === 'long_story' ? 'long_story' : 'short_story';
+  const { system, user } = buildStoryPlanMessages({
+    contentType,
+    genre: req.genre,
+    homageTitle: req.homageTitle,
+    intent: req.intent,
+    level: req.level,
+  });
+  const { text, stopReason } = await callModel(
+    env,
+    fetchImpl,
+    system,
+    user,
+    storyPlanMaxTokens(),
+    STORY_PLAN_JSON_SCHEMA,
+    'story_plan',
+  );
+  if (stopReason === 'refusal') throw new ProviderError(502, 'Story plan generation was refused.');
+  const parsed = parseJson<Partial<StoryPlan>>(text, 'story plan');
+  const chaptersRaw = Array.isArray(parsed.chapters) ? parsed.chapters : [];
+  // A short story is a single chapter regardless of what the model returned.
+  const chapters = (contentType === 'short_story' ? chaptersRaw.slice(0, 1) : chaptersRaw).map((c, i) => ({
+    index: i,
+    headingJa: typeof c?.headingJa === 'string' ? c.headingJa : '',
+    beatJa: typeof c?.beatJa === 'string' ? c.beatJa : '',
+  }));
+  if (chapters.length === 0) throw new ProviderError(502, 'Story plan has no chapters.');
+  return {
+    storyId: nextStoryId(),
+    contentType,
+    genre: req.genre,
+    ...(req.homageTitle ? { homage: { title: req.homageTitle, styleNoteJa: '' } } : {}),
+    titleJa: typeof parsed.titleJa === 'string' ? parsed.titleJa : '',
+    synopsisJa: typeof parsed.synopsisJa === 'string' ? parsed.synopsisJa : '',
+    characters: Array.isArray(parsed.characters)
+      ? parsed.characters
+          .filter((c): c is NonNullable<typeof c> => !!c && typeof c === 'object')
+          .map((c) => ({
+            name: typeof c.name === 'string' ? c.name : '',
+            role: typeof c.role === 'string' ? c.role : '',
+            descriptionJa: typeof c.descriptionJa === 'string' ? c.descriptionJa : '',
+          }))
+      : [],
+    chapters,
+  };
 }
 
 type RawCue = {

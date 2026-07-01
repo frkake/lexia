@@ -18,9 +18,11 @@ const STALE_WORD_MS = 5 * 60_000;
 function requestKey(req: GenerationRequest): string {
   return JSON.stringify({
     level: req.level,
-    themes: req.themes,
+    intent: req.intent,
     newWordRatio: req.newWordRatio,
-    length: req.length,
+    wordTarget: req.wordTarget,
+    contentType: req.contentType,
+    storyRef: req.storyContext ? `${req.storyContext.storyId}:${req.storyContext.chapterIndex}` : null,
     words: req.targetWords.map((w) => w.wordId).slice().sort(),
   });
 }

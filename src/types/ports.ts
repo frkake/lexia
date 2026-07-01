@@ -23,6 +23,9 @@ import type {
   Settings,
   NoticeCue,
   PassageAnnotationRequest,
+  StoryPlan,
+  StoryPlanRequest,
+  StoryRecord,
 } from './domain';
 
 // ── Adjacent capability seams ────────────────────────────────────────────────
@@ -54,6 +57,24 @@ export interface ContentGateway {
    * Optional so lightweight gateways/mocks need not implement it; enrichment is skipped when absent.
    */
   annotatePassage?(req: PassageAnnotationRequest): Promise<NoticeCue[]>;
+}
+
+/**
+ * Story-plan generation proxy (Requirement 6). Optional/adjacent to ContentGateway: it produces the
+ * character/plot/chapter scaffold BEFORE the body text. Credentials stay server-side; when the port
+ * is unconfigured the caller errors (no mock fallback), per the project's generation policy.
+ */
+export interface StoryGateway {
+  /** Generate a story plan (characters, synopsis, chapters) for the requested type/genre/homage. */
+  planStory(req: StoryPlanRequest): Promise<StoryPlan>;
+}
+
+/** Persistence of confirmed story plans (`stories` store). */
+export interface StoryRepository {
+  get(storyId: string): Promise<StoryRecord | undefined>;
+  put(record: StoryRecord): Promise<void>;
+  /** Most-recently created stories first for a learner. */
+  recent(userId: UserId, limit: number): Promise<StoryRecord[]>;
 }
 
 /** Audio synthesis + token-resolved timing maps. */

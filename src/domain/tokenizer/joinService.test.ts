@@ -4,7 +4,7 @@ import type { PassageOutput, IndexedPassage, TokenId } from '../../types/domain'
 
 function passage(): PassageOutput {
   return {
-    meta: { title: 't', theme: 'x', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+    meta: { title: 't', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
     sentences: [
       { tokens: ['I', "'m", 'well', '-', 'rested', '.'], translationJa: '' },
       { tokens: ['She', 'said', ',', '“', 'Hi', '”', '.'], translationJa: '' },

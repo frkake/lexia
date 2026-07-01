@@ -11,6 +11,7 @@ import type {
   ProgressRepository,
   SettingsRepository,
   WordCacheRepository,
+  StoryRepository,
 } from '../../types/ports';
 import type { LexiaDb } from './lexiaDb';
 import { DexieSchedulingRepository } from './schedulingRepository';
@@ -20,6 +21,7 @@ import { DexieTimingMapRepository } from './timingMapRepository';
 import { DexieProgressRepository } from './progressRepository';
 import { DexieSettingsRepository } from './settingsRepository';
 import { DexieWordCacheRepository } from './wordCacheRepository';
+import { DexieStoryRepository } from './storyRepository';
 
 export interface Repositories {
   scheduling: SchedulingRepository;
@@ -29,6 +31,7 @@ export interface Repositories {
   progress: ProgressRepository;
   settings: SettingsRepository;
   wordCache: WordCacheRepository;
+  stories: StoryRepository;
 }
 
 export function createRepositories(db: LexiaDb): Repositories {
@@ -40,6 +43,7 @@ export function createRepositories(db: LexiaDb): Repositories {
     progress: new DexieProgressRepository(db),
     settings: new DexieSettingsRepository(db),
     wordCache: new DexieWordCacheRepository(db),
+    stories: new DexieStoryRepository(db),
   };
 }
 
@@ -50,3 +54,4 @@ export { DexieTimingMapRepository } from './timingMapRepository';
 export { DexieProgressRepository } from './progressRepository';
 export { DexieSettingsRepository } from './settingsRepository';
 export { DexieWordCacheRepository } from './wordCacheRepository';
+export { DexieStoryRepository } from './storyRepository';

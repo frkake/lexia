@@ -5,7 +5,7 @@ import type { PassageOutput } from '../../types/domain';
 
 function basePassage(over: Partial<PassageOutput> = {}): PassageOutput {
   return {
-    meta: { title: 't', theme: 'negotiation', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 7 },
+    meta: { title: 't', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 7 },
     sentences: [
       { tokens: ['The', 'team', 'will', 'negotiate', 'the', 'terms', '.'], translationJa: 'チームは条件を交渉する。' },
     ],
@@ -303,6 +303,51 @@ describe('PassageValidator', () => {
       const report = passageValidator.validate(basePassage(), ctx);
       expect(report.violations.some((x) => x.kind === 'translation_span_mismatch')).toBe(false);
       expect(report.ok).toBe(true);
+    });
+  });
+
+  // ── Requirement 6.5 / 9.4: homage verbatim-copy guard ──────────────────────
+  describe('verbatim_copy (homage copyright guard)', () => {
+    const homageCtx: ValidationContext = {
+      ...ctx,
+      homageReference: 'It was the best of times it was the worst of times we had everything before us',
+    };
+
+    it('flags a long verbatim run copied from the homage reference', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [
+            {
+              tokens: ['It', 'was', 'the', 'best', 'of', 'times', 'it', 'was', 'the', 'worst', 'of', 'times', '.'],
+              translationJa: '最高の時代であり最悪の時代だった。',
+            },
+          ],
+          targetSpans: [],
+          noticeCues: [],
+        }),
+        homageCtx,
+      );
+      expect(report.ok).toBe(false);
+      expect(report.violations.some((v) => v.kind === 'verbatim_copy')).toBe(true);
+    });
+
+    it('does not flag a passage that only shares short incidental phrases with the reference', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [
+            { tokens: ['It', 'was', 'a', 'calm', 'and', 'ordinary', 'morning', 'downtown', '.'], translationJa: '穏やかな朝だった。' },
+          ],
+          targetSpans: [],
+          noticeCues: [],
+        }),
+        homageCtx,
+      );
+      expect(report.violations.some((v) => v.kind === 'verbatim_copy')).toBe(false);
+    });
+
+    it('never flags verbatim copy when no homage reference is supplied (articles/originals)', () => {
+      const report = passageValidator.validate(basePassage(), ctx);
+      expect(report.violations.some((v) => v.kind === 'verbatim_copy')).toBe(false);
     });
   });
 });
