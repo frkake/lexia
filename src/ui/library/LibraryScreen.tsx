@@ -7,8 +7,8 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
 import { passageSearch, INTENT_LABELS } from '../../domain/library/passageSearch';
-import type { PassageRecord } from '../../types/ports';
 import type { LibraryEntry } from '../../domain/library/passageSearch';
+import type { PassageRecord } from '../../types/ports';
 
 export interface LibraryScreenProps {
   passages: PassageRecord[];
@@ -19,7 +19,10 @@ export interface LibraryScreenProps {
 
 export function LibraryScreen({ passages, storyTitles = {}, onOpenArticle, onOpenStory }: LibraryScreenProps) {
   const [query, setQuery] = useState('');
-  const results = useMemo(() => passageSearch(passages, query, storyTitles), [passages, query, storyTitles]);
+  const results = useMemo<LibraryEntry[]>(
+    () => passageSearch(passages, query, storyTitles),
+    [passages, query, storyTitles],
+  );
   const isSearching = query.trim().length > 0;
 
   return (
