@@ -20,9 +20,14 @@ export const CATEGORY_ATTRIBUTES: Record<NoticeCategory, string[]> = {
   word_family: ['more.wordFamily', 'wordFamily'],
   frequency: ['frequency'],
   common_error: ['more.commonErrors', 'commonErrors'],
+  phrase: ['core.collocations', 'more.idioms', 'collocations', 'idioms'],
+  metaphor: ['more.metaphor', 'metaphor'],
+  usage: ['core.examples', 'more.grammarPatterns', 'examples', 'grammarPatterns'],
+  memory_tip: ['memoryTips'],
   // Asserted directly by the exhaustive annotation pass (location-grounded), never attribute-grounded.
   idiom: [],
   phrasal_verb: [],
+  sentence_structure: [],
 };
 
 /** Resolve a dotted path and report whether it holds a non-empty value. */

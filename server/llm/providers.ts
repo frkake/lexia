@@ -460,12 +460,29 @@ export async function getWordData(
 ): Promise<WordData> {
   const { system, user } = buildWordMessages(wordId);
   // Larger budget than before: the rich `more` attributes need more output tokens.
-  const { text } = await callModel(env, fetchImpl, system, user, 1500, WORD_DATA_JSON_SCHEMA, 'word_data');
+  const { text } = await callModel(env, fetchImpl, system, user, 1800, WORD_DATA_JSON_SCHEMA, 'word_data');
   const parsed = parseJson<Partial<WordData>>(text, 'word data');
   if (!parsed.headword || !parsed.core) {
     throw new ProviderError(502, 'Generation API returned incomplete word data.');
   }
   return normalizeWordData(parsed, wordId);
+}
+
+const MEMORY_TIP_KINDS = new Set(['image', 'etymology', 'collocation', 'contrast', 'sound', 'mistake']);
+
+function normalizeMemoryTips(value: unknown): WordData['memoryTips'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tips = value
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as { kind?: unknown; tipJa?: unknown };
+      const kind = typeof item.kind === 'string' ? item.kind : '';
+      const tipJa = typeof item.tipJa === 'string' ? item.tipJa.trim() : '';
+      if (!MEMORY_TIP_KINDS.has(kind) || !tipJa) return null;
+      return { kind: kind as NonNullable<WordData['memoryTips']>[number]['kind'], tipJa };
+    })
+    .filter((tip): tip is NonNullable<WordData['memoryTips']>[number] => tip !== null);
+  return tips.length > 0 ? tips : undefined;
 }
 
 /**
@@ -474,6 +491,9 @@ export async function getWordData(
  */
 function normalizeWordData(parsed: Partial<WordData>, wordId: string): WordData {
   const data = { ...parsed, wordId } as WordData;
+  const memoryTips = normalizeMemoryTips((parsed as { memoryTips?: unknown }).memoryTips);
+  if (memoryTips) data.memoryTips = memoryTips;
+  else delete (data as { memoryTips?: unknown }).memoryTips;
   const more = pruneEmpty((parsed as { more?: unknown }).more);
   if (more && Object.keys(more).length > 0) data.more = more as WordData['more'];
   else delete (data as { more?: unknown }).more;

@@ -6,6 +6,7 @@ import {
   buildStoryPlanMessages,
   buildStoryPlanExtensionMessages,
   buildSuggestionMessages,
+  buildWordMessages,
   maxTokensForWordTarget,
 } from './schema';
 import type { GenerationRequest, PassageAnnotationRequest, StoryPlanExtensionRequest } from '../../src/types/domain';
@@ -17,6 +18,7 @@ describe('buildPassageMessages — translationSpans guidance (Requirement 4)', (
     newWordRatio: 0.3,
     wordTarget: 200,
     contentType: 'article',
+    readabilityLevel: 'easy',
     targetWords: [{ wordId: 'resilient', surface: 'resilient', masteryDensity: 'new' }],
   };
 
@@ -52,9 +54,11 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
   };
 
   it('passes the numeric word target through as the approxWords constraint (7.4)', () => {
-    const { user } = buildPassageMessages({ ...base, wordTarget: 900 });
+    const { system, user } = buildPassageMessages({ ...base, wordTarget: 900, readabilityLevel: 'advanced' });
     expect(user).toContain('900');
     expect(user).toContain('article');
+    expect(user).toContain('advanced');
+    expect(system).toContain('Readability');
   });
 
   it('biases toward exam-frequent vocabulary/formats for exam intents (8.4)', () => {
@@ -105,6 +109,22 @@ describe('buildStoryPlanMessages — memorable illustrated cast guidance', () =>
     });
     expect(system).toContain('memorable');
     expect(system).toContain('signature motif/color/prop/silhouette');
+  });
+});
+
+describe('buildWordMessages — memory tips', () => {
+  it('asks for natural memory hooks without forced puns', () => {
+    const { system } = buildWordMessages('resilient');
+    expect(system).toContain('memoryTips');
+    expect(system).toContain('Do NOT invent forced puns');
+  });
+
+  it('requires etymology spelling, semantic shift, and Japanese synonym nuance', () => {
+    const { system } = buildWordMessages('coach');
+    expect(system).toContain('original spelling');
+    expect(system).toContain('semantic bridge');
+    expect(system).toContain('noteJa');
+    expect(system).toContain('core.synonymNuances MUST be written in Japanese');
   });
 });
 
@@ -168,6 +188,17 @@ describe('buildSuggestionMessages — intent replaces themes (Requirement 8/5)',
 });
 
 describe('buildAnnotationMessages — REQUIRED COVERAGE from body marks', () => {
+  it('allows richer usage, structure and memory categories in the annotation instructions', () => {
+    const req: PassageAnnotationRequest = {
+      level: 'B1',
+      sentences: [{ tokens: ['Although', 'it', 'was', 'hard', ',', 'she', 'adapted', '.'], translationJa: '' }],
+    };
+    const { system } = buildAnnotationMessages(req);
+    expect(system).toContain('sentence_structure');
+    expect(system).toContain('memory_tip');
+    expect(system).toContain('metaphor');
+  });
+
   it('lists every collocation and study word as required coverage, in canonical surface form', () => {
     const req: PassageAnnotationRequest = {
       level: 'B2',

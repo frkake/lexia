@@ -24,6 +24,7 @@ const wordData: WordData = {
   register: 'neutral',
   connotation: '肯定的',
   frequency: 4,
+  memoryTips: [{ kind: 'collocation', tipJa: 'close a deal の形で「取引をまとめる」と覚える。' }],
   core: {
     meaningsJa: ['取引'],
     examples: [{ en: 'The team closed the deal before noon.', ja: 'チームは正午前に取引を成立させた。' }],

@@ -22,6 +22,7 @@ function requestKey(req: GenerationRequest): string {
     newWordRatio: req.newWordRatio,
     wordTarget: req.wordTarget,
     contentType: req.contentType,
+    readabilityLevel: req.readabilityLevel ?? null,
     storyRef: req.storyContext ? `${req.storyContext.storyId}:${req.storyContext.chapterIndex}` : null,
     words: req.targetWords.map((w) => w.wordId).slice().sort(),
   });

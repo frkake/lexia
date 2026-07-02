@@ -32,9 +32,8 @@ import { runGenerationPipeline } from '../../state/controllers/generationControl
 import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
 import { openPassage, restoreReadingSession } from '../../state/controllers/sessionBootstrap';
-import { sessionPlanner } from '../../domain/session/sessionPlanner';
+import { resolveVocabularyLevel, sessionPlanner } from '../../domain/session/sessionPlanner';
 import { tokenizer } from '../../domain/tokenizer/joinService';
-import { examScale } from '../../domain/difficulty/examScale';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
 import { colors, fonts, radius } from '../theme/tokens';
@@ -54,12 +53,27 @@ function stripCacheNamespace(data: WordData): WordData {
   return copy;
 }
 
+function hasJapanese(text: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(text);
+}
+
+function wordDataNeedsRefresh(data: WordData): boolean {
+  // v3 word-data contract: memory tips exist, etymology has explanatory noteJa, and synonym
+  // nuance is Japanese. Older cached entries can otherwise keep showing vague English notes.
+  if (!data.memoryTips || data.memoryTips.length === 0) return true;
+  if (data.more?.etymology && !data.more.etymology.noteJa) return true;
+  return data.core.synonymNuances.some((note) => note.trim() && !hasJapanese(note));
+}
+
 async function loadAndCacheWordData(c: Container, wordId: string): Promise<WordData> {
   const cached = await c.repos.wordCache.get(c.userId, wordId);
-  if (cached) return stripCacheNamespace(cached);
+  if (cached) {
+    const data = stripCacheNamespace(cached);
+    if (!wordDataNeedsRefresh(data)) return data;
+  }
   const data = await c.content.getWordData(wordId);
   try {
-    await c.repos.wordCache.put(c.userId, data);
+    if (!wordDataNeedsRefresh(data)) await c.repos.wordCache.put(c.userId, data);
   } catch {
     // WordData still powers the current screen; cache persistence is a best-effort fast path.
   }
@@ -75,7 +89,7 @@ async function resolveTargetWordIds(c: Container, setup: SetupConfig): Promise<s
   if (setup.targetWordIds.length > 0 || !c.content.suggestWords) return setup.targetWordIds;
   try {
     const suggested = await c.content.suggestWords({
-      level: examScale.examToCefr(setup.examTarget),
+      level: resolveVocabularyLevel(setup),
       intent: setup.intent,
       count: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
       exclude: setup.excludedWordIds,
@@ -215,7 +229,7 @@ export function HomeRoute() {
         const result = await c.suggestions.suggest(
           {
             userId: c.userId,
-            level: examScale.examToCefr(lastSetup.examTarget),
+            level: resolveVocabularyLevel(lastSetup),
             intent: lastSetup.intent,
             excludedWordIds: lastSetup.excludedWordIds ?? [],
             count: CANDIDATE_LIMIT,
@@ -298,7 +312,7 @@ export function HomeRoute() {
           genre: setup.storyOptions?.genre ?? 'fantasy',
           homageTitle: setup.storyOptions?.homageTitle,
           intent: setup.intent,
-          level: examScale.examToCefr(setup.examTarget),
+          level: resolveVocabularyLevel(setup),
         });
         if (!planned.ok) {
           setGenerationError(generationErrorMessage(planned.error));
@@ -493,25 +507,6 @@ export function ReadingRoute() {
     return { story, chapters };
   }, [c, passage?.passageId, passage?.source.meta.storyRef?.storyId]);
 
-  const studyWords = useLiveQuery<StudyWord[] | undefined>(async () => {
-    if (!passage) return undefined;
-    const words = uniqueStudyWords(passage);
-    return Promise.all(
-      words.map(async (word) => {
-        const state = await c.repos.scheduling.get(c.userId, word.wordId);
-        return {
-          ...word,
-          stage: state ? masteryProjector.deriveMastery(state, { kind: 'none' }) : undefined,
-          reappearCount: state?.reappearCount ?? word.reappearCount,
-        };
-      }),
-    );
-  }, [c, passage?.passageId]);
-
-  // The NoticeRail is owned by ReadingScreen (it receives the line-anchor positions for the new
-  // layout); the route only supplies the live, mastery-enriched study-words list beneath it.
-  const rail = passage ? <StudyWordsList words={studyWords ?? uniqueStudyWords(passage)} /> : undefined;
-
   const onLookup = (wordId: string): void => {
     void applyRecallSignal(
       { scheduling: c.repos.scheduling, reviewLog: c.repos.reviewLog },
@@ -519,6 +514,56 @@ export function ReadingRoute() {
       { kind: 'lookup', wordId, at: c.now() },
     );
   };
+
+  const selectStudyWord = (wordId: string): void => {
+    onLookup(wordId);
+    c.session.getState().setActiveWord(wordId);
+  };
+
+  const playStudyWord = (wordId: string): void => {
+    void (async () => {
+      try {
+        const url = await c.tts.wordClipUrl(wordId, voiceId || c.voiceId);
+        c.player.getState().playWord(url);
+      } catch {
+        // Pronunciation is enrichment; keep the reading rail usable when TTS is unavailable.
+      }
+    })();
+  };
+
+  const studyWords = useLiveQuery<StudyWord[] | undefined>(async () => {
+    if (!passage) return undefined;
+    const words = uniqueStudyWords(passage);
+    return Promise.all(
+      words.map(async (word) => {
+        const [state, data] = await Promise.all([
+          c.repos.scheduling.get(c.userId, word.wordId),
+          loadAndCacheWordData(c, word.wordId).catch(() => undefined),
+        ]);
+        return {
+          ...word,
+          stage: state ? masteryProjector.deriveMastery(state, { kind: 'none' }) : undefined,
+          reappearCount: state?.reappearCount ?? word.reappearCount,
+          meaningJa: data?.core.meaningsJa[0],
+          collocation: data?.core.collocations[0],
+          register: data?.register,
+          connotation: data?.connotation,
+          frequency: data?.frequency,
+          memoryTipJa: data?.memoryTips?.[0]?.tipJa,
+        };
+      }),
+    );
+  }, [c, passage?.passageId]);
+
+  // The NoticeRail is owned by ReadingScreen (it receives the line-anchor positions for the new
+  // layout); the route only supplies the live, mastery-enriched study-words list beneath it.
+  const rail = passage ? (
+    <StudyWordsList
+      words={studyWords ?? uniqueStudyWords(passage)}
+      onSelectWord={selectStudyWord}
+      onPlayWord={playStudyWord}
+    />
+  ) : undefined;
 
   const completeReading = async (): Promise<void> => {
     const active = c.session.getState().passage;
@@ -816,14 +861,32 @@ export function StoryDirectoryRoute() {
 function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => void }): ReactNode {
   const c = useContainer();
   const { data: word } = useWordData(c.content, wordId);
+  const voiceId = useStore(c.settings, (s) => s.voiceId);
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
   const stage = useLiveQuery<MasteryStage | undefined>(async () => {
     const s = await c.repos.scheduling.get(c.userId, wordId);
     return s ? masteryProjector.deriveMastery(s, { kind: 'none' }) : undefined;
   }, [c, wordId]);
 
   useEffect(() => {
-    if (word) void c.repos.wordCache.put(c.userId, word);
+    if (word && !wordDataNeedsRefresh(word)) void c.repos.wordCache.put(c.userId, word);
   }, [c, word]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setClipUrl(null);
+    void (async () => {
+      try {
+        const url = await c.tts.wordClipUrl(wordId, voiceId || c.voiceId);
+        if (!cancelled) setClipUrl(url);
+      } catch {
+        if (!cancelled) setClipUrl(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [c, wordId, voiceId]);
 
   if (!word) {
     return (
@@ -836,7 +899,7 @@ function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => v
       </div>
     );
   }
-  return <WordDetailCard word={word} stage={stage} onClose={onClose} />;
+  return <WordDetailCard word={word} stage={stage} audioUrl={clipUrl ?? undefined} onClose={onClose} />;
 }
 
 const skeletonStyle: CSSProperties = {

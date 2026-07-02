@@ -99,9 +99,22 @@ describe('SessionPlanner.buildRequest', () => {
     expect(req.newWordRatio).toBe(0.3);
     expect(req.wordTarget).toBe(400);
     expect(req.contentType).toBe('article');
+    expect(req.readabilityLevel).toBe('standard'); // B2 preset
     expect((req as { themes?: unknown }).themes).toBeUndefined(); // legacy field gone
     // w2 excluded; w1 + w3 remain.
     expect(req.targetWords.map((t) => t.wordId)).toEqual(['w1', 'w3']);
+  });
+
+  it('lets advanced settings override vocabulary level and sentence-structure readability separately', () => {
+    const req = sessionPlanner.buildRequest(
+      {
+        ...setup,
+        advancedDifficulty: { vocabularyLevel: 'C1', readabilityLevel: 'easy' },
+      },
+      [],
+    );
+    expect(req.level).toBe('C1');
+    expect(req.readabilityLevel).toBe('easy');
   });
 
   it('passes a story consistency context through untouched when present', () => {

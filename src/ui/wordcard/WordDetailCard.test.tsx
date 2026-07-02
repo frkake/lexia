@@ -14,14 +14,20 @@ const full: WordData = {
   connotation: '中立',
   frequency: 4,
   audioUrl: 'https://cdn/leverage.mp3',
+  illustrationUrl: 'data:image/png;base64,AAA',
+  memoryTips: [{ kind: 'etymology', tipJa: 'lever（てこ）のイメージで覚える。' }],
   core: {
     meaningsJa: ['既にある資源・立場を活かして大きな成果を引き出すこと。'],
     examples: [{ en: 'We can leverage our network.', ja: '人脈を活かせる。' }],
     collocations: ['leverage resources', 'leverage data'],
-    synonymNuances: ['use — 中立で一般的'],
+    synonymNuances: ['use は一般的に「使う」。leverage は既にある資源を活かして成果を大きくする響き。'],
   },
   more: {
-    etymology: { root: 'lever（てこ）', suffix: '-age' },
+    etymology: {
+      root: 'lever（てこ）',
+      suffix: '-age',
+      noteJa: 'lever は「てこ」。小さな力で大きく動かす道具から、資源を活かして大きな成果を出す意味に広がった。',
+    },
     wordFamily: ['leverage', 'leveraged', 'leveraging'],
     metaphor: '「てこ」=小さな力で大きく動かす',
   },
@@ -59,6 +65,12 @@ describe('<WordDetailCard/>', () => {
     expect(getByText('We can leverage our network.')).toBeTruthy();
     expect(getByText('人脈を活かせる。')).toBeTruthy();
     expect(getByText('leverage resources')).toBeTruthy();
+    expect(getByText('lever（てこ）のイメージで覚える。')).toBeTruthy();
+  });
+
+  it('renders the supplied illustration image', () => {
+    const { getByAltText } = render(<WordDetailCard word={full} />);
+    expect((getByAltText('leverage') as HTMLImageElement).src).toContain('data:image/png');
   });
 
   it('plays the pronunciation through the player store (7.6)', () => {
@@ -67,11 +79,18 @@ describe('<WordDetailCard/>', () => {
     expect(playerStore.getState().playWord).toHaveBeenCalledWith('https://cdn/leverage.mp3');
   });
 
+  it('prefers an injected pronunciation URL over WordData.audioUrl', () => {
+    const { getByLabelText } = render(<WordDetailCard word={full} audioUrl="https://tts/leverage.mp3" />);
+    fireEvent.click(getByLabelText('発音を再生'));
+    expect(playerStore.getState().playWord).toHaveBeenCalledWith('https://tts/leverage.mp3');
+  });
+
   it('collapses MORE items, expanding on demand (8.3/8.4)', () => {
     const { getByText, queryByTestId } = render(<WordDetailCard word={full} />);
     expect(queryByTestId('more-detail-語源')).toBeNull(); // detail hidden until expanded
     fireEvent.click(getByText('語源'));
     expect(queryByTestId('more-detail-語源')).not.toBeNull();
+    expect(getByText(/小さな力で大きく動かす道具/)).toBeTruthy();
   });
 
   it('skips missing attributes without breaking when MORE is absent (8.5)', () => {
@@ -80,6 +99,24 @@ describe('<WordDetailCard/>', () => {
     expect(getByText(/少しずつ損なう/)).toBeTruthy();
     expect(queryByText('語源')).toBeNull(); // no MORE rows
     expect(queryByText('例文 / Examples')).toBeNull(); // empty core sections omitted
+  });
+
+  it('tolerates partial cached MORE data with missing arrays', () => {
+    const partial = {
+      ...minimal,
+      core: { meaningsJa: ['指導者'], examples: undefined, collocations: undefined, synonymNuances: undefined },
+      more: {
+        semanticNetwork: { synonyms: ['mentor'] },
+        wordFamily: undefined,
+        idioms: undefined,
+        grammarPatterns: undefined,
+        commonErrors: undefined,
+      },
+    } as unknown as WordData;
+    const { getByText } = render(<WordDetailCard word={partial} />);
+    expect(getByText('erode')).toBeTruthy();
+    fireEvent.click(getByText('意味のネットワーク'));
+    expect(getByText(/mentor/)).toBeTruthy();
   });
 
   it('disables pronunciation when no audio is supplied', () => {

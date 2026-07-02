@@ -272,9 +272,19 @@ describe('getWordData', () => {
       register: 'neutral',
       connotation: 'positive',
       frequency: 3,
+      memoryTips: [
+        { kind: 'etymology', tipJa: 're- の戻るイメージで覚える。' },
+        { kind: 'bad', tipJa: 'drop me' },
+        { kind: 'image', tipJa: '' },
+      ],
       core: { meaningsJa: ['回復力のある'], examples: [], collocations: ['remain resilient'], synonymNuances: [] },
       more: {
-        etymology: { prefix: null, root: 'salire', suffix: null },
+        etymology: {
+          prefix: null,
+          root: 'salire',
+          suffix: null,
+          noteJa: 'ラテン語 salire は「跳ぶ」。跳ね返るイメージから回復する力へ広がった。',
+        },
         semanticNetwork: { synonyms: [], antonyms: [], hypernyms: [], hyponyms: [], related: [] },
         wordFamily: ['resilience'],
         idioms: [],
@@ -286,7 +296,14 @@ describe('getWordData', () => {
     const fetchImpl = vi.fn(async () => openAiCompletion(word));
     const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
     const res = await getWordData(env, 'resilient', fetchImpl as unknown as typeof fetch);
-    expect(res.more).toEqual({ etymology: { root: 'salire' }, wordFamily: ['resilience'] });
+    expect(res.more).toEqual({
+      etymology: {
+        root: 'salire',
+        noteJa: 'ラテン語 salire は「跳ぶ」。跳ね返るイメージから回復する力へ広がった。',
+      },
+      wordFamily: ['resilience'],
+    });
+    expect(res.memoryTips).toEqual([{ kind: 'etymology', tipJa: 're- の戻るイメージで覚える。' }]);
   });
 });
 

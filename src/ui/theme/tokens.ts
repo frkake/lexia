@@ -105,6 +105,11 @@ const NOTICE_LABELS: Record<NoticeCategory, string> = {
   common_error: '誤用注意',
   idiom: 'イディオム',
   phrasal_verb: '句動詞',
+  phrase: 'フレーズ',
+  metaphor: 'メタファー',
+  usage: '用法',
+  memory_tip: '覚えるコツ',
+  sentence_structure: '文構造',
 };
 
 /** Categories share one of three visual groups (design.md 気づき番号色). */
@@ -121,6 +126,11 @@ const NOTICE_GROUP: Record<NoticeCategory, Omit<NoticeStyle, 'label'>> = {
   common_error: REGISTER,
   idiom: IDIOM,
   phrasal_verb: COLLOCATION,
+  phrase: COLLOCATION,
+  metaphor: IDIOM,
+  usage: REGISTER,
+  memory_tip: CONNOTATION,
+  sentence_structure: COLLOCATION,
 };
 
 /** Resolve the full chip + badge style for a notice category. */

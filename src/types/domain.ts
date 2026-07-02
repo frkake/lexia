@@ -17,6 +17,17 @@ export type TokenId = string;
 
 export type Cefr = 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
 
+/** Sentence-structure/readability band, separate from vocabulary difficulty. */
+export type ReadabilityLevel = 'easy' | 'standard' | 'advanced';
+
+/** Optional advanced overrides. Unset means "derive from the selected exam target". */
+export interface AdvancedDifficulty {
+  /** Overrides the CEFR vocabulary band used for generation/validation. */
+  vocabularyLevel?: Cefr;
+  /** Overrides sentence length, clause density, and structural complexity. */
+  readabilityLevel?: ReadabilityLevel;
+}
+
 // ── Exam-based difficulty (Requirement 9) ────────────────────────────────────
 
 /** Standardized exam whose scale a learner may use to pick difficulty. */
@@ -166,7 +177,12 @@ export type NoticeCategory =
   | 'frequency'
   | 'common_error'
   | 'idiom'
-  | 'phrasal_verb';
+  | 'phrasal_verb'
+  | 'phrase'
+  | 'metaphor'
+  | 'usage'
+  | 'memory_tip'
+  | 'sentence_structure';
 
 export interface NoticeCue {
   index: number;
@@ -359,6 +375,10 @@ export interface WordData {
   frequency: number;
   audioUrl?: string;
   illustrationUrl?: string;
+  memoryTips?: {
+    kind: 'image' | 'etymology' | 'collocation' | 'contrast' | 'sound' | 'mistake';
+    tipJa: string;
+  }[];
   core: {
     meaningsJa: string[];
     examples: { en: string; ja: string }[];
@@ -366,7 +386,7 @@ export interface WordData {
     synonymNuances: string[];
   };
   more?: Partial<{
-    etymology: { prefix?: string; root?: string; suffix?: string };
+    etymology: { prefix?: string; root?: string; suffix?: string; noteJa?: string };
     semanticNetwork: {
       synonyms: string[];
       antonyms: string[];
@@ -404,6 +424,8 @@ export interface SetupConfig {
   wordTarget: number;
   /** Content kind (Requirement 6). */
   contentType: ContentType;
+  /** Advanced overrides for vocabulary level and sentence-structure readability. */
+  advancedDifficulty?: AdvancedDifficulty;
   /** Genre/homage for stories (unused for articles). */
   storyOptions?: { genre: StoryGenre; homageTitle?: string };
   targetWordIds: string[];
@@ -440,6 +462,8 @@ export interface GenerationRequest {
   wordTarget: number;
   /** Content kind (Requirement 6). */
   contentType: ContentType;
+  /** Sentence-structure/readability band resolved from setup advanced settings or exam target. */
+  readabilityLevel?: ReadabilityLevel;
   targetWords: GenerationTargetWord[];
   /** Story-chapter consistency context (Requirement 6.6). Unset for standalone articles. */
   storyContext?: StoryContext;

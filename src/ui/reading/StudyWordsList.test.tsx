@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { render, within } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, within, fireEvent } from '@testing-library/react';
 import { StudyWordsList, type StudyWord } from './StudyWordsList';
 
 const words: StudyWord[] = [
-  { wordId: 'mitigate', surface: 'mitigate', stage: 'Consolidating' },
+  {
+    wordId: 'mitigate',
+    surface: 'mitigate',
+    stage: 'Consolidating',
+    meaningJa: '和らげる',
+    collocation: 'mitigate the risk',
+    frequency: 4,
+    register: 'business',
+    memoryTipJa: 'risk とセットで覚える。',
+  },
   { wordId: 'restless', surface: 'restless', stage: 'Learning' },
   { wordId: 'leverage', surface: 'leverage', stage: 'Mastered', reappearCount: 4 },
 ];
@@ -34,5 +43,26 @@ describe('<StudyWordsList/>', () => {
     const { getByText } = render(<StudyWordsList words={words} />);
     expect(getByText(/学習単語/)).toBeTruthy();
     expect(getByText('3')).toBeTruthy();
+  });
+
+  it('shows compact meaning, collocation, frequency and memory tip when supplied', () => {
+    const { getByTestId, getByText } = render(<StudyWordsList words={words} />);
+    const item = getByTestId('study-word-mitigate');
+    expect(within(item).getByText('和らげる')).toBeTruthy();
+    expect(within(item).getByText('mitigate the risk')).toBeTruthy();
+    expect(within(item).getByText('頻度 4/5')).toBeTruthy();
+    expect(getByText('risk とセットで覚える。')).toBeTruthy();
+  });
+
+  it('opens details from the row and plays pronunciation from the audio button', () => {
+    const onSelectWord = vi.fn();
+    const onPlayWord = vi.fn();
+    const { getByTestId, getByLabelText } = render(
+      <StudyWordsList words={words} onSelectWord={onSelectWord} onPlayWord={onPlayWord} />,
+    );
+    fireEvent.click(getByTestId('study-word-mitigate'));
+    expect(onSelectWord).toHaveBeenCalledWith('mitigate');
+    fireEvent.click(getByLabelText('mitigate の発音を再生'));
+    expect(onPlayWord).toHaveBeenCalledWith('mitigate');
   });
 });

@@ -171,7 +171,7 @@ export function ReadingScreen({
     <>
       {/* Line-aligned only on the wide 3-zone layout; flat flow on narrow / legacy. */}
       <NoticeRail passage={active} anchors={lineAligned ? anchors : undefined} />
-      {rail ?? <StudyWordsList words={studyWords} />}
+      {rail ?? <StudyWordsList words={studyWords} onSelectWord={selectWord} />}
     </>
   );
 

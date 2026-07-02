@@ -14,7 +14,15 @@ import { colors, fonts, radius } from '../theme/tokens';
 import { ExamLevelPicker } from './ExamLevelPicker';
 import { WordTargetSlider } from './WordTargetSlider';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
-import type { ContentType, ExamCriterion, LearningIntent, SetupConfig, StoryGenre } from '../../types/domain';
+import type {
+  Cefr,
+  ContentType,
+  ExamCriterion,
+  LearningIntent,
+  ReadabilityLevel,
+  SetupConfig,
+  StoryGenre,
+} from '../../types/domain';
 
 export interface CandidateWord {
   wordId: string;
@@ -57,6 +65,17 @@ const GENRES: { value: StoryGenre; label: string }[] = [
   { value: 'mystery', label: 'ミステリー' },
 ];
 
+const CEFR_LEVELS: Cefr[] = ['A2', 'B1', 'B2', 'C1', 'C2'];
+
+const READABILITY_OPTIONS: { value: ReadabilityLevel; label: string }[] = [
+  { value: 'easy', label: 'やさしい' },
+  { value: 'standard', label: '標準' },
+  { value: 'advanced', label: '挑戦' },
+];
+
+type AutoCefr = Cefr | 'auto';
+type AutoReadability = ReadabilityLevel | 'auto';
+
 /** Default word target when none is seeded (mid of the article range). */
 const DEFAULT_WORD_TARGET = 400;
 
@@ -88,6 +107,12 @@ export function SetupScreen({
   const [newWordRatio, setNewWordRatio] = useState<number>(initial?.newWordRatio ?? 0.3);
   const [contentType, setContentType] = useState<ContentType>(initial?.contentType ?? 'article');
   const [wordTarget, setWordTarget] = useState<number>(initial?.wordTarget ?? DEFAULT_WORD_TARGET);
+  const [vocabularyLevel, setVocabularyLevel] = useState<AutoCefr>(
+    initial?.advancedDifficulty?.vocabularyLevel ?? 'auto',
+  );
+  const [readabilityLevel, setReadabilityLevel] = useState<AutoReadability>(
+    initial?.advancedDifficulty?.readabilityLevel ?? 'auto',
+  );
   const [genre, setGenre] = useState<StoryGenre>(initial?.storyOptions?.genre ?? 'fantasy');
   const [homageTitle, setHomageTitle] = useState<string>(initial?.storyOptions?.homageTitle ?? '');
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.excludedWordIds ?? []));
@@ -130,12 +155,20 @@ export function SetupScreen({
     setAttempted(true);
     if (missing.length > 0 || !examTarget) return;
     const effectiveWordTarget = clampWordTarget(contentType, wordTarget);
+    const advancedDifficulty =
+      vocabularyLevel !== 'auto' || readabilityLevel !== 'auto'
+        ? {
+            ...(vocabularyLevel !== 'auto' ? { vocabularyLevel } : {}),
+            ...(readabilityLevel !== 'auto' ? { readabilityLevel } : {}),
+          }
+        : undefined;
     onGenerate?.({
       examTarget,
       intent,
       newWordRatio,
       wordTarget: effectiveWordTarget,
       contentType,
+      ...(advancedDifficulty ? { advancedDifficulty } : {}),
       ...(isStory
         ? { storyOptions: { genre, ...(homageTitle.trim() ? { homageTitle: homageTitle.trim() } : {}) } }
         : {}),
@@ -188,6 +221,46 @@ export function SetupScreen({
                 目標レベルを選ぶと生成できます。
               </div>
             ) : null}
+          </section>
+
+          <section>
+            <Label text="高度設定" hint="単語レベル / 文構造" />
+            <div style={advancedGridStyle}>
+              <label style={advancedLabelStyle}>
+                <span style={advancedLabelTextStyle}>単語レベル</span>
+                <select
+                  aria-label="単語レベル"
+                  data-testid="advanced-vocabulary-level"
+                  value={vocabularyLevel}
+                  onChange={(e) => setVocabularyLevel(e.target.value as AutoCefr)}
+                  style={selectStyle}
+                >
+                  <option value="auto">自動</option>
+                  {CEFR_LEVELS.map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={advancedLabelStyle}>
+                <span style={advancedLabelTextStyle}>文構造</span>
+                <select
+                  aria-label="文構造の読みやすさ"
+                  data-testid="advanced-readability-level"
+                  value={readabilityLevel}
+                  onChange={(e) => setReadabilityLevel(e.target.value as AutoReadability)}
+                  style={selectStyle}
+                >
+                  <option value="auto">自動</option>
+                  {READABILITY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </section>
 
           {/* Content type */}
@@ -431,6 +504,35 @@ const homageInputStyle: CSSProperties = {
   padding: '9px 12px',
   width: '100%',
   boxSizing: 'border-box',
+};
+
+const advancedGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 12,
+};
+
+const advancedLabelStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+};
+
+const advancedLabelTextStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  color: colors.faint,
+};
+
+const selectStyle: CSSProperties = {
+  width: '100%',
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  color: colors.inkSoft,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  padding: '9px 10px',
 };
 
 const sliderHeadStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', marginBottom: 12 };

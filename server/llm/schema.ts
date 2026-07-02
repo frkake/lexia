@@ -43,6 +43,11 @@ const NOTICE_CATEGORIES = [
   'common_error',
   'idiom',
   'phrasal_verb',
+  'phrase',
+  'metaphor',
+  'usage',
+  'memory_tip',
+  'sentence_structure',
 ] as const;
 
 const SPAN_PROPS = {
@@ -175,8 +180,9 @@ const WORD_MORE_JSON_SCHEMA = {
         prefix: { type: ['string', 'null'] },
         root: { type: ['string', 'null'] },
         suffix: { type: ['string', 'null'] },
+        noteJa: { type: ['string', 'null'] },
       },
-      required: ['prefix', 'root', 'suffix'],
+      required: ['prefix', 'root', 'suffix', 'noteJa'],
     },
     semanticNetwork: {
       type: ['object', 'null'],
@@ -199,6 +205,19 @@ const WORD_MORE_JSON_SCHEMA = {
   required: ['etymology', 'semanticNetwork', 'wordFamily', 'idioms', 'grammarPatterns', 'metaphor', 'commonErrors'],
 } as const;
 
+const MEMORY_TIP_JSON_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      kind: { type: 'string', enum: ['image', 'etymology', 'collocation', 'contrast', 'sound', 'mistake'] },
+      tipJa: { type: 'string' },
+    },
+    required: ['kind', 'tipJa'],
+  },
+} as const;
+
 /** JSON Schema for WordData — a single dictionary card (rich MORE attributes for notices). */
 export const WORD_DATA_JSON_SCHEMA = {
   type: 'object',
@@ -211,6 +230,7 @@ export const WORD_DATA_JSON_SCHEMA = {
     register: { type: 'string' },
     connotation: { type: 'string' },
     frequency: { type: 'integer' },
+    memoryTips: MEMORY_TIP_JSON_SCHEMA,
     core: {
       type: 'object',
       additionalProperties: false,
@@ -232,7 +252,7 @@ export const WORD_DATA_JSON_SCHEMA = {
     },
     more: WORD_MORE_JSON_SCHEMA,
   },
-  required: ['wordId', 'headword', 'ipa', 'pos', 'register', 'connotation', 'frequency', 'core', 'more'],
+  required: ['wordId', 'headword', 'ipa', 'pos', 'register', 'connotation', 'frequency', 'memoryTips', 'core', 'more'],
 } as const;
 
 /** Output-token budget for a word target (continuous; replaces the legacy 3-value length budget). */
@@ -281,6 +301,11 @@ const PASSAGE_SYSTEM = [
   '  number of words you wrote.',
   '- Level: keep ALL non-target vocabulary at or below the requested CEFR level; only the listed',
   '  target words may exceed it. Prefer a simpler synonym over a more advanced word.',
+  '- Readability: follow the requested readabilityLevel separately from vocabulary level.',
+  '  easy = short direct sentences, mostly one main clause, explicit connectors;',
+  '  standard = a natural mix of simple/compound/complex sentences;',
+  '  advanced = longer sentences may use relative clauses, participial phrases, abstract noun',
+  '  phrases, and denser connectors, while remaining coherent for the requested level.',
   '- Target words & ratio: include EVERY requested target word at least once, copying its',
   '  masteryDensity, so the new/review balance matches newWordRatio.',
   '',
@@ -308,6 +333,7 @@ function passageUser(req: GenerationRequest): string {
     level: req.level,
     intent: req.intent,
     contentType: req.contentType,
+    readabilityLevel: req.readabilityLevel ?? 'standard',
     approxWords: req.wordTarget,
     newWordRatio: req.newWordRatio,
     targetWords: targets,
@@ -362,9 +388,20 @@ export const ANNOTATION_CATEGORIES = [
   'collocation',
   'idiom',
   'phrasal_verb',
+  'phrase',
   'connotation',
   'register',
   'grammar_pattern',
+  'sentence_structure',
+  'usage',
+  'etymology',
+  'semantic_network',
+  'synonym_nuance',
+  'word_family',
+  'frequency',
+  'common_error',
+  'metaphor',
+  'memory_tip',
 ] as const;
 
 /** JSON Schema for the annotation reply: a flat list of location-anchored notice cues. */
@@ -402,8 +439,10 @@ const ANNOTATION_SYSTEM = [
   'schema — no prose, no markdown, no code fences.',
   '',
   'Find EVERY expression in the passage a learner should pause on, across these categories:',
-  'collocation, idiom, phrasal_verb, connotation, register, grammar_pattern. Be exhaustive — do not',
-  'stop at a few. For each, add a cue:',
+  'collocation, idiom, phrasal_verb, phrase, connotation, register, grammar_pattern,',
+  'sentence_structure, usage, etymology, semantic_network, synonym_nuance, word_family, frequency,',
+  'common_error, metaphor, memory_tip. Be thorough but selective — explain the most useful cues.',
+  'For each, add a cue:',
   '- anchorText: the EXACT word(s) in the passage the note is about, copied VERBATIM from that',
   "  sentence's tokens (the joined surface). It MUST appear verbatim in the passage.",
   '- span: { sentenceIndex, tokenStart, tokenEnd } (half-open) for those tokens. Do NOT agonize over',
@@ -417,10 +456,20 @@ const ANNOTATION_SYSTEM = [
   'register "concede" -> 日常の give in よりフォーマル。会議・交渉で自然。',
   'idiom "break the ice" -> 直訳ではなく「場の緊張をほぐす」固定表現。初対面や会議の冒頭で使う。',
   'phrasal_verb "carry out" -> 実行するの意味で、目的語は計画系（plan / experiment / order）。',
+  'phrase "in terms of" -> 観点を切るフレーズ。名詞句を続けて話題を整理する。',
   'grammar_pattern "no sooner ... than" -> 過去完了＋倒置で「〜するやいなや」。書き言葉寄りの硬い表現。',
+  'sentence_structure "Although ..., ..." -> 譲歩を先に置くので、主張は後半に来ると意識すると読みやすい。',
+  'etymology "portable" -> port は「運ぶ」。export / transport と同じ根で覚えやすい。',
+  'semantic_network "purchase" -> buy より硬め。同じ上位概念は「買う」で、反対は sell。',
+  'synonym_nuance "rapid" -> fast より硬めで、変化・成長など抽象名詞にも合う。',
+  'word_family "analysis" -> 動詞 analyze、形容詞 analytical とセットで覚える。',
+  'frequency "issue" -> 頻出語。問題・発行・論点の複数義を文脈で切り替える。',
+  'common_error "discuss" -> about を直後に置かず、discuss the issue の形にする。',
+  'metaphor "grasp an idea" -> 物をつかむ比喩から「理解する」へ広がる。',
+  'memory_tip "resilient" -> re-（戻る）＋跳ね返るイメージで「回復して戻る力」と覚える。',
   'LENGTH: one short sentence (a second only if essential), ~20-45 Japanese characters, NOT counting parenthetical English example words. No preamble (drop これは…/ここでは…), no labels.',
   'PLAIN JAPANESE TEXT ONLY: it renders raw in a tiny 12.5px box with zero parsing — emit no markdown, no asterisks/bold, no HTML, no bullet markers, no code fences (「」 are fine as plain delimiters).',
-  `DON'T restate the dictionary meaning; give the insight meaning alone can't: what fills the slot, which register/situation, or the contrast with a real alternative. For idiom/grammar_pattern give only the minimal non-literal twist, never a full gloss.`,
+  `DON'T restate the dictionary meaning; give the insight meaning alone can't: what fills the slot, which register/situation, why the sentence structure is easy/hard to read, a memory hook, or the contrast with a real alternative. For idiom/grammar_pattern give only the minimal non-literal twist, never a full gloss.`,
   'BE CONCRETE BUT TRUE: name 2-3 real example words in parens (X / Y / Z) or a real alternative word; only cite collocates/register/situations you are confident are standard for THIS expression — never invent them to fill the slot, and when unsure prefer hedged framing (多くの場合) over absolutes like 必ず.',
   '',
   'REQUIRED COVERAGE: the user message may list expressions already highlighted in the reading UI',
@@ -431,7 +480,7 @@ const ANNOTATION_SYSTEM = [
   '',
   'Quality bar: beyond the required items, add other high-confidence, pedagogically worthwhile finds',
   'at or above the requested CEFR level. Skip transparent, trivial sequences ("go to", "in the"). For',
-  'these EXTRA (non-required) cues, aim for at most ~2-3 per sentence so the page stays readable.',
+  'these EXTRA (non-required) cues, aim for at most ~1-2 per sentence so the page stays readable.',
 ].join('\n');
 
 /** Canonical surface of a token range (clitics/punctuation joined like the body text). */
@@ -515,9 +564,19 @@ const WORD_SYSTEM = [
   'meaningsJa and example.ja are in Japanese; examples[].en are natural English sentences using',
   'the word. register is one of formal/neutral/casual/academic/business/slang. connotation is a',
   'short Japanese note. frequency is 1 (rare) to 5 (very common). Provide 1-3 meanings, 1-2',
-  'examples, and a few collocations and synonym nuances.',
+  'examples, and a few collocations. core.synonymNuances MUST be written in Japanese; include the',
+  'compared word/expression and explain the practical difference in plain Japanese, not English.',
+  'Provide 1-3 memoryTips: short Japanese memory hooks that make the word easier to remember.',
+  'Prefer etymology, concrete image, natural collocation, synonym contrast, sound/spelling cue, or',
+  'common mistake avoidance. Do NOT invent forced puns or unnatural mnemonics.',
+  'If a memoryTip uses etymology, it MUST name the original spelling, language/source, original',
+  'meaning, and the semantic bridge to the current meaning. Example shape: "coach は古い語形 X',
+  '（〜語で「乗り物」）から、乗り物が人を目的地へ運ぶ → 人を目標へ導く人、という比喩で覚える。"',
   'Also fill "more" as richly as the word allows — these power the in-passage "notice" insights:',
-  '- etymology: prefix/root/suffix when the word has them (else null for that part).',
+  '- etymology: prefix/root/suffix when the word has them (else null for that part), plus noteJa.',
+  '  noteJa MUST be Japanese and explain what the source form means and how the meaning shifted;',
+  '  for borrowed words include the original spelling and language/source when known. If uncertain,',
+  '  say the origin is uncertain instead of overclaiming.',
   '- semanticNetwork: synonyms, antonyms, hypernyms, hyponyms, related (arrays; [] if none).',
   '- wordFamily: derived forms / part-of-speech variants (e.g. ["decision","decisive"]).',
   '- grammarPatterns: typical constructions (e.g. ["depend on N","it depends whether ..."]).',

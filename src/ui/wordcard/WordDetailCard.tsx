@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { colors, fonts, radius, shadow } from '../theme/tokens';
 import { playerStore } from '../../state/stores/playerStore';
 import type { MasteryStage, WordData } from '../../types/domain';
@@ -22,6 +22,7 @@ const MASTERY_JA: Record<MasteryStage, string> = {
 export interface WordDetailCardProps {
   word: WordData;
   stage?: MasteryStage;
+  audioUrl?: string;
   onClose?: () => void;
 }
 
@@ -92,12 +93,48 @@ function MoreRow({ title, summary, children }: { title: string; summary?: string
   );
 }
 
-export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0) : [];
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+export function WordDetailCard({ word, stage, audioUrl, onClose }: WordDetailCardProps) {
   const more = word.more;
+  const effectiveAudioUrl = audioUrl ?? word.audioUrl;
   const etymology = more?.etymology;
-  const etymologyText = etymology
-    ? [etymology.prefix, etymology.root, etymology.suffix].filter(Boolean).join(' + ')
-    : '';
+  const etymologyParts = etymology ? [text(etymology.prefix), text(etymology.root), text(etymology.suffix)].filter(Boolean).join(' + ') : '';
+  const etymologyNote = text(etymology?.noteJa);
+  const etymologySummary = etymologyParts || etymologyNote || '';
+  const pos = strings(word.pos);
+  const meanings = strings(word.core?.meaningsJa);
+  const examples = Array.isArray(word.core?.examples)
+    ? word.core.examples.filter((ex): ex is { en: string; ja: string } => !!ex && typeof ex.en === 'string' && typeof ex.ja === 'string')
+    : [];
+  const collocations = strings(word.core?.collocations);
+  const synonymNuances = strings(word.core?.synonymNuances);
+  const memoryTips = Array.isArray(word.memoryTips)
+    ? word.memoryTips.filter((tip): tip is NonNullable<WordData['memoryTips']>[number] => !!tip && typeof tip.tipJa === 'string' && tip.tipJa.trim().length > 0)
+    : [];
+  const semanticNetwork = more?.semanticNetwork;
+  const synonyms = strings(semanticNetwork?.synonyms);
+  const antonyms = strings(semanticNetwork?.antonyms);
+  const wordFamily = strings(more?.wordFamily);
+  const idioms = strings(more?.idioms);
+  const grammarPatterns = strings(more?.grammarPatterns);
+  const metaphor = text(more?.metaphor);
+  const commonErrors = strings(more?.commonErrors);
+  const hasMore =
+    !!etymology ||
+    synonyms.length > 0 ||
+    antonyms.length > 0 ||
+    wordFamily.length > 0 ||
+    idioms.length > 0 ||
+    grammarPatterns.length > 0 ||
+    !!metaphor ||
+    commonErrors.length > 0;
 
   return (
     <div
@@ -124,16 +161,16 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
               <button
                 type="button"
                 aria-label="発音を再生"
-                disabled={!word.audioUrl}
-                onClick={() => word.audioUrl && playerStore.getState().playWord(word.audioUrl)}
+                disabled={!effectiveAudioUrl}
+                onClick={() => effectiveAudioUrl && playerStore.getState().playWord(effectiveAudioUrl)}
                 style={{
                   width: 34,
                   height: 34,
                   borderRadius: '50%',
-                  background: word.audioUrl ? colors.surfaceBlue : '#F1F4F8',
+                  background: effectiveAudioUrl ? colors.surfaceBlue : '#F1F4F8',
                   border: 'none',
-                  color: word.audioUrl ? colors.primary : colors.faint,
-                  cursor: word.audioUrl ? 'pointer' : 'not-allowed',
+                  color: effectiveAudioUrl ? colors.primary : colors.faint,
+                  cursor: effectiveAudioUrl ? 'pointer' : 'not-allowed',
                   fontSize: 14,
                 }}
               >
@@ -141,7 +178,7 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
               </button>
             </div>
             <div style={{ display: 'flex', gap: 7, marginTop: 14, flexWrap: 'wrap' }}>
-              {word.pos.length > 0 ? <span style={chipStyle()}>{word.pos.join('・')}</span> : null}
+              {pos.length > 0 ? <span style={chipStyle()}>{pos.join('・')}</span> : null}
               {word.register ? <span style={chipStyle(true)}>レジスター: {word.register}</span> : null}
               {word.connotation ? <span style={chipStyle()}>コノテーション: {word.connotation}</span> : null}
             </div>
@@ -174,18 +211,37 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
       <div style={{ padding: '26px 34px 10px' }}>
         {sectionLabel('CORE · コア', colors.primary)}
 
-        {word.illustrationUrl || word.core.meaningsJa.length > 0 ? (
-          <div style={{ fontFamily: fonts.bodyJp, fontSize: 15, lineHeight: 1.7, color: colors.body }}>
-            <b style={{ color: colors.ink }}>意味</b> ／ {word.core.meaningsJa.join(' / ')}
+        {word.illustrationUrl ? (
+          <div style={illustrationWrapStyle}>
+            <img src={word.illustrationUrl} alt={word.headword} style={illustrationStyle} />
           </div>
         ) : null}
 
-        {word.core.examples.length > 0 ? (
+        {meanings.length > 0 ? (
+          <div style={{ fontFamily: fonts.bodyJp, fontSize: 15, lineHeight: 1.7, color: colors.body }}>
+            <b style={{ color: colors.ink }}>意味</b> ／ {meanings.join(' / ')}
+          </div>
+        ) : null}
+
+        {memoryTips.length > 0 ? (
+          <div style={memoryTipsStyle}>
+            <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, color: colors.greenDeep, marginBottom: 8 }}>
+              覚えるコツ
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {memoryTips.map((tip, i) => (
+                <div key={`${tip.kind}:${i}`}>{tip.tipJa}</div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {examples.length > 0 ? (
           <div style={{ marginTop: 18 }}>
             <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, color: colors.muted, marginBottom: 8 }}>
               例文 / Examples
             </div>
-            {word.core.examples.map((ex, i) => (
+            {examples.map((ex, i) => (
               <div key={i} style={{ borderLeft: `2px solid ${colors.primaryBorder}`, paddingLeft: 14, marginBottom: 12 }}>
                 <div style={{ fontFamily: fonts.serif, fontSize: 16, lineHeight: 1.55, color: colors.body }}>{ex.en}</div>
                 <div style={{ fontFamily: fonts.bodyJp, fontSize: 13, color: colors.muted, marginTop: 3 }}>{ex.ja}</div>
@@ -194,13 +250,13 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
           </div>
         ) : null}
 
-        {word.core.collocations.length > 0 ? (
+        {collocations.length > 0 ? (
           <div style={{ marginTop: 18 }}>
             <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, color: colors.muted, marginBottom: 8 }}>
               コロケーション / Collocations
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-              {word.core.collocations.map((c) => (
+              {collocations.map((c) => (
                 <span key={c} style={{ fontFamily: fonts.num, fontSize: 13, color: colors.primaryDeep, background: '#EAF0F8', borderRadius: radius.chip, padding: '5px 11px' }}>
                   {c}
                 </span>
@@ -209,13 +265,13 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
           </div>
         ) : null}
 
-        {word.core.synonymNuances.length > 0 ? (
+        {synonymNuances.length > 0 ? (
           <div style={{ marginTop: 18, background: colors.surfacePage, border: `1px solid ${colors.borderCard}`, borderRadius: radius.card, padding: '14px 16px' }}>
             <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, color: colors.ink, marginBottom: 9 }}>
               ニュアンスの違い / Synonyms
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 7, fontFamily: fonts.bodyJp, fontSize: 13, lineHeight: 1.5, color: colors.inkSoft }}>
-              {word.core.synonymNuances.map((n, i) => (
+              {synonymNuances.map((n, i) => (
                 <div key={i}>{n}</div>
               ))}
             </div>
@@ -224,42 +280,45 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
       </div>
 
       {/* MORE (collapsed; only present attributes render) */}
-      {more && Object.keys(more).length > 0 ? (
+      {hasMore ? (
         <div style={{ padding: '18px 34px 30px' }}>
           {sectionLabel('MORE · さらに掘り下げる', colors.faint)}
           {etymology ? (
-            <MoreRow title="語源" summary={etymologyText}>
-              {etymologyText}
+            <MoreRow title="語源" summary={etymologySummary}>
+              {etymologyParts ? <div>{etymologyParts}</div> : null}
+              {etymologyNote ? <div style={{ marginTop: etymologyParts ? 8 : 0 }}>{etymologyNote}</div> : null}
             </MoreRow>
           ) : null}
-          {more.semanticNetwork ? (
+          {synonyms.length > 0 || antonyms.length > 0 ? (
             <MoreRow title="意味のネットワーク" summary="類義 · 反義 · 上位/下位語">
-              類義: {more.semanticNetwork.synonyms.join('、')} / 反義: {more.semanticNetwork.antonyms.join('、')}
+              {synonyms.length > 0 ? `類義: ${synonyms.join('、')}` : null}
+              {synonyms.length > 0 && antonyms.length > 0 ? ' / ' : null}
+              {antonyms.length > 0 ? `反義: ${antonyms.join('、')}` : null}
             </MoreRow>
           ) : null}
-          {more.wordFamily ? (
-            <MoreRow title="語のファミリー" summary={more.wordFamily.join(' · ')}>
-              {more.wordFamily.join(' · ')}
+          {wordFamily.length > 0 ? (
+            <MoreRow title="語のファミリー" summary={wordFamily.join(' · ')}>
+              {wordFamily.join(' · ')}
             </MoreRow>
           ) : null}
-          {more.idioms ? (
-            <MoreRow title="イディオム・フレーズ" summary={more.idioms[0]}>
-              {more.idioms.join(' / ')}
+          {idioms.length > 0 ? (
+            <MoreRow title="イディオム・フレーズ" summary={idioms[0]}>
+              {idioms.join(' / ')}
             </MoreRow>
           ) : null}
-          {more.grammarPatterns ? (
-            <MoreRow title="文法パターン" summary={more.grammarPatterns[0]}>
-              {more.grammarPatterns.join(' / ')}
+          {grammarPatterns.length > 0 ? (
+            <MoreRow title="文法パターン" summary={grammarPatterns[0]}>
+              {grammarPatterns.join(' / ')}
             </MoreRow>
           ) : null}
-          {more.metaphor ? (
-            <MoreRow title="メタファー" summary={more.metaphor}>
-              {more.metaphor}
+          {metaphor ? (
+            <MoreRow title="メタファー" summary={metaphor}>
+              {metaphor}
             </MoreRow>
           ) : null}
-          {more.commonErrors ? (
-            <MoreRow title="誤用しやすい点" summary={more.commonErrors[0]}>
-              {more.commonErrors.join(' / ')}
+          {commonErrors.length > 0 ? (
+            <MoreRow title="誤用しやすい点" summary={commonErrors[0]}>
+              {commonErrors.join(' / ')}
             </MoreRow>
           ) : null}
         </div>
@@ -267,3 +326,33 @@ export function WordDetailCard({ word, stage, onClose }: WordDetailCardProps) {
     </div>
   );
 }
+
+const illustrationWrapStyle: CSSProperties = {
+  float: 'right',
+  width: 118,
+  height: 118,
+  margin: '0 0 14px 20px',
+  borderRadius: radius.card,
+  overflow: 'hidden',
+  border: `1px solid ${colors.borderCard}`,
+  background: colors.surfaceSubtle,
+};
+
+const illustrationStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  display: 'block',
+};
+
+const memoryTipsStyle: CSSProperties = {
+  marginTop: 18,
+  background: colors.greenBg,
+  border: `1px solid ${colors.greenBorder}`,
+  borderRadius: radius.card,
+  padding: '13px 15px',
+  fontFamily: fonts.bodyJp,
+  fontSize: 13,
+  lineHeight: 1.65,
+  color: colors.inkSoft,
+};

@@ -73,10 +73,24 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(cfg.newWordRatio).toBeCloseTo(0.5);
     expect(cfg.wordTarget).toBe(700);
     expect(cfg.contentType).toBe('article');
+    expect(cfg.advancedDifficulty).toBeUndefined();
     expect(cfg.targetWordIds).toEqual(['mitigate', 'concede', 'candid']);
     // Legacy fields removed.
     expect((cfg as { themes?: unknown }).themes).toBeUndefined();
     expect((cfg as { length?: unknown }).length).toBeUndefined();
+  });
+
+  it('offers advanced overrides for vocabulary level and sentence-structure readability', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({ candidates: [], onGenerate });
+    fireEvent.click(getByTestId('exam-value-2'));
+    fireEvent.change(getByTestId('advanced-vocabulary-level'), { target: { value: 'C1' } });
+    fireEvent.change(getByTestId('advanced-readability-level'), { target: { value: 'easy' } });
+    fireEvent.click(getByText('文章を生成する'));
+    expect(onGenerate.mock.calls[0]![0].advancedDifficulty).toEqual({
+      vocabularyLevel: 'C1',
+      readabilityLevel: 'easy',
+    });
   });
 
   it('reveals genre + homage inputs only when a story content type is chosen (6.4)', () => {

@@ -85,6 +85,11 @@ describe('design tokens', () => {
       'common_error',
       'idiom',
       'phrasal_verb',
+      'phrase',
+      'metaphor',
+      'usage',
+      'memory_tip',
+      'sentence_structure',
     ] as const;
     for (const c of categories) {
       const s = noticeStyle(c);

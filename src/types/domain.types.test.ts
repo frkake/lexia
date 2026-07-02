@@ -11,6 +11,7 @@ import type {
   Settings,
   Sentence,
   TranslationSpan,
+  ReadabilityLevel,
 } from './domain';
 
 describe('domain types', () => {
@@ -34,7 +35,7 @@ describe('domain types', () => {
     expect(w.more).toBeUndefined();
     expectTypeOf<WordData['more']>().toEqualTypeOf<
       | Partial<{
-          etymology: { prefix?: string; root?: string; suffix?: string };
+          etymology: { prefix?: string; root?: string; suffix?: string; noteJa?: string };
           semanticNetwork: {
             synonyms: string[];
             antonyms: string[];
@@ -48,6 +49,13 @@ describe('domain types', () => {
           metaphor: string;
           commonErrors: string[];
         }>
+      | undefined
+    >();
+    expectTypeOf<WordData['memoryTips']>().toEqualTypeOf<
+      | {
+          kind: 'image' | 'etymology' | 'collocation' | 'contrast' | 'sound' | 'mistake';
+          tipJa: string;
+        }[]
       | undefined
     >();
   });
@@ -103,7 +111,7 @@ describe('domain types', () => {
     expect(span.tokenEnd).toBeGreaterThan(span.tokenStart);
   });
 
-  it('NoticeCategory includes the ten supplied annotation kinds', () => {
+  it('NoticeCategory includes the supplied annotation kinds', () => {
     const cats: NoticeCategory[] = [
       'connotation',
       'collocation',
@@ -115,8 +123,19 @@ describe('domain types', () => {
       'word_family',
       'frequency',
       'common_error',
+      'idiom',
+      'phrasal_verb',
+      'phrase',
+      'metaphor',
+      'usage',
+      'memory_tip',
+      'sentence_structure',
     ];
-    expect(new Set(cats).size).toBe(10);
+    expect(new Set(cats).size).toBe(cats.length);
+  });
+
+  it('ReadabilityLevel separates sentence structure from vocabulary level', () => {
+    expectTypeOf<ReadabilityLevel>().toEqualTypeOf<'easy' | 'standard' | 'advanced'>();
   });
 
   it('Settings.translationMode is the three reading modes', () => {

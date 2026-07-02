@@ -18,6 +18,8 @@ import type {
   GenerationTargetWord,
   StoryContext,
   WordData,
+  Cefr,
+  ReadabilityLevel,
 } from '../../types/domain';
 
 export interface SessionPlanner {
@@ -44,6 +46,20 @@ export interface SessionPlanner {
     wordData?: Record<string, WordData>,
     storyContext?: StoryContext,
   ): GenerationRequest;
+}
+
+export function readabilityForCefr(level: Cefr): ReadabilityLevel {
+  if (level === 'A2' || level === 'B1') return 'easy';
+  if (level === 'B2') return 'standard';
+  return 'advanced';
+}
+
+export function resolveVocabularyLevel(setup: SetupConfig): Cefr {
+  return setup.advancedDifficulty?.vocabularyLevel ?? examScale.examToCefr(setup.examTarget);
+}
+
+export function resolveReadabilityLevel(setup: SetupConfig): ReadabilityLevel {
+  return setup.advancedDifficulty?.readabilityLevel ?? readabilityForCefr(examScale.examToCefr(setup.examTarget));
 }
 
 async function selectCandidates(
@@ -108,11 +124,12 @@ function buildRequest(
 
   return {
     // Resolve the exam-based difficulty to the internal CEFR pivot (generation/validation use CEFR).
-    level: examScale.examToCefr(setup.examTarget),
+    level: resolveVocabularyLevel(setup),
     intent: setup.intent,
     newWordRatio: setup.newWordRatio,
     wordTarget: setup.wordTarget,
     contentType: setup.contentType,
+    readabilityLevel: resolveReadabilityLevel(setup),
     targetWords,
     ...(storyContext ? { storyContext } : {}),
   };
