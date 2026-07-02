@@ -16,9 +16,8 @@ describe('<TopNav/>', () => {
   it('shows the brand and the primary destinations', () => {
     const { getByText } = renderAt('/');
     expect(getByText(/Lexia/)).toBeTruthy();
-    expect(getByText('ダッシュボード')).toBeTruthy();
-    expect(getByText('学習をはじめる')).toBeTruthy();
-    expect(getByText('読む')).toBeTruthy();
+    expect(getByText('ホーム')).toBeTruthy();
+    expect(getByText('文章')).toBeTruthy();
     expect(getByText('復習')).toBeTruthy();
     expect(getByText('単語帳')).toBeTruthy();
   });
@@ -26,6 +25,6 @@ describe('<TopNav/>', () => {
   it('marks the current route as active (aria-current)', () => {
     const { getByText } = renderAt('/review');
     expect(getByText('復習').getAttribute('aria-current')).toBe('page');
-    expect(getByText('読む').getAttribute('aria-current')).toBeNull();
+    expect(getByText('文章').getAttribute('aria-current')).toBeNull();
   });
 });
