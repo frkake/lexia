@@ -68,7 +68,7 @@ export function DashboardScreen({
 
   const continueReading = (passageId: string, sentenceIndex: number): void => {
     if (onContinue) onContinue(passageId, sentenceIndex);
-    else void navigate('/read');
+    else void navigate('/library');
   };
   const startReview = (): void => {
     if (onStartReview) onStartReview();
@@ -76,7 +76,7 @@ export function DashboardScreen({
   };
   const openPassage = (passageId: string): void => {
     if (onOpenPassage) onOpenPassage(passageId);
-    else void navigate('/read');
+    else void navigate('/library');
   };
 
   const weeklyMax = Math.max(1, ...snapshot.weekly.map((d) => d.reviewCount));

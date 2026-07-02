@@ -13,7 +13,7 @@ function routerAt(path: string) {
         element: <AppShell />,
         children: [
           { index: true, element: <div data-testid="dash">dashboard</div> },
-          { path: 'read', element: <div data-testid="read">reading</div> },
+          { path: 'library', element: <div data-testid="library">library</div> },
         ],
       },
     ],
@@ -35,9 +35,9 @@ describe('<AppShell/>', () => {
     const { getByTestId } = render(<RouterProvider router={router} />);
     const before = getByTestId('app-audio');
     await act(async () => {
-      await router.navigate('/read');
+      await router.navigate('/library');
     });
-    expect(getByTestId('read')).toBeTruthy();
+    expect(getByTestId('library')).toBeTruthy();
     expect(getByTestId('app-audio')).toBe(before); // never recreated
   });
 
