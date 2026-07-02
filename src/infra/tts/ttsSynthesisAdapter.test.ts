@@ -6,7 +6,7 @@ import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
 function indexed(): IndexedPassage {
   const passage: PassageOutput = {
-    meta: { title: 't', theme: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 4 },
+    meta: { title: 't', intent: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 4 },
     sentences: [{ tokens: ['She', 'stayed', 'resilient', '.'], translationJa: '' }],
     targetSpans: [],
     collocationSpans: [],

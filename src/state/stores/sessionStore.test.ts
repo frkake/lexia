@@ -7,7 +7,7 @@ const U = 'u1' as UserId;
 
 function indexedPassage(): IndexedPassage {
   const passage: PassageOutput = {
-    meta: { title: 'Story', theme: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 10 },
+    meta: { title: 'Story', intent: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 10 },
     sentences: Array.from({ length: 5 }, (_, i) => ({ tokens: ['Sentence', String(i), '.'], translationJa: '' })),
     targetSpans: [],
     collocationSpans: [],

@@ -82,6 +82,21 @@ test('layout: wide desktop keeps the grid two-column with a divider on the Japan
   expect(border).toBe('solid');
 });
 
+test('layout: overhauled setup renders intent / exam picker / word-target / content type (8/9/7/6)', async ({ page }) => {
+  await openGallery(page, 'setup');
+  // Fine-grained theme tags are gone; learning-intent single-select is present (Req 8).
+  await expect(page.getByTestId('theme-交渉')).toHaveCount(0);
+  await expect(page.getByTestId('intent-business')).toBeVisible();
+  // Exam-based difficulty picker with cross-exam conversion (Req 9).
+  await expect(page.getByTestId('exam-kind-eiken')).toBeVisible();
+  await expect(page.getByTestId('exam-conversion')).toBeVisible();
+  // 100-word-step word-target slider with page estimate (Req 7).
+  await expect(page.getByLabelText('文章の長さ')).toBeVisible();
+  // Content-type selector incl. stories (Req 6).
+  await expect(page.getByTestId('content-type-article')).toBeVisible();
+  await expect(page.getByTestId('content-type-short_story')).toBeVisible();
+});
+
 test('tokens: dashboard 4-stage mastery breakdown colors', async ({ page }) => {
   await openGallery(page, 'dashboard');
   expect(await styleOf(page.getByTestId('mastery-seg-new'), 'backgroundColor')).toBe(rgb('#C4CCD6'));

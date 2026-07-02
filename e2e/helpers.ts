@@ -10,7 +10,7 @@ import type { PassageOutput, WordData } from '../src/types/domain';
  */
 
 export const E2E_PASSAGE: PassageOutput = {
-  meta: { title: 'A Decisive Agreement', theme: '交渉', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 5 },
+  meta: { title: 'A Decisive Agreement', intent: 'business', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 5 },
   sentences: [
     {
       tokens: ['We', 'reached', 'a', 'decisive', 'agreement', '.'],
@@ -92,7 +92,10 @@ export async function mockApi(page: Page): Promise<void> {
   await page.route('**/api/passages:generate', (route) =>
     route.fulfill({ json: { passage: E2E_PASSAGE, stop_reason: 'end_turn' } }),
   );
+  // Word-data lookups. Guard against the suggest sub-path so it isn't captured by the wildcard.
   await page.route('**/api/words/**', (route) => route.fulfill({ json: E2E_WORD }));
+  // Setup-open word suggestion (Requirement 5.1): a small deterministic ABC list.
+  await page.route('**/api/words:suggest', (route) => route.fulfill({ json: { words: ['decisive'] } }));
   await page.route('**/api/tts:synthesize', (route) =>
     route.fulfill({
       json: { audioUrl: silentWavDataUrl(), format: 'audio/mpeg', durationMs: DURATION_MS, engine: 'polly', marks: buildMarks() },

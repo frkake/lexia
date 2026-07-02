@@ -14,6 +14,7 @@ import { openLexiaDb } from '../../infra/persistence/lexiaDb';
 import type { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories, type Repositories } from '../../infra/persistence/repositories';
 import { HttpContentGateway } from '../../infra/content/contentGatewayHttp';
+import { HttpStoryGateway } from '../../infra/content/storyGatewayHttp';
 import { TtsSynthesisAdapter, type TtsBackend } from '../../infra/tts/ttsSynthesisAdapter';
 import { HttpTtsBackend } from '../../infra/tts/ttsBackendHttp';
 import { JsonSyncAdapter } from '../../infra/sync/exportImport';
@@ -21,10 +22,12 @@ import {
   createGenerationOrchestrator,
   type GenerationOrchestrator,
 } from '../../domain/generation/generationOrchestrator';
+import { createStoryPlanner, type StoryPlanner } from '../../domain/story/storyPlanner';
+import { createWordSuggestionService, type WordSuggestionService } from '../../domain/suggestion/wordSuggestionService';
 import { sessionStore, type SessionStore } from '../../state/stores/sessionStore';
 import { playerStore, type PlayerStore } from '../../state/stores/playerStore';
 import { settingsStore, type SettingsStore } from '../../state/stores/settingsStore';
-import type { ContentGateway, SyncAdapter, TtsSynthesisPort } from '../../types/ports';
+import type { ContentGateway, StoryGateway, SyncAdapter, TtsSynthesisPort } from '../../types/ports';
 import type { Cefr, UserId, WordSchedulingState } from '../../types/domain';
 
 /** Polly Neural default voice used until the learner picks one in settings. */
@@ -44,6 +47,8 @@ export interface ContainerSeams {
   /** Pre-opened DB (tests inject a fake-indexeddb instance). */
   db?: LexiaDb;
   content?: ContentGateway;
+  /** Story-plan generation port (Requirement 6). Defaults to the HTTP proxy gateway. */
+  story?: StoryGateway;
   /** A ready TTS port, or … */
   tts?: TtsSynthesisPort;
   /** … a backend to wrap with TtsSynthesisAdapter. */
@@ -68,6 +73,10 @@ export interface Container {
   session: SessionStore;
   player: PlayerStore;
   settings: SettingsStore;
+  /** Next-word suggestion service (Requirement 5). */
+  suggestions: WordSuggestionService;
+  /** Story planner (Requirement 6); resolved with the injected/default StoryGateway. */
+  storyPlanner: StoryPlanner;
   /** Reads every scheduling state (incl. New words) for dashboard / wordbook. */
   loadStates: (userId: UserId) => Promise<WordSchedulingState[]>;
   /** Builds a generation orchestrator bound to a fresh passageId. */
@@ -84,6 +93,7 @@ export async function createContainer(userId: UserId, seams: ContainerSeams = {}
   // with a typed error, which the orchestrator/controller surface to the user (a missing
   // backend must show an error, not silently serve placeholder content).
   const content = seams.content ?? new HttpContentGateway({ baseUrl: seams.baseUrl });
+  const story = seams.story ?? new HttpStoryGateway({ baseUrl: seams.baseUrl });
   // Both adjacent capabilities default to their HTTP seam; when the TTS endpoint is
   // absent the synthesize call rejects and the pipeline degrades (player unavailable).
   const tts =
@@ -104,6 +114,14 @@ export async function createContainer(userId: UserId, seams: ContainerSeams = {}
     session: seams.session ?? sessionStore,
     player: seams.player ?? playerStore,
     settings: seams.settings ?? settingsStore,
+    suggestions: createWordSuggestionService(content),
+    storyPlanner: createStoryPlanner({
+      gateway: story,
+      storyRepo: repos.stories,
+      createOrchestrator: (passageId) =>
+        createGenerationOrchestrator({ gateway: content, cefrOf: seams.cefrOf, passageId }),
+      now,
+    }),
     loadStates: (uid) => db.scheduling.where('userId').equals(uid).toArray(),
     createOrchestrator: (passageId) =>
       createGenerationOrchestrator({ gateway: content, cefrOf: seams.cefrOf, passageId }),

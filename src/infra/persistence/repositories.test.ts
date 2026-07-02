@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { LexiaDb } from './lexiaDb';
+import { LexiaDb, APP_SCHEMA_VERSION } from './lexiaDb';
 import { createRepositories } from './repositories';
 import type { UserId, WordSchedulingState, ReadingProgress } from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
@@ -116,7 +116,7 @@ describe('PassageRepository', () => {
       userId,
       createdAt,
       passage: {
-        meta: { title: id, theme: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+        meta: { title: id, intent: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
         sentences: [],
         targetSpans: [],
         collocationSpans: [],
@@ -129,6 +129,37 @@ describe('PassageRepository', () => {
 
     expect(await repo.get('p2')).toBeDefined();
     expect((await repo.recent(userId, 2)).map((p) => p.passageId)).toEqual(['p2', 'p3']);
+    db.close();
+  });
+
+  it('lists story chapters by story id in chapter order', async () => {
+    const { db, userId } = await freshDb();
+    const repo = createRepositories(db).passages;
+    const mk = (id: string, storyId: string, chapterIndex: number): PassageRecord => ({
+      passageId: id,
+      userId,
+      createdAt: 100 + chapterIndex,
+      passage: {
+        meta: {
+          title: id,
+          intent: 'daily',
+          level: 'B1',
+          newCount: 0,
+          reviewCount: 0,
+          approxWords: 0,
+          storyRef: { storyId, chapterIndex },
+        },
+        sentences: [],
+        targetSpans: [],
+        collocationSpans: [],
+        noticeCues: [],
+      },
+    });
+    await repo.put(mk('s1c1', 's1', 1));
+    await repo.put(mk('s1c0', 's1', 0));
+    await repo.put(mk('s2c0', 's2', 0));
+
+    expect((await repo.byStory(userId, 's1')).map((p) => p.passageId)).toEqual(['s1c0', 's1c1']);
     db.close();
   });
 });
@@ -182,10 +213,11 @@ describe('SettingsRepository', () => {
       theme: 'light',
       locale: 'ja',
       lastSetup: {
-        level: 'B2',
-        themes: ['travel'],
+        examTarget: { kind: 'eiken', value: '準1' },
+        intent: 'travel',
         newWordRatio: 0.3,
-        length: 'medium',
+        wordTarget: 250,
+        contentType: 'article',
         targetWordIds: ['w1'],
         excludedWordIds: [],
       },
@@ -195,7 +227,7 @@ describe('SettingsRepository', () => {
     expect(got?.fontScale).toBe(1.2);
     // The persisted row carries the schema version even though the port returns Settings.
     const raw = await db.settings.get(userId);
-    expect(raw?.appSchemaVersion).toBe(1);
+    expect(raw?.appSchemaVersion).toBe(APP_SCHEMA_VERSION);
     db.close();
   });
 });
@@ -217,6 +249,34 @@ describe('WordCacheRepository', () => {
     await repo.put(userId, word);
     expect((await repo.get(userId, 'w1'))?.headword).toBe('resilient');
     expect(await repo.all(userId)).toHaveLength(1);
+    db.close();
+  });
+});
+
+describe('DexiePassageRepository.all', () => {
+  it('returns all passages for the user, newest first, excluding other users', async () => {
+    const db = new LexiaDb('all_user');
+    await db.open();
+    const repos = createRepositories(db);
+    const mk = (passageId: string, userId: string, createdAt: number): PassageRecord => ({
+      passageId,
+      userId: userId as UserId,
+      createdAt,
+      passage: {
+        meta: { title: passageId, intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+        sentences: [],
+        targetSpans: [],
+        collocationSpans: [],
+        noticeCues: [],
+      },
+    });
+    await repos.passages.put(mk('a', 'all_user', 100));
+    await repos.passages.put(mk('b', 'all_user', 300));
+    await repos.passages.put(mk('c', 'all_user', 200));
+    await repos.passages.put(mk('x', 'other_user', 999));
+
+    const all = await repos.passages.all('all_user' as UserId);
+    expect(all.map((p) => p.passageId)).toEqual(['b', 'c', 'a']);
     db.close();
   });
 });

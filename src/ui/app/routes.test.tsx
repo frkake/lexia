@@ -37,7 +37,7 @@ const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.
 
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 245 },
+    meta: { title: '取引の成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 245 },
     sentences: [
       { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
       ...Array.from({ length: 30 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
@@ -82,8 +82,14 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     };
 
     // No TTS backend → the port degrades; reading must still work.
-    const container = await createContainer(userId, { db, content: gateway, tts: degradingTts, now: () => 1_000_000 });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -107,7 +113,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     await waitFor(() => expect(container.player.getState().status).toBe('unavailable'));
     expect(await createRepositories(db).passages.recent(userId, 5)).toHaveLength(1);
 
-    fireEvent.click(screen.getByText('読了として記録'));
+    fireEvent.click(await screen.findByText('読了として記録'));
     await waitFor(async () => {
       const progress = await createRepositories(db).progress.get(userId, container.session.getState().passage!.passageId);
       expect(progress?.status).toBe('completed');
@@ -140,8 +146,9 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       content: gateway,
       tts: degradingTts,
       now: () => 1_000_000,
+      settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -194,7 +201,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       now: () => 1_000_000,
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -208,7 +215,8 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     fireEvent.click(screen.getByText('文章を生成する'));
 
     await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
-    expect(suggestCalls).toBe(1);
+    // Suggestion is consulted (on setup open for the initial candidates and/or at generate time).
+    expect(suggestCalls).toBeGreaterThanOrEqual(1);
     // The auto-proposed word is woven in AND tracked in the SRS so it can reappear later.
     await waitFor(async () => {
       const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
@@ -268,7 +276,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       player: createPlayerStore(),
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -278,12 +286,12 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await screen.findByTestId('level-B1'));
+    fireEvent.click(await screen.findByTestId('exam-value-2')); // choose a level (英検2級)
     fireEvent.click(screen.getByText('文章を生成する'));
 
     // No mock passage: the connection error is shown and we stay on Setup.
     expect(await screen.findByText('生成サービスに接続できませんでした。時間をおいて再試行してください。')).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/setup');
+    expect(router.state.location.pathname).toBe('/');
     expect(await createRepositories(db).passages.recent(userId, 5)).toHaveLength(0);
   });
 });

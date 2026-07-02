@@ -17,6 +17,36 @@ export type TokenId = string;
 
 export type Cefr = 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
 
+// ── Exam-based difficulty (Requirement 9) ────────────────────────────────────
+
+/** Standardized exam whose scale a learner may use to pick difficulty. */
+export type ExamKind = 'eiken' | 'toeic' | 'toefl' | 'ielts';
+
+/**
+ * Exam-based difficulty selection (Requirement 9). The UI selects/presents difficulty by exam
+ * scale; the generator/validator still run on the internal `Cefr` pivot, derived via
+ * `examScale.examToCefr`. `value` is the exam-specific choice ('準1' / '785' / '72' / '6.0').
+ */
+export interface ExamCriterion {
+  kind: ExamKind;
+  value: string;
+}
+
+// ── Learning intent & content type (Requirements 7/8) ────────────────────────
+
+/**
+ * Closed enumeration of learning intents (Requirement 8), replacing the fine-grained
+ * free-text theme tags. Drives subject-matter + register (and, for exam intents, the
+ * high-frequency vocabulary/format bias). Orthogonal to difficulty.
+ */
+export type LearningIntent = 'business' | 'daily' | 'toeic' | 'eiken' | 'academic' | 'travel';
+
+/** Content kind (Requirement 6). Articles carry no story-only fields (type-level exclusivity). */
+export type ContentType = 'article' | 'short_story' | 'long_story';
+
+/** Story genre (Requirement 6.4). Open string so custom genres beyond the required three are allowed. */
+export type StoryGenre = 'fantasy' | 'sci_fi' | 'mystery' | (string & {});
+
 /** Four-stage mastery (most important semantic). */
 export type MasteryStage = 'New' | 'Learning' | 'Consolidating' | 'Mastered';
 
@@ -64,11 +94,14 @@ export interface ReviewLogEntry {
 
 export interface PassageMeta {
   title: string;
-  theme: string;
+  /** Learning intent this passage serves (was: `theme: string`; Dexie index replaced too). */
+  intent: LearningIntent;
   level: Cefr;
   newCount: number;
   reviewCount: number;
   approxWords: number;
+  /** Link to the owning story chapter (Requirement 6.6). Absent for standalone articles. */
+  storyRef?: { storyId: string; chapterIndex: number };
 }
 
 /**
@@ -162,6 +195,93 @@ export interface PassageOutput {
   targetSpans: TargetSpan[];
   collocationSpans: CollocationSpan[];
   noticeCues: NoticeCue[];
+}
+
+// ── Story scaffold (Requirement 6) ───────────────────────────────────────────
+
+/** A character in a generated story plan. */
+export interface StoryCharacter {
+  name: string;
+  role: string;
+  descriptionJa: string;
+  /**
+   * Generated portrait as a base64 `data:` URL (Requirement 6.8). Optional enrichment: absent when
+   * illustration is disabled, unconfigured, or the image call failed. Stored inline with the plan
+   * (the sole deliberate exception to lexiaDb's "blobs are never stored" convention — there is no CDN).
+   */
+  illustrationUrl?: string;
+}
+
+/** One chapter's heading + beat in the story plan (short stories have a single element). */
+export interface ChapterPlan {
+  index: number;
+  headingJa: string;
+  beatJa: string;
+}
+
+/**
+ * A story plan (Requirement 6.2): characters, synopsis and chapter structure generated
+ * BEFORE the body text and confirmed by the learner (6.3). Persisted in the `stories` store
+ * only after confirmation.
+ */
+export interface StoryPlan {
+  storyId: string;
+  contentType: Exclude<ContentType, 'article'>;
+  genre: StoryGenre;
+  /** Reference to an existing novel homage — style/motif only, never verbatim copy (6.5). */
+  homage?: { title: string; styleNoteJa: string };
+  titleJa: string;
+  synopsisJa: string;
+  characters: StoryCharacter[];
+  /** Chapter headings/beats (short story ⇒ one element; long story ⇒ many). */
+  chapters: ChapterPlan[];
+}
+
+/** Consistency context supplied to each chapter's generation (6.6). */
+export interface StoryContext {
+  storyId: string;
+  chapterIndex: number;
+  plan: StoryPlan;
+  /** Summary of prior chapters (long-story consistency supply). */
+  priorSummaryJa?: string;
+}
+
+/** Request for a story plan (Requirement 6.2). */
+export interface StoryPlanRequest {
+  contentType: Exclude<ContentType, 'article'>;
+  genre: StoryGenre;
+  homageTitle?: string;
+  intent: LearningIntent;
+  level: Cefr;
+}
+
+/** Request to extend an existing long-story plan when the next chapter beat is missing. */
+export interface StoryPlanExtensionRequest {
+  plan: StoryPlan;
+  /** First chapter index that must be newly planned. */
+  nextChapterIndex: number;
+  /** Summary of already generated chapters, used to continue the plot coherently. */
+  priorSummaryJa?: string;
+  /** Number of additional chapter beats to append. */
+  additionalChapters?: number;
+}
+
+/** Request for a single character's portrait illustration (Requirement 6.8). */
+export interface CharacterIllustrationRequest {
+  name: string;
+  role: string;
+  descriptionJa: string;
+  genre: StoryGenre;
+  /** Style/motif hint (from the plan's homage note or genre) to keep the cast visually coherent. */
+  styleHint?: string;
+}
+
+/** Persistence envelope for a confirmed story plan (`stories` store). */
+export interface StoryRecord {
+  storyId: string;
+  userId: UserId;
+  createdAt: number;
+  plan: StoryPlan;
 }
 
 // ── Tokenizer index (single token truth source) ──────────────────────────────
@@ -275,10 +395,17 @@ export interface ReadingProgress {
 }
 
 export interface SetupConfig {
-  level: Cefr;
-  themes: string[];
+  /** Exam-based difficulty (Requirement 9). Mapped to `Cefr` at generation time. Was: `level: Cefr`. */
+  examTarget: ExamCriterion;
+  /** Single learning intent (Requirement 8). Was: `themes: string[]`. */
+  intent: LearningIntent;
   newWordRatio: number;
-  length: 'short' | 'medium' | 'long';
+  /** 100-word-step word count (Requirement 7). Was: `length: 'short'|'medium'|'long'`. */
+  wordTarget: number;
+  /** Content kind (Requirement 6). */
+  contentType: ContentType;
+  /** Genre/homage for stories (unused for articles). */
+  storyOptions?: { genre: StoryGenre; homageTitle?: string };
   targetWordIds: string[];
   excludedWordIds: string[];
 }
@@ -305,11 +432,17 @@ export interface GenerationTargetWord {
 }
 
 export interface GenerationRequest {
-  level: Cefr;
-  themes: string[];
+  level: Cefr; // resolved from SetupConfig.examTarget via examScale (internal pivot)
+  /** Single learning intent (Requirement 8). Was: `themes: string[]`. */
+  intent: LearningIntent;
   newWordRatio: number;
-  length: 'short' | 'medium' | 'long';
+  /** 100-word-step word count (Requirement 7). Was: `length: 'short'|'medium'|'long'`. */
+  wordTarget: number;
+  /** Content kind (Requirement 6). */
+  contentType: ContentType;
   targetWords: GenerationTargetWord[];
+  /** Story-chapter consistency context (Requirement 6.6). Unset for standalone articles. */
+  storyContext?: StoryContext;
   /**
    * Set by the orchestrator on a repair attempt: human-readable descriptions of the
    * violations the previous generation hit, fed back into the prompt so the model fixes
@@ -341,11 +474,37 @@ export interface PassageAnnotationRequest {
  */
 export interface WordSuggestionRequest {
   level: Cefr;
-  themes: string[];
+  /** Single learning intent (Requirement 8). Was: `themes: string[]`. */
+  intent: LearningIntent;
   /** How many lemmas to propose. */
   count: number;
   /** Lemmas to avoid (already excluded/known); lowercase. */
   exclude?: string[];
+}
+
+// ── Word suggestion (Requirement 5) ──────────────────────────────────────────
+
+/** A suggested word to weave in (base-form lemma + display surface). */
+export interface CandidateWord {
+  wordId: string;
+  surface: string;
+}
+
+export interface SuggestionInput {
+  userId: UserId;
+  level: Cefr;
+  intent: LearningIntent;
+  /** Words the learner already excluded (lowercase lemma). */
+  excludedWordIds: string[];
+  /** How many candidates to present. */
+  count: number;
+}
+
+export interface SuggestionResult {
+  /** ABC-ordered, deduped candidates with introduced/excluded words removed. */
+  candidates: CandidateWord[];
+  /** Present when fewer than `count` candidates were available (Requirement 5.5). */
+  shortfall?: { requested: number; available: number; reason: 'exhausted' | 'gateway_unavailable' };
 }
 
 /** Anthropic-style stop reasons relevant to generation gating. */

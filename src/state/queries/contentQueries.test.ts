@@ -7,9 +7,10 @@ import type { GenerationRequest, IndexedPassage } from '../../types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
-  themes: ['travel', 'email'],
+  intent: 'travel',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWords: [
     { wordId: 'w2', surface: 'b', masteryDensity: 'new' },
     { wordId: 'w1', surface: 'a', masteryDensity: 'new' },
@@ -18,7 +19,7 @@ const req: GenerationRequest = {
 
 function indexed(): IndexedPassage {
   return tokenizer.index('p1', {
-    meta: { title: 't', theme: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 2 },
+    meta: { title: 't', intent: 'travel', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 2 },
     sentences: [{ tokens: ['Hello', '.'], translationJa: '' }],
     targetSpans: [],
     collocationSpans: [],

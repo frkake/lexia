@@ -1,11 +1,11 @@
 /**
  * L1 — DashboardProjector: derives the DashboardSnapshot from scheduling state,
- * reading progress, the review log and recent passages (design.md "DashboardProjector").
+ * reading progress, the review log and passages (design.md "DashboardProjector").
  * Pure — the caller fetches the fixtures, the projector computes the view model:
  *   - 4-stage mastery breakdown + total;
  *   - words due by end of today (+ a due list);
  *   - current streak and a 7-day weekly activity window;
- *   - in-progress reading and recently read passages.
+ *   - in-progress reading ("最近開いた文章"), newest-opened first (capped at readingLimit).
  * Day bucketing uses UTC midnight boundaries so it is deterministic under test.
  */
 
@@ -41,14 +41,6 @@ export interface ReadingNowItem {
   sentenceIndex: number;
 }
 
-export interface RecentPassageItem {
-  passageId: string;
-  title: string;
-  theme: string;
-  createdAt: number;
-  completed: boolean;
-}
-
 export interface DashboardSnapshot {
   dueTodayCount: number;
   mastery: MasteryBreakdown;
@@ -56,7 +48,6 @@ export interface DashboardSnapshot {
   weekly: WeeklyActivityDay[];
   dueList: DueWordItem[];
   streakDays: number;
-  recent: RecentPassageItem[];
 }
 
 export interface DashboardInput {
@@ -64,9 +55,10 @@ export interface DashboardInput {
   states: WordSchedulingState[];
   progress: ReadingProgress[];
   log: ReviewLogEntry[];
+  /** Passages backing the in-progress reading cards (used to resolve titles / levels). */
   passages: PassageRecord[];
-  /** Max recently-read passages to include (default 5). */
-  recentLimit?: number;
+  /** Max in-progress "continue reading" items to include, newest-started first (default 3). */
+  readingLimit?: number;
   /** Weekly window length in days (default 7). */
   weeklyDays?: number;
 }
@@ -86,7 +78,7 @@ const STAGE_KEY: Record<MasteryStage, keyof Omit<MasteryBreakdown, 'total'>> = {
 
 function project(input: DashboardInput): DashboardSnapshot {
   const { now, states, progress, log, passages } = input;
-  const recentLimit = input.recentLimit ?? 5;
+  const readingLimit = input.readingLimit ?? 3;
   const weeklyDays = input.weeklyDays ?? 7;
   const today = startOfDay(now);
   const endOfToday = today + DAY_MS;
@@ -134,6 +126,7 @@ function project(input: DashboardInput): DashboardSnapshot {
   const reading: ReadingNowItem[] = progress
     .filter((p) => p.status === 'in_progress')
     .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, readingLimit)
     .map((p) => {
       const meta = passageById.get(p.passageId)?.passage.meta;
       return {
@@ -145,20 +138,7 @@ function project(input: DashboardInput): DashboardSnapshot {
       };
     });
 
-  // Recently read passages, newest-created first, with completion flags.
-  const completed = new Set(progress.filter((p) => p.status === 'completed').map((p) => p.passageId));
-  const recent: RecentPassageItem[] = [...passages]
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, recentLimit)
-    .map((p) => ({
-      passageId: p.passageId,
-      title: p.passage.meta.title,
-      theme: p.passage.meta.theme,
-      createdAt: p.createdAt,
-      completed: completed.has(p.passageId),
-    }));
-
-  return { dueTodayCount: due.length, mastery, reading, weekly, dueList, streakDays, recent };
+  return { dueTodayCount: due.length, mastery, reading, weekly, dueList, streakDays };
 }
 
 export const dashboardProjector: DashboardProjector = { project };

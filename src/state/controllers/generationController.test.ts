@@ -11,9 +11,11 @@ import { ok } from '../../types/result';
 import type { GenerationOrchestrator } from '../../domain/generation/generationOrchestrator';
 import type {
   AudioAsset,
+  GenerationRequest,
   IndexedPassage,
   PassageOutput,
   SetupConfig,
+  StoryPlan,
   TimingMap,
   UserId,
 } from '../../types/domain';
@@ -33,7 +35,7 @@ const PASSAGE_ID = 'p1';
 
 function passageOutput(): PassageOutput {
   return {
-    meta: { title: '取引成立', theme: '交渉', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
+    meta: { title: '取引成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
     sentences: [{ tokens: ['The', 'deal', 'closed', '.'], translationJa: '取引が成立した。' }],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [],
@@ -46,10 +48,11 @@ function indexedPassage(): IndexedPassage {
 }
 
 const SETUP: SetupConfig = {
-  level: 'B1',
-  themes: ['交渉'],
+  examTarget: { kind: 'eiken', value: '2' },
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWordIds: ['deal'],
   excludedWordIds: [],
 };
@@ -125,6 +128,40 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect(seeded?.mastery).toBe('New');
     const inProgress = await repos.progress.byStatus(userId, 'in_progress');
     expect(inProgress.map((p) => p.passageId)).toContain(PASSAGE_ID);
+  });
+
+  it('threads story context and persists the generated chapter with storyRef', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    const { deps, repos, userId } = await env(tts);
+    const plan: StoryPlan = {
+      storyId: 'story_1',
+      contentType: 'long_story',
+      genre: 'fantasy',
+      titleJa: '星の物語',
+      synopsisJa: '星を探す旅。',
+      characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+      chapters: [{ index: 0, headingJa: '第一章', beatJa: '旅立ち' }],
+    };
+    let capturedReq: GenerationRequest | null = null;
+    deps.createOrchestrator = (passageId) => ({
+      generate: async (req) => {
+        capturedReq = req;
+        return ok(tokenizer.index(passageId, passageOutput()));
+      },
+    });
+
+    const outcome = await runGenerationPipeline(deps, { ...SETUP, contentType: 'long_story' }, userId, {
+      passageId: 'story_1:0',
+      storyContext: { storyId: 'story_1', chapterIndex: 0, plan },
+    });
+    await outcome.audio;
+
+    expect(outcome.passageId).toBe('story_1:0');
+    expect(capturedReq).not.toBeNull();
+    const reqSeen = capturedReq as unknown as GenerationRequest;
+    expect(reqSeen.storyContext?.plan.titleJa).toBe('星の物語');
+    const persisted = await repos.passages.get('story_1:0');
+    expect(persisted?.passage.meta.storyRef).toEqual({ storyId: 'story_1', chapterIndex: 0 });
   });
 
   it('degrades on TTS failure — text continues, player marked unavailable', async () => {

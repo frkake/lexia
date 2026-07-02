@@ -4,7 +4,9 @@
  * One database per learner, named `lexia_<userId>` (`anonymous` before sign-in,
  * migrated on first sign-in). Numbered migrations via `version(n).stores().upgrade()`;
  * the latest declared version is APP_SCHEMA_VERSION and is mirrored into the settings
- * store. Audio/illustration blobs are never stored — only external URL references.
+ * store. Audio/illustration blobs are never stored — only external URL references. The one
+ * deliberate exception (Requirement 6.8): story character portraits have no CDN, so they are
+ * stored inline as base64 `data:` URLs within `StoryRecord.plan.characters[].illustrationUrl`.
  */
 
 import Dexie, { type Table, type Transaction } from 'dexie';
@@ -16,8 +18,12 @@ import type {
   TimingMap,
   ReadingProgress,
   Settings,
+  StoryRecord,
   WordData,
 } from '../../types/domain';
+import { lengthSpec } from '../../domain/generation/lengthSpec';
+import { cefrToDefaultExam } from '../../domain/difficulty/examScale';
+import type { Cefr, LearningIntent } from '../../types/domain';
 
 /** Settings row persisted with the schema version it was written under. */
 export interface StoredSettings extends Settings {
@@ -42,6 +48,47 @@ export interface SchemaVersion {
  * scheduling.stability (candidate selection), reviewLog.at + [userId+wordId]
  * (append-only replay / cooldown), progress.status (dashboard).
  */
+/** Coarse mapping of a legacy free-text theme tag onto the closed LearningIntent enum. */
+function legacyThemeToIntent(themes: unknown): LearningIntent {
+  const first = Array.isArray(themes) && typeof themes[0] === 'string' ? themes[0].toLowerCase() : '';
+  const known: Record<string, LearningIntent> = {
+    business: 'business',
+    daily: 'daily',
+    toeic: 'toeic',
+    eiken: 'eiken',
+    academic: 'academic',
+    travel: 'travel',
+  };
+  return known[first] ?? 'daily'; // unknown (incl. Japanese tags) → daily
+}
+
+/**
+ * Convert a legacy (v1) `lastSetup` — `{ level, themes, length }` — into the new SetupConfig shape
+ * (`examTarget` / `intent` / `wordTarget` / `contentType`). Best-effort seed; strict fidelity is not
+ * required (it only seeds the setup form). Idempotent: an already-migrated row passes through.
+ */
+function migrateLastSetup(raw: unknown): Record<string, unknown> {
+  const setup = (raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {}) as Record<string, unknown>;
+  if (!('examTarget' in setup) && 'level' in setup) {
+    setup.examTarget = cefrToDefaultExam((setup.level as Cefr) ?? 'B1');
+  }
+  if (!('intent' in setup)) {
+    setup.intent = legacyThemeToIntent(setup.themes);
+  }
+  if (!('wordTarget' in setup) && 'length' in setup) {
+    const legacy = setup.length;
+    setup.wordTarget =
+      legacy === 'short' || legacy === 'medium' || legacy === 'long' ? lengthSpec.migrateLegacyLength(legacy) : 400;
+  }
+  if (!('contentType' in setup)) setup.contentType = 'article';
+  if (!Array.isArray(setup.targetWordIds)) setup.targetWordIds = [];
+  if (!Array.isArray(setup.excludedWordIds)) setup.excludedWordIds = [];
+  delete setup.level;
+  delete setup.themes;
+  delete setup.length;
+  return setup;
+}
+
 export const SCHEMA_VERSIONS: SchemaVersion[] = [
   {
     version: 1,
@@ -53,6 +100,26 @@ export const SCHEMA_VERSIONS: SchemaVersion[] = [
       progress: '[userId+passageId], userId, status, completedAt',
       settings: 'userId',
       wordCache: '[userId+wordId], userId',
+    },
+  },
+  {
+    // v2 (learning-experience-overhaul): convert saved settings to the new SetupConfig shape,
+    // replace the passages theme index with an intent index (+ story link), and add the stories
+    // store for confirmed story plans. Additive — v1 above is never edited.
+    version: 2,
+    stores: {
+      // theme → intent index; add story-link index (article passages leave it undefined).
+      passages: 'passageId, userId, passage.meta.intent, passage.meta.storyRef.storyId, createdAt',
+      stories: 'storyId, userId, createdAt',
+    },
+    upgrade: async (tx) => {
+      await tx
+        .table('settings')
+        .toCollection()
+        .modify((row: Record<string, unknown>) => {
+          row.lastSetup = migrateLastSetup(row.lastSetup);
+          row.appSchemaVersion = 2;
+        });
     },
   },
 ];
@@ -73,6 +140,7 @@ export class LexiaDb extends Dexie {
   progress!: Table<ReadingProgress, [UserId, string]>;
   settings!: Table<StoredSettings, UserId>;
   wordCache!: Table<WordCacheRecord, [UserId, string]>;
+  stories!: Table<StoryRecord, string>;
 
   /**
    * @param userId  learner namespace (`anonymous` before sign-in)

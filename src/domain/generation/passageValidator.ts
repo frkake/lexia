@@ -25,7 +25,11 @@ export type SpanViolationKind =
   | 'cue_surface_mismatch'
   | 'cefr_out_of_band'
   | 'length_out_of_range'
-  | 'translation_span_mismatch';
+  | 'translation_span_mismatch'
+  | 'verbatim_copy';
+
+/** Minimum consecutive-word run (matched verbatim against a homage reference) that counts as copying. */
+export const VERBATIM_COPY_MIN_RUN = 8;
 
 /** Identifies a translation-side span by sentence + JA char range (for last-resort dropping). */
 export interface TranslationSpanRef {
@@ -68,6 +72,12 @@ export interface ValidationContext {
   approxWords?: number;
   /** External CEFR band lookup for a lowercased token; undefined ⇒ unknown band. */
   cefrOf?: (token: string) => Cefr | undefined;
+  /**
+   * Reference text of the homage work (Requirement 6.5). When present, the validator flags long
+   * verbatim consecutive runs shared with it as `verbatim_copy` (copyright guard). Absent for
+   * originals/articles ⇒ the check is skipped.
+   */
+  homageReference?: string;
 }
 
 export interface ValidationReport {
@@ -118,6 +128,35 @@ function isInflectionOf(form: string, base: string, inflections?: string[]): boo
 }
 
 const isWord = (token: string): boolean => /[a-zA-Z]/.test(token);
+
+/** Lowercased word tokens of a free-text string (letters/digits runs), for verbatim-run matching. */
+function wordSequence(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9']+/g) ?? []);
+}
+
+/**
+ * Length (in words) of the longest run of the passage's words that appears verbatim and consecutively
+ * in the homage reference. A long shared run indicates copied text (Requirement 6.5). O(n·m) over the
+ * word counts — fine for a passage vs. a short style reference.
+ */
+function longestVerbatimRun(passageWords: string[], referenceWords: string[]): number {
+  if (passageWords.length === 0 || referenceWords.length === 0) return 0;
+  const m = referenceWords.length;
+  // prev[j] = length of the shared run ending at passageWords[i-1] & referenceWords[j-1].
+  let prev = new Array<number>(m + 1).fill(0);
+  let best = 0;
+  for (let i = 1; i <= passageWords.length; i += 1) {
+    const cur = new Array<number>(m + 1).fill(0);
+    for (let j = 1; j <= m; j += 1) {
+      if (passageWords[i - 1] === referenceWords[j - 1]) {
+        cur[j] = prev[j - 1]! + 1;
+        if (cur[j]! > best) best = cur[j]!;
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
 
 // ── Service ──────────────────────────────────────────────────────────────────
 
@@ -262,6 +301,21 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
       violations.push({
         kind: 'length_out_of_range',
         detail: `passage has ${totalWords} words vs requested ~${ctx.approxWords}`,
+      });
+    }
+  }
+
+  // Homage verbatim-copy guard (6.5): when a homage reference is supplied, a long consecutive run
+  // shared with it indicates copied text (not the style/motif reference we allow). Lightweight —
+  // skipped entirely for originals/articles (no reference).
+  if (ctx.homageReference && ctx.homageReference.trim()) {
+    const passageWords = sentences.flatMap((s) => wordSequence(s.tokens.join(' ')));
+    const referenceWords = wordSequence(ctx.homageReference);
+    const run = longestVerbatimRun(passageWords, referenceWords);
+    if (run >= VERBATIM_COPY_MIN_RUN) {
+      violations.push({
+        kind: 'verbatim_copy',
+        detail: `passage shares a ${run}-word verbatim run with the homage source (≥ ${VERBATIM_COPY_MIN_RUN})`,
       });
     }
   }

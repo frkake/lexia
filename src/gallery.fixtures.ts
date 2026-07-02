@@ -21,7 +21,7 @@ const TODAY = startOfDay(FIXED_NOW);
 // ── Reading (rich annotations: 3 densities + collocations + 3 notice categories) ──
 
 const READING_OUTPUT: PassageOutput = {
-  meta: { title: '交渉のテーブルで', theme: '交渉', level: 'B2', newCount: 2, reviewCount: 2, approxWords: 19 },
+  meta: { title: '交渉のテーブルで', intent: 'business', level: 'B2', newCount: 2, reviewCount: 2, approxWords: 19 },
   sentences: [
     {
       tokens: ['The', 'negotiation', 'reached', 'a', 'decisive', 'turning', 'point', '.'],
@@ -90,7 +90,10 @@ const WEEKLY_COUNTS = [3, 5, 2, 8, 4, 6, 9];
 export const dashboardSnapshot: DashboardSnapshot = {
   dueTodayCount: 12,
   mastery: { new: 48, learning: 32, consolidating: 21, mastered: 15, total: 116 },
-  reading: [{ passageId: 'p1', title: '交渉のテーブルで', level: 'B2', percent: 45, sentenceIndex: 3 }],
+  reading: [
+    { passageId: 'p1', title: '交渉のテーブルで', level: 'B2', percent: 45, sentenceIndex: 3 },
+    { passageId: 'p2', title: '四半期レビュー', level: 'B1', percent: 20, sentenceIndex: 1 },
+  ],
   weekly: WEEKLY_COUNTS.map((reviewCount, i) => ({ dayStartMs: TODAY - (6 - i) * DAY_MS, reviewCount })),
   dueList: [
     { wordId: 'decisive', dueAt: TODAY, mastery: 'Learning' },
@@ -100,10 +103,6 @@ export const dashboardSnapshot: DashboardSnapshot = {
     { wordId: 'resilient', dueAt: TODAY + 3 * DAY_MS, mastery: 'Mastered' },
   ],
   streakDays: 6,
-  recent: [
-    { passageId: 'p1', title: '交渉のテーブルで', theme: '交渉', createdAt: FIXED_NOW - DAY_MS, completed: false },
-    { passageId: 'p2', title: '四半期レビュー', theme: '財務', createdAt: FIXED_NOW - 2 * DAY_MS, completed: true },
-  ],
 };
 
 export const dueGlosses: Record<string, string> = {
@@ -163,10 +162,11 @@ export const setupCandidates: CandidateWord[] = [
 ];
 
 export const setupInitial: Partial<SetupConfig> = {
-  level: 'B2',
-  themes: ['交渉', '会議'],
+  examTarget: { kind: 'eiken', value: '準1' },
+  intent: 'business',
   newWordRatio: 0.3,
-  length: 'medium',
+  wordTarget: 250,
+  contentType: 'article',
 };
 
 // ── Wordbook ─────────────────────────────────────────────────────────────────

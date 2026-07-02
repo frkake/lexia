@@ -9,9 +9,8 @@ import type { CSSProperties } from 'react';
 import { colors, fonts } from '../theme/tokens';
 
 const DESTINATIONS: { to: string; label: string; end?: boolean }[] = [
-  { to: '/', label: 'ダッシュボード', end: true },
-  { to: '/setup', label: '学習をはじめる' },
-  { to: '/read', label: '読む' },
+  { to: '/', label: 'ホーム', end: true },
+  { to: '/library', label: '文章' },
   { to: '/review', label: '復習' },
   { to: '/wordbook', label: '単語帳' },
 ];

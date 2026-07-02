@@ -62,7 +62,7 @@ describe('JsonSyncAdapter', () => {
       rate: 1,
       theme: 'light',
       locale: 'ja',
-      lastSetup: { level: 'B1', themes: ['travel'], newWordRatio: 0.3, length: 'short', targetWordIds: ['w1'], excludedWordIds: [] },
+      lastSetup: { examTarget: { kind: 'eiken', value: '2' }, intent: 'travel', newWordRatio: 0.3, wordTarget: 200, contentType: 'article', targetWordIds: ['w1'], excludedWordIds: [] },
     });
 
     const blob = await new JsonSyncAdapter(dbA).export(U);

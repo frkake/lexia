@@ -23,6 +23,11 @@ import type {
   Settings,
   NoticeCue,
   PassageAnnotationRequest,
+  CharacterIllustrationRequest,
+  StoryPlan,
+  StoryPlanExtensionRequest,
+  StoryPlanRequest,
+  StoryRecord,
 } from './domain';
 
 // ── Adjacent capability seams ────────────────────────────────────────────────
@@ -54,6 +59,33 @@ export interface ContentGateway {
    * Optional so lightweight gateways/mocks need not implement it; enrichment is skipped when absent.
    */
   annotatePassage?(req: PassageAnnotationRequest): Promise<NoticeCue[]>;
+}
+
+/**
+ * Story-plan generation proxy (Requirement 6). Optional/adjacent to ContentGateway: it produces the
+ * character/plot/chapter scaffold BEFORE the body text. Credentials stay server-side; when the port
+ * is unconfigured the caller errors (no mock fallback), per the project's generation policy.
+ */
+export interface StoryGateway {
+  /** Generate a story plan (characters, synopsis, chapters) for the requested type/genre/homage. */
+  planStory(req: StoryPlanRequest): Promise<StoryPlan>;
+  /** Extend an existing long-story plan with additional future chapter beats. */
+  extendStoryPlan?(req: StoryPlanExtensionRequest): Promise<StoryPlan>;
+  /**
+   * Generate one character's portrait, returning a base64 `data:` URL (Requirement 6.8). Optional
+   * enrichment (like ContentGateway.annotatePassage) so lightweight gateways/mocks need not implement
+   * it; when absent, illustration is skipped. Credentials stay server-side; a missing/broken image
+   * API rejects (no mock fallback) and the caller degrades to no portrait.
+   */
+  illustrateCharacter?(req: CharacterIllustrationRequest): Promise<string>;
+}
+
+/** Persistence of confirmed story plans (`stories` store). */
+export interface StoryRepository {
+  get(storyId: string): Promise<StoryRecord | undefined>;
+  put(record: StoryRecord): Promise<void>;
+  /** Most-recently created stories first for a learner. */
+  recent(userId: UserId, limit: number): Promise<StoryRecord[]>;
 }
 
 /** Audio synthesis + token-resolved timing maps. */
@@ -108,6 +140,10 @@ export interface PassageRepository {
   put(record: PassageRecord): Promise<void>;
   /** Most-recently created passages first. */
   recent(userId: UserId, limit: number): Promise<PassageRecord[]>;
+  /** Every passage for a learner, most-recently created first (library + search input). */
+  all(userId: UserId): Promise<PassageRecord[]>;
+  /** Story chapters for a learner, ordered by chapter index. */
+  byStory(userId: UserId, storyId: string): Promise<PassageRecord[]>;
 }
 
 export interface TimingMapRepository {

@@ -8,15 +8,20 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     expect(values.every((v) => typeof v === 'boolean')).toBe(true);
   });
 
-  it('ships the completed display-improvement cluster ON by default (newReadingLayout)', () => {
-    // The reading-layout cluster (Requirements 1–4) is implemented end-to-end, so it ships on.
+  it('ships the completed display + generation clusters ON by default', () => {
+    // Reading layout (Req 1–4) and generation setup (Req 5/7/8/9) are implemented end-to-end.
     expect(DEFAULT_FEATURE_FLAGS.newReadingLayout).toBe(true);
+    expect(DEFAULT_FEATURE_FLAGS.newGenerationSetup).toBe(true);
   });
 
-  it('keeps the not-yet-built generation/story clusters OFF by default', () => {
-    // These phases are not implemented yet, so they stay default-off to preserve behavior.
-    expect(DEFAULT_FEATURE_FLAGS.newGenerationSetup).toBe(false);
-    expect(DEFAULT_FEATURE_FLAGS.storyMode).toBe(false);
+  it('ships the story cluster ON by default once the confirmation gate is wired', () => {
+    // The story flow (Requirement 6) now goes through plan -> confirm -> chapter generation.
+    expect(DEFAULT_FEATURE_FLAGS.storyMode).toBe(true);
+  });
+
+  it('enables character illustrations by default (6.8 — graceful when no image API)', () => {
+    // Rides inside storyMode; on by default so stories are illustrated when an image API is configured.
+    expect(DEFAULT_FEATURE_FLAGS.characterIllustrations).toBe(true);
   });
 
   it('resolves to the defaults when no overrides are given', () => {
@@ -27,8 +32,8 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     // Override the default-on flag OFF to prove the override path works (kill-switch).
     const resolved = resolveFeatureFlags({ newReadingLayout: false });
     expect(resolved.newReadingLayout).toBe(false);
-    // Other flags stay at their default.
-    expect(resolved.newGenerationSetup).toBe(false);
+    // Other flags stay at their default (storyMode remains on).
+    expect(resolved.storyMode).toBe(true);
     // The shared default object is not mutated.
     expect(DEFAULT_FEATURE_FLAGS.newReadingLayout).toBe(true);
   });

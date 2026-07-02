@@ -13,18 +13,27 @@ export interface FeatureFlags {
   newGenerationSetup: boolean;
   /** Story cluster (Requirement 6): the plan → confirm → chapter story flow. */
   storyMode: boolean;
+  /**
+   * Character illustration (Requirement 6.8): generate + display a portrait per story character on
+   * the confirmation gate. Rides inside storyMode; ON by default so stories are illustrated whenever
+   * an image API is configured (graceful degradation covers the unconfigured case). Turn OFF to skip
+   * image generation independently of storyMode.
+   */
+  characterIllustrations: boolean;
 }
 
 /**
  * Default rollout state. A flag turns on only when its cluster is implemented end-to-end:
- * `newReadingLayout` (Requirements 1–4) is complete and ships ON; the generation/story phases are
- * not built yet and stay OFF so existing behavior is preserved until they land. `resolveFeatureFlags`
- * still lets a caller override any flag (e.g. a kill-switch or an env read).
+ * `newReadingLayout` (Requirements 1–4) and `newGenerationSetup` (Requirements 5/7/8/9 — the
+ * reworked setup → request → validation pipeline) are complete and ship ON. `storyMode`
+ * (Requirement 6) is now wired through the plan-confirm-chapter flow and ships ON by default.
+ * `resolveFeatureFlags` still lets a caller override any flag (e.g. a kill-switch or env read).
  */
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   newReadingLayout: true,
-  newGenerationSetup: false,
-  storyMode: false,
+  newGenerationSetup: true,
+  storyMode: true,
+  characterIllustrations: true,
 };
 
 /**

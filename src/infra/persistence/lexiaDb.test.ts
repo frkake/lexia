@@ -59,10 +59,11 @@ describe('LexiaDb schema + migrations', () => {
       theme: 'system',
       locale: 'ja',
       lastSetup: {
-        level: 'B1',
-        themes: [],
+        examTarget: { kind: 'eiken', value: '2' },
+        intent: 'daily',
         newWordRatio: 0.3,
-        length: 'short',
+        wordTarget: 200,
+        contentType: 'article',
         targetWordIds: [],
         excludedWordIds: [],
       },
@@ -137,5 +138,101 @@ describe('LexiaDb schema + migrations', () => {
 
   it('requestPersistentStorage resolves false when the Storage API is unavailable', async () => {
     expect(await requestPersistentStorage()).toBe(false);
+  });
+
+  // ── Requirement 6.6 / 7.5 / 8.5 / 9.5: additive v2 migration ────────────────
+  describe('v2 migration (settings convert / stories store / appSchemaVersion stamp)', () => {
+    it('converts a legacy settings row (level→examTarget, length→wordTarget, themes→intent) and stamps v2', async () => {
+      const U = 'u_v2_settings' as UserId;
+
+      // Seed at v1 with the OLD SetupConfig shape (level / themes / length).
+      const v1 = new LexiaDb(U, [SCHEMA_VERSIONS[0]!]);
+      await v1.open();
+      await v1.table('settings').put({
+        userId: U,
+        translationMode: 'off',
+        fontScale: 1,
+        voiceId: 'v',
+        rate: 1,
+        theme: 'system',
+        locale: 'ja',
+        lastSetup: { level: 'B2', themes: ['business'], newWordRatio: 0.3, length: 'long', targetWordIds: [], excludedWordIds: [] },
+        appSchemaVersion: 1,
+      } as never);
+      v1.close();
+
+      // Open at the real latest schema (which includes v2).
+      const db = new LexiaDb(U);
+      await db.open();
+      expect(db.verno).toBe(APP_SCHEMA_VERSION);
+      expect(APP_SCHEMA_VERSION).toBeGreaterThanOrEqual(2);
+
+      const stored = (await db.settings.get(U)) as StoredSettings & {
+        lastSetup: { level?: unknown; themes?: unknown; length?: unknown };
+      };
+      // Difficulty: CEFR B2 → an exam criterion (default 英検 準1).
+      expect(stored.lastSetup.examTarget).toEqual({ kind: 'eiken', value: '準1' });
+      // Length: legacy 'long' → 800-word target.
+      expect(stored.lastSetup.wordTarget).toBe(800);
+      // Themes: 'business' theme → business intent.
+      expect(stored.lastSetup.intent).toBe('business');
+      // Content type defaults to article.
+      expect(stored.lastSetup.contentType).toBe('article');
+      // Legacy fields removed.
+      expect(stored.lastSetup.level).toBeUndefined();
+      expect(stored.lastSetup.themes).toBeUndefined();
+      expect(stored.lastSetup.length).toBeUndefined();
+      // Version stamp updated.
+      expect(stored.appSchemaVersion).toBe(APP_SCHEMA_VERSION);
+      db.close();
+    });
+
+    it('maps an unknown legacy theme to the daily intent', async () => {
+      const U = 'u_v2_theme' as UserId;
+      const v1 = new LexiaDb(U, [SCHEMA_VERSIONS[0]!]);
+      await v1.open();
+      await v1.table('settings').put({
+        userId: U,
+        translationMode: 'off',
+        fontScale: 1,
+        voiceId: 'v',
+        rate: 1,
+        theme: 'system',
+        locale: 'ja',
+        lastSetup: { level: 'A2', themes: ['交渉'], newWordRatio: 0.3, length: 'short', targetWordIds: [], excludedWordIds: [] },
+        appSchemaVersion: 1,
+      } as never);
+      v1.close();
+
+      const db = new LexiaDb(U);
+      await db.open();
+      const stored = await db.settings.get(U);
+      expect(stored?.lastSetup.intent).toBe('daily'); // unknown → daily fallback
+      expect(stored?.lastSetup.wordTarget).toBe(200); // short → 200
+      db.close();
+    });
+
+    it('provisions the stories store so confirmed plans can be persisted', async () => {
+      const U = 'u_v2_stories' as UserId;
+      const db = new LexiaDb(U);
+      await db.open();
+      const record = {
+        storyId: 's1',
+        userId: U,
+        createdAt: 123,
+        plan: {
+          storyId: 's1',
+          contentType: 'short_story' as const,
+          genre: 'fantasy',
+          titleJa: '物語',
+          synopsisJa: 'あらすじ',
+          characters: [],
+          chapters: [{ index: 0, headingJa: '第一章', beatJa: 'ビート' }],
+        },
+      };
+      await db.stories.put(record);
+      expect(await db.stories.get('s1')).toEqual(record);
+      db.close();
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { dashboardProjector } from './dashboardProjector';
 import { DAY_MS, HOUR_MS } from '../srs/parameters';
-import type { UserId, WordSchedulingState, ReadingProgress, ReviewLogEntry } from '../../types/domain';
+import type { UserId, WordSchedulingState, ReadingProgress, ReviewLogEntry, LearningIntent } from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
 
 const U = 'u1' as UserId;
@@ -29,13 +29,13 @@ function log(wordId: string, at: number): ReviewLogEntry {
   return { userId: U, wordId, rating: 3, source: 'review', at };
 }
 
-function passageRecord(passageId: string, createdAt: number, title: string, theme: string): PassageRecord {
+function passageRecord(passageId: string, createdAt: number, title: string, intent: LearningIntent): PassageRecord {
   return {
     passageId,
     userId: U,
     createdAt,
     passage: {
-      meta: { title, theme, level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+      meta: { title, intent, level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
       sentences: [],
       targetSpans: [],
       collocationSpans: [],
@@ -100,9 +100,28 @@ describe('DashboardProjector', () => {
     expect(snap.reading[0]).toMatchObject({ passageId: 'p1', title: 'Story One', percent: 40, sentenceIndex: 2 });
   });
 
-  it('lists recent passages newest-first with completion flags', () => {
-    expect(snap.recent.map((r) => r.passageId)).toEqual(['p1', 'p2']);
-    expect(snap.recent.find((r) => r.passageId === 'p2')!.completed).toBe(true);
-    expect(snap.recent.find((r) => r.passageId === 'p1')!.completed).toBe(false);
+  it('caps in-progress reading at readingLimit, newest-started first (default 3)', () => {
+    const many: ReadingProgress[] = Array.from({ length: 6 }, (_, i) => ({
+      userId: U,
+      passageId: `r${i}`,
+      sentenceIndex: 0,
+      percent: 10,
+      status: 'in_progress' as const,
+      startedAt: NOW - i * HOUR_MS, // r0 newest … r5 oldest
+    }));
+    const manyPassages = many.map((p, i) => passageRecord(p.passageId, p.startedAt, `Reading ${i}`, 'travel'));
+
+    const capped = dashboardProjector.project({ now: NOW, states, progress: many, log: logs, passages: manyPassages });
+    expect(capped.reading.map((r) => r.passageId)).toEqual(['r0', 'r1', 'r2']); // default cap = 3
+
+    const limited = dashboardProjector.project({
+      now: NOW,
+      states,
+      progress: many,
+      log: logs,
+      passages: manyPassages,
+      readingLimit: 1,
+    });
+    expect(limited.reading.map((r) => r.passageId)).toEqual(['r0']); // only the most-recent resume
   });
 });

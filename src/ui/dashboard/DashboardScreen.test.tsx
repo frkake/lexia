@@ -20,9 +20,6 @@ function snapshot(): DashboardSnapshot {
       { wordId: 'leverage', dueAt: TODAY + DAY_MS, mastery: 'Consolidating' },
     ],
     streakDays: 12,
-    recent: [
-      { passageId: 'p2', title: 'A Quiet Negotiation', theme: '交渉', createdAt: NOW - DAY_MS, completed: true },
-    ],
   };
 }
 
@@ -50,9 +47,10 @@ describe('<DashboardScreen/>', () => {
     expect(getByText('211')).toBeTruthy();
   });
 
-  it('offers continue-reading for the in-progress passage (10.3)', () => {
+  it('offers continue-reading for the recently-opened passage (10.3)', () => {
     const onContinue = vi.fn();
     const { getByText } = renderScreen({ onContinue });
+    expect(getByText('最近開いた文章 / CONTINUE')).toBeTruthy();
     expect(getByText('The Restless Boardroom')).toBeTruthy();
     expect(getByText('62%')).toBeTruthy();
     fireEvent.click(getByText('続きを読む'));
@@ -74,9 +72,4 @@ describe('<DashboardScreen/>', () => {
     expect(onStartReview).toHaveBeenCalledTimes(1);
   });
 
-  it('shows recently read passages with completion (10.6)', () => {
-    const { getByText } = renderScreen();
-    expect(getByText('A Quiet Negotiation')).toBeTruthy();
-    expect(getByText(/交渉/)).toBeTruthy();
-  });
 });

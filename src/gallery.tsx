@@ -10,6 +10,7 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { DashboardScreen } from './ui/dashboard/DashboardScreen';
+import { HomeScreen } from './ui/home/HomeScreen';
 import { ReadingScreen } from './ui/reading/ReadingScreen';
 import { WordDetailCard } from './ui/wordcard/WordDetailCard';
 import { ReviewSession } from './ui/review/ReviewSession';
@@ -24,6 +25,15 @@ function screenFor(key: string): ReactNode {
   switch (key) {
     case 'dashboard':
       return <DashboardScreen snapshot={fx.dashboardSnapshot} userName="あなた" glosses={fx.dueGlosses} now={fx.FIXED_NOW} />;
+    case 'home':
+      return (
+        <HomeScreen
+          setup={{ candidates: fx.setupCandidates, initial: fx.setupInitial }}
+          snapshot={fx.dashboardSnapshot}
+          userName="あなた"
+          now={fx.FIXED_NOW}
+        />
+      );
     case 'reading':
       // Production-representative reading frame: the reading-layout flag now ships ON, so the
       // baseline is the new 3-zone layout (sentence grid + right-cell translation + aligned rail).

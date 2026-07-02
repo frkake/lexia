@@ -17,8 +17,8 @@ export interface DashboardControllerDeps {
   progress: ProgressRepository;
   reviewLog: ReviewLogRepository;
   passages: PassageRepository;
-  /** Max recently-read passages to surface (default 5). */
-  recentLimit?: number;
+  /** Max recent passages to load for resolving in-progress reading titles (default 20). */
+  passageLimit?: number;
 }
 
 export async function loadDashboardSnapshot(
@@ -26,21 +26,21 @@ export async function loadDashboardSnapshot(
   userId: UserId,
   now: number,
 ): Promise<DashboardSnapshot> {
-  const recentLimit = deps.recentLimit ?? 5;
-  const [states, inProgress, completed, log, passages] = await Promise.all([
+  // A modest window of recent passages backs the in-progress reading cards (title / level
+  // resolution). In-progress passages are among the most recent, so this covers them.
+  const passageLimit = deps.passageLimit ?? 20;
+  const [states, inProgress, log, passages] = await Promise.all([
     deps.loadStates(userId),
     deps.progress.byStatus(userId, 'in_progress'),
-    deps.progress.byStatus(userId, 'completed'),
     deps.reviewLog.since(userId, 0),
-    deps.passages.recent(userId, recentLimit),
+    deps.passages.recent(userId, passageLimit),
   ]);
 
   return dashboardProjector.project({
     now,
     states,
-    progress: [...inProgress, ...completed],
+    progress: inProgress,
     log,
     passages,
-    recentLimit,
   });
 }

@@ -12,6 +12,7 @@
  */
 
 import type {
+  CharacterIllustrationRequest,
   GenerationRequest,
   GenerationResponse,
   NoticeCue,
@@ -19,6 +20,9 @@ import type {
   PassageOutput,
   Sentence,
   StopReason,
+  StoryPlan,
+  StoryPlanExtensionRequest,
+  StoryPlanRequest,
   TranslationSpan,
   WordData,
   WordSuggestionRequest,
@@ -27,14 +31,21 @@ import {
   ANNOTATION_CATEGORIES,
   ANNOTATION_JSON_SCHEMA,
   PASSAGE_JSON_SCHEMA,
+  STORY_PLAN_EXTENSION_JSON_SCHEMA,
+  STORY_PLAN_JSON_SCHEMA,
   WORD_DATA_JSON_SCHEMA,
   WORD_SUGGESTION_JSON_SCHEMA,
   annotationMaxTokens,
   buildAnnotationMessages,
+  buildCharacterIllustrationPrompt,
   buildPassageMessages,
+  buildStoryPlanExtensionMessages,
+  buildStoryPlanMessages,
   buildSuggestionMessages,
   buildWordMessages,
-  maxTokensForLength,
+  maxTokensForWordTarget,
+  storyPlanMaxTokens,
+  storyPlanExtensionMaxTokens,
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 
@@ -260,9 +271,12 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
   const metaIn = (core.meta && typeof core.meta === 'object' ? core.meta : {}) as Partial<PassageOutput['meta']>;
   const distinct = new Map(targetSpans.map((s) => [s.wordId, s.masteryDensity]));
   const newCount = [...distinct.values()].filter((d) => d === 'new').length;
+  const storyRef = req.storyContext
+    ? { storyId: req.storyContext.storyId, chapterIndex: req.storyContext.chapterIndex }
+    : metaIn.storyRef;
   const meta: PassageOutput['meta'] = {
-    title: metaIn.title || (req.themes[0] ?? 'Reading'),
-    theme: metaIn.theme || req.themes[0] || '',
+    title: metaIn.title || 'Reading',
+    intent: metaIn.intent || req.intent,
     level: metaIn.level || req.level,
     newCount: typeof metaIn.newCount === 'number' ? metaIn.newCount : newCount,
     reviewCount: typeof metaIn.reviewCount === 'number' ? metaIn.reviewCount : distinct.size - newCount,
@@ -270,6 +284,7 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
       typeof metaIn.approxWords === 'number'
         ? metaIn.approxWords
         : sentences.reduce((n, s) => n + (Array.isArray(s.tokens) ? s.tokens.length : 0), 0),
+    ...(storyRef ? { storyRef } : {}),
   };
   return reanchorSpans({ meta, sentences, targetSpans, collocationSpans, noticeCues });
 }
@@ -403,7 +418,7 @@ export async function generatePassage(
     fetchImpl,
     system,
     user,
-    maxTokensForLength(req.length),
+    maxTokensForWordTarget(req.wordTarget),
     PASSAGE_JSON_SCHEMA,
     'passage_output',
   );
@@ -420,7 +435,17 @@ export async function generatePassage(
 
 function emptyPassage(req: GenerationRequest): PassageOutput {
   return {
-    meta: { title: '', theme: req.themes[0] ?? '', level: req.level, newCount: 0, reviewCount: 0, approxWords: 0 },
+    meta: {
+      title: '',
+      intent: req.intent,
+      level: req.level,
+      newCount: 0,
+      reviewCount: 0,
+      approxWords: 0,
+      ...(req.storyContext
+        ? { storyRef: { storyId: req.storyContext.storyId, chapterIndex: req.storyContext.chapterIndex } }
+        : {}),
+    },
     sentences: [],
     targetSpans: [],
     collocationSpans: [],
@@ -499,6 +524,203 @@ export async function suggestWords(
     if (out.length >= count) break;
   }
   return out;
+}
+
+/** Monotonic-ish story id (server-side; the client persists it under this key). */
+let storyCounter = 0;
+function nextStoryId(): string {
+  storyCounter += 1;
+  return `story_${Date.now()}_${storyCounter}`;
+}
+
+/** Generate a story plan (characters/synopsis/chapters) — Requirement 6.2. */
+export async function planStory(
+  env: Env,
+  req: StoryPlanRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<StoryPlan> {
+  const contentType = req.contentType === 'long_story' ? 'long_story' : 'short_story';
+  const { system, user } = buildStoryPlanMessages({
+    contentType,
+    genre: req.genre,
+    homageTitle: req.homageTitle,
+    intent: req.intent,
+    level: req.level,
+  });
+  const { text, stopReason } = await callModel(
+    env,
+    fetchImpl,
+    system,
+    user,
+    storyPlanMaxTokens(),
+    STORY_PLAN_JSON_SCHEMA,
+    'story_plan',
+  );
+  if (stopReason === 'refusal') throw new ProviderError(502, 'Story plan generation was refused.');
+  const parsed = parseJson<Partial<StoryPlan>>(text, 'story plan');
+  const chaptersRaw = Array.isArray(parsed.chapters) ? parsed.chapters : [];
+  // A short story is a single chapter regardless of what the model returned.
+  const chapters = (contentType === 'short_story' ? chaptersRaw.slice(0, 1) : chaptersRaw).map((c, i) => ({
+    index: i,
+    headingJa: typeof c?.headingJa === 'string' ? c.headingJa : '',
+    beatJa: typeof c?.beatJa === 'string' ? c.beatJa : '',
+  }));
+  if (chapters.length === 0) throw new ProviderError(502, 'Story plan has no chapters.');
+  return {
+    storyId: nextStoryId(),
+    contentType,
+    genre: req.genre,
+    ...(req.homageTitle ? { homage: { title: req.homageTitle, styleNoteJa: '' } } : {}),
+    titleJa: typeof parsed.titleJa === 'string' ? parsed.titleJa : '',
+    synopsisJa: typeof parsed.synopsisJa === 'string' ? parsed.synopsisJa : '',
+    characters: Array.isArray(parsed.characters)
+      ? parsed.characters
+          .filter((c): c is NonNullable<typeof c> => !!c && typeof c === 'object')
+          .map((c) => ({
+            name: typeof c.name === 'string' ? c.name : '',
+            role: typeof c.role === 'string' ? c.role : '',
+            descriptionJa: typeof c.descriptionJa === 'string' ? c.descriptionJa : '',
+          }))
+      : [],
+    chapters,
+  };
+}
+
+/** Extend a long-story plan with future chapter beats when the existing outline is exhausted. */
+export async function extendStoryPlan(
+  env: Env,
+  req: StoryPlanExtensionRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<StoryPlan> {
+  if (req.plan.contentType !== 'long_story') {
+    throw new ProviderError(400, 'Only long_story plans can be extended.');
+  }
+  const additionalChapters = Math.max(1, Math.min(req.additionalChapters ?? 3, 6));
+  const { system, user } = buildStoryPlanExtensionMessages({ ...req, additionalChapters });
+  const { text, stopReason } = await callModel(
+    env,
+    fetchImpl,
+    system,
+    user,
+    storyPlanExtensionMaxTokens(additionalChapters),
+    STORY_PLAN_EXTENSION_JSON_SCHEMA,
+    'story_plan_extension',
+  );
+  if (stopReason === 'refusal') throw new ProviderError(502, 'Story plan extension was refused.');
+  const parsed = parseJson<{ synopsisJa?: unknown; chapters?: unknown }>(text, 'story plan extension');
+  const rawChapters = Array.isArray(parsed.chapters) ? parsed.chapters : [];
+  const newChapters = rawChapters.slice(0, additionalChapters).map((c, i) => {
+    const raw = c && typeof c === 'object' ? (c as Partial<StoryPlan['chapters'][number]>) : {};
+    return {
+      index: req.nextChapterIndex + i,
+      headingJa: typeof raw.headingJa === 'string' ? raw.headingJa : `第${req.nextChapterIndex + i + 1}章`,
+      beatJa: typeof raw.beatJa === 'string' ? raw.beatJa : 'これまでの出来事を受けて物語が進む。',
+    };
+  });
+  if (newChapters.length === 0) throw new ProviderError(502, 'Story plan extension has no chapters.');
+  const oldChapters = req.plan.chapters.filter((chapter) => chapter.index < req.nextChapterIndex);
+  return {
+    ...req.plan,
+    synopsisJa: typeof parsed.synopsisJa === 'string' && parsed.synopsisJa.trim() ? parsed.synopsisJa : req.plan.synopsisJa,
+    chapters: [...oldChapters, ...newChapters],
+  };
+}
+
+// ── Character illustration (Requirement 6.8) ─────────────────────────────────
+//
+// Image generation is a SEPARATE provider axis from text: Anthropic has no image API, so
+// `IMAGE_PROVIDER` (default "openai"; "gemini"/"google" -> Imagen) is resolved independently of
+// LLM_PROVIDER. The portrait comes back as base64 and is returned as a `data:` URL the client stores
+// inline with the plan (there is no CDN). Failures raise ProviderError like the text path so the
+// caller can degrade to no portrait.
+
+type ImageProvider = 'openai' | 'gemini';
+
+const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
+const GEMINI_IMAGE_MODEL_DEFAULT = 'imagen-3.0-generate-002';
+const OPENAI_IMAGE_MODEL_DEFAULT = 'gpt-image-1';
+
+function resolveImageProvider(env: Env): ImageProvider {
+  const raw = (env.IMAGE_PROVIDER ?? 'openai').trim().toLowerCase();
+  return raw === 'gemini' || raw === 'google' || raw === 'imagen' ? 'gemini' : 'openai';
+}
+
+/** The configured key for the active image provider, or throw 503 so the UI shows "unavailable". */
+function requireImageKey(env: Env, provider: ImageProvider): string {
+  // OpenAI image generation reuses OPENAI_API_KEY; Gemini/Imagen uses its own GEMINI_API_KEY.
+  const key = provider === 'gemini' ? env.GEMINI_API_KEY : env.OPENAI_API_KEY;
+  if (!key || !key.trim() || key.includes('...')) {
+    const name = provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
+    throw new ProviderError(503, `Image API not configured: ${name} is missing. Set it in .env.`);
+  }
+  return key.trim();
+}
+
+function imageModelFor(env: Env, provider: ImageProvider): string {
+  const configured = env.IMAGE_MODEL?.trim();
+  if (configured) return configured;
+  return provider === 'gemini' ? GEMINI_IMAGE_MODEL_DEFAULT : OPENAI_IMAGE_MODEL_DEFAULT;
+}
+
+/**
+ * Generate one character's portrait, returning a `data:image/png;base64,...` URL (Requirement 6.8).
+ * OpenAI hits the Images endpoint (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint
+ * (`predictions[].bytesBase64Encoded`, key as query param per the REST contract). Small size + low
+ * quality keep the data URL light since it lands in IndexedDB.
+ */
+export async function illustrateCharacter(
+  env: Env,
+  req: CharacterIllustrationRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  const provider = resolveImageProvider(env);
+  const apiKey = requireImageKey(env, provider);
+  const model = imageModelFor(env, provider);
+  const prompt = buildCharacterIllustrationPrompt(req);
+
+  let response: Response;
+  try {
+    response =
+      provider === 'gemini'
+        ? await fetchImpl(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                instances: [{ prompt }],
+                parameters: { sampleCount: 1, aspectRatio: '1:1' },
+              }),
+            },
+          )
+        : await fetchImpl(OPENAI_IMAGE_URL, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, prompt, n: 1, size: '1024x1024', quality: 'low' }),
+          });
+  } catch (cause) {
+    throw new ProviderError(503, `Image API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`);
+  }
+
+  if (!response.ok) {
+    const detail = await safeText(response);
+    throw new ProviderError(mapUpstreamStatus(response.status), `${provider} image API error ${response.status}: ${detail}`);
+  }
+
+  const body = (await response.json()) as unknown;
+  const b64 = provider === 'gemini' ? parseGeminiImage(body) : parseOpenAiImage(body);
+  if (!b64) throw new ProviderError(502, `${provider} image API returned no image.`);
+  return `data:image/png;base64,${b64}`;
+}
+
+function parseOpenAiImage(body: unknown): string | undefined {
+  const b64 = (body as { data?: { b64_json?: string }[] }).data?.[0]?.b64_json;
+  return typeof b64 === 'string' && b64 ? b64 : undefined;
+}
+
+function parseGeminiImage(body: unknown): string | undefined {
+  const b64 = (body as { predictions?: { bytesBase64Encoded?: string }[] }).predictions?.[0]?.bytesBase64Encoded;
+  return typeof b64 === 'string' && b64 ? b64 : undefined;
 }
 
 type RawCue = {

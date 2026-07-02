@@ -49,3 +49,32 @@ export async function hydrateSettings(
   store.getState().configure(repo, userId);
   await store.getState().hydrate();
 }
+
+export interface OpenPassageDeps {
+  passages: PassageRepository;
+  progress: ProgressRepository;
+  session: SessionStore;
+}
+
+/**
+ * Open a specific passage by id into the reading session (URL-addressable reader). Loads the stored
+ * record, re-indexes it with the shared tokenizer, starts the session, and seeks to the learner's
+ * saved sentence position. Returns null (session untouched) when the passage is missing or owned by
+ * another learner — the route renders a "not found" state rather than crashing.
+ */
+export async function openPassage(
+  deps: OpenPassageDeps,
+  userId: UserId,
+  passageId: string,
+): Promise<IndexedPassage | null> {
+  const record = await deps.passages.get(passageId);
+  if (!record || record.userId !== userId) return null;
+
+  const passage = tokenizer.index(record.passageId, record.passage);
+  const now = record.createdAt;
+  deps.session.getState().startPassage(passage, now);
+
+  const saved = await deps.progress.get(userId, passageId);
+  if (saved) deps.session.getState().updateProgress(saved.sentenceIndex);
+  return passage;
+}

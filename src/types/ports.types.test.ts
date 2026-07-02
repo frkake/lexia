@@ -46,7 +46,7 @@ describe('ports', () => {
     const gw: ContentGateway = {
       generatePassage: async () => ({
         passage: {
-          meta: { title: '', theme: '', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+          meta: { title: '', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
           sentences: [],
           targetSpans: [],
           collocationSpans: [],
@@ -108,6 +108,8 @@ describe('ports', () => {
       get: async () => undefined,
       put: async () => {},
       recent: async () => [],
+      all: async () => [],
+      byStory: async () => [],
     };
     const timing: TimingMapRepository = { get: async () => undefined, put: async () => {} };
     const progress: ProgressRepository = {

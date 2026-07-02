@@ -4,9 +4,10 @@ import type { GenerationRequest, WordData } from '../../types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
-  themes: ['travel'],
+  intent: 'travel',
   newWordRatio: 0.3,
-  length: 'short',
+  wordTarget: 200,
+  contentType: 'article',
   targetWords: [{ wordId: 'w1', surface: 'resilient', masteryDensity: 'new' }],
 };
 
@@ -19,7 +20,7 @@ function gatewayWith(fetchImpl: typeof fetch): HttpContentGateway {
 }
 
 const samplePassage = {
-  meta: { title: 't', theme: 'travel', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
+  meta: { title: 't', intent: 'travel', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
   sentences: [{ tokens: ['She', 'stayed', 'resilient', '.'], translationJa: '' }],
   targetSpans: [],
   collocationSpans: [],
@@ -98,7 +99,7 @@ describe('HttpContentGateway.suggestWords', () => {
       captured = { url: String(url), init };
       return jsonResponse(200, { words: ['agenda', 'consensus'] });
     });
-    const words = await gw.suggestWords({ level: 'B1', themes: ['会議'], count: 2 });
+    const words = await gw.suggestWords({ level: 'B1', intent: 'business', count: 2 });
     expect(captured!.url).toBe('https://api.test/api/words:suggest');
     expect(captured!.init?.method).toBe('POST');
     expect(words).toEqual(['agenda', 'consensus']);
@@ -106,7 +107,7 @@ describe('HttpContentGateway.suggestWords', () => {
 
   it('returns an empty list when the reply has no words array', async () => {
     const gw = gatewayWith(async () => jsonResponse(200, {}));
-    expect(await gw.suggestWords({ level: 'B1', themes: ['x'], count: 3 })).toEqual([]);
+    expect(await gw.suggestWords({ level: 'B1', intent: 'business', count: 3 })).toEqual([]);
   });
 });
 

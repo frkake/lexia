@@ -8,7 +8,7 @@ import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
 function makePassage(): IndexedPassage {
   const source: PassageOutput = {
-    meta: { title: 't', theme: 'negotiation', level: 'B2', newCount: 1, reviewCount: 1, approxWords: 8 },
+    meta: { title: 't', intent: 'business', level: 'B2', newCount: 1, reviewCount: 1, approxWords: 8 },
     sentences: [
       { tokens: ['The', 'board', 'was', 'restless', '.'], translationJa: '' },
       { tokens: ['We', 'leverage', 'our', 'reputation', '.'], translationJa: '' },
@@ -57,7 +57,7 @@ describe('<NoticeRail/>', () => {
 
   it('renders the expression with canonical spacing (clitics/punctuation) — matching the body marker', () => {
     const source: PassageOutput = {
-      meta: { title: 't', theme: 'x', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
       // "doesn't" tokenizes to ["does","n't"]; a naive join would show "does n't".
       sentences: [{ tokens: ['It', 'does', "n't", 'matter', '.'], translationJa: '' }],
       targetSpans: [],

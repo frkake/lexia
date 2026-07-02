@@ -51,10 +51,15 @@ describe('<WordbookScreen/>', () => {
         <button onClick={onClose}>閉じる</button>
       </div>
     ));
-    const { getByTestId, getByText, queryByTestId } = renderScreen({ renderWordDetail });
+    const { getByRole, getByTestId, getByText, queryByTestId } = renderScreen({ renderWordDetail });
     expect(queryByTestId('detail')).toBeNull();
     fireEvent.click(getByTestId('word-row-mitigate'));
     expect(queryByTestId('detail')!.textContent).toContain('mitigate');
+    fireEvent.click(getByTestId('detail'));
+    expect(queryByTestId('detail')).toBeTruthy();
+    fireEvent.click(getByRole('dialog', { name: '単語詳細' }));
+    expect(queryByTestId('detail')).toBeNull();
+    fireEvent.click(getByTestId('word-row-mitigate'));
     fireEvent.click(getByText('閉じる'));
     expect(queryByTestId('detail')).toBeNull();
   });

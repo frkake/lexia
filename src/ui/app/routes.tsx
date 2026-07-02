@@ -2,19 +2,22 @@
  * L4 — route containers: the thin wiring that connects each presentational screen to the
  * live data and flow controllers via the AppContext container. This is where tasks 10.1–10.4
  * surface in the UI:
- *   - SetupRoute → runGenerationPipeline (Flow 1: generate→validate→persist→render→TTS).
- *   - ReadingRoute → applyRecallSignal on a word tap (Flow 3: reading-time recall).
+ *   - HomeRoute → runGenerationPipeline (Flow 1: generate→validate→persist→render→TTS) + dashboard summary.
+ *   - ReadingRoute → opens a passage by URL (openPassage) + applyRecallSignal on a word tap (Flow 3).
  *   - ReviewRoute → applyReviewRating on a rating (Flow 2: reschedule→log→reproject).
- *   - DashboardRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
+ *   - LibraryRoute / StoryDirectoryRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
  * Reads are reactive (`useLiveQuery`) so any repository write re-renders immediately.
  */
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useStore } from 'zustand';
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { DashboardScreen } from '../dashboard/DashboardScreen';
-import { SetupScreen, type CandidateWord } from '../setup/SetupScreen';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { type CandidateWord } from '../setup/SetupScreen';
+import { HomeScreen } from '../home/HomeScreen';
+import { LibraryScreen } from '../library/LibraryScreen';
+import { StoryDirectoryScreen, type StoryChapterRow } from '../story/StoryDirectoryScreen';
+import { StoryPlanReview } from '../setup/StoryPlanReview';
 import { ReadingScreen } from '../reading/ReadingScreen';
 import { StudyWordsList, type StudyWord } from '../reading/StudyWordsList';
 import { resolveFeatureFlags } from './featureFlags';
@@ -28,16 +31,22 @@ import { loadDashboardSnapshot } from '../../state/controllers/dashboardControll
 import { runGenerationPipeline } from '../../state/controllers/generationController';
 import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
-import { restoreReadingSession } from '../../state/controllers/sessionBootstrap';
+import { openPassage, restoreReadingSession } from '../../state/controllers/sessionBootstrap';
 import { sessionPlanner } from '../../domain/session/sessionPlanner';
+import { tokenizer } from '../../domain/tokenizer/joinService';
+import { examScale } from '../../domain/difficulty/examScale';
+import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
-import { colors, fonts } from '../theme/tokens';
-import type { IndexedPassage, MasteryStage, Rating, SetupConfig, WordData, WordSchedulingState } from '../../types/domain';
+import { colors, fonts, radius } from '../theme/tokens';
+import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, StoryRecord, WordData, WordSchedulingState } from '../../types/domain';
+import type { PassageRecord } from '../../types/ports';
 
 const CANDIDATE_LIMIT = 12;
 
-/** How many new words to auto-propose (by passage length) when the learner picks none. */
-const NEW_WORDS_BY_LENGTH: Record<SetupConfig['length'], number> = { short: 4, medium: 6, long: 8 };
+/** Reader URL for a passage: story chapters are /s/:storyId/:chapterIndex, articles are /p/:id. */
+function readerPathFor(passageId: string, storyRef?: { storyId: string; chapterIndex: number }): string {
+  return storyRef ? `/s/${storyRef.storyId}/${storyRef.chapterIndex}` : `/p/${passageId}`;
+}
 
 function stripCacheNamespace(data: WordData): WordData {
   const copy = { ...data } as WordData & { userId?: unknown };
@@ -66,9 +75,9 @@ async function resolveTargetWordIds(c: Container, setup: SetupConfig): Promise<s
   if (setup.targetWordIds.length > 0 || !c.content.suggestWords) return setup.targetWordIds;
   try {
     const suggested = await c.content.suggestWords({
-      level: setup.level,
-      themes: setup.themes,
-      count: NEW_WORDS_BY_LENGTH[setup.length],
+      level: examScale.examToCefr(setup.examTarget),
+      intent: setup.intent,
+      count: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
       exclude: setup.excludedWordIds,
     });
     return suggested.length > 0 ? suggested : setup.targetWordIds;
@@ -114,6 +123,49 @@ function uniqueStudyWords(passage: IndexedPassage): StudyWord[] {
   return words;
 }
 
+function clampStoryWordTarget(wordTarget: number): number {
+  const range = lengthSpec.wordRange('long_story');
+  return Math.min(range.max, Math.max(range.min, wordTarget));
+}
+
+function storyContinuationSetup(setup: SetupConfig, passage: IndexedPassage, plan: StoryPlan): SetupConfig {
+  return {
+    ...setup,
+    intent: passage.source.meta.intent,
+    contentType: 'long_story',
+    wordTarget: clampStoryWordTarget(setup.wordTarget),
+    storyOptions: {
+      genre: plan.genre,
+      ...(plan.homage?.title ? { homageTitle: plan.homage.title } : {}),
+    },
+  };
+}
+
+function chapterIndexOf(record: PassageRecord): number {
+  return record.passage.meta.storyRef?.chapterIndex ?? 0;
+}
+
+function indexedFromRecord(record: PassageRecord): IndexedPassage {
+  return tokenizer.index(record.passageId, record.passage);
+}
+
+function priorSummaryJa(chapters: PassageRecord[], throughChapterIndex: number): string | undefined {
+  const lines = chapters
+    .filter((chapter) => chapterIndexOf(chapter) <= throughChapterIndex)
+    .sort((a, b) => chapterIndexOf(a) - chapterIndexOf(b))
+    .slice(-4)
+    .map((chapter) => {
+      const chapterNo = chapterIndexOf(chapter) + 1;
+      const translations = chapter.passage.sentences
+        .map((sentence) => sentence.translationJa.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' ');
+      return `第${chapterNo}章「${chapter.passage.meta.title}」: ${translations || '本文生成済み。'}`;
+    });
+  return lines.length > 0 ? lines.join('\n') : undefined;
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -140,49 +192,9 @@ function ScreenSkeleton() {
   );
 }
 
-// ── Dashboard (10.3 reflection, 9.3) ─────────────────────────────────────────
+// ── Home → generate (10.1, Flow 1) ───────────────────────────────────────────
 
-export function DashboardRoute() {
-  const c = useContainer();
-  const navigate = useNavigate();
-
-  const snapshot = useLiveQuery(
-    () =>
-      loadDashboardSnapshot(
-        {
-          loadStates: c.loadStates,
-          progress: c.repos.progress,
-          reviewLog: c.repos.reviewLog,
-          passages: c.repos.passages,
-        },
-        c.userId,
-        c.now(),
-      ),
-    [c],
-  );
-
-  if (!snapshot) return <ScreenSkeleton />;
-
-  // Resume the most-recent in-progress passage at its saved position (10.4 restore).
-  const resume = async (): Promise<void> => {
-    await restoreReadingSession({ passages: c.repos.passages, progress: c.repos.progress, session: c.session }, c.userId);
-    navigate('/read');
-  };
-
-  return (
-    <DashboardScreen
-      snapshot={snapshot}
-      now={c.now()}
-      onContinue={() => void resume()}
-      onStartReview={() => navigate('/review')}
-      onOpenPassage={() => void resume()}
-    />
-  );
-}
-
-// ── Setup → generate (10.1, Flow 1) ──────────────────────────────────────────
-
-export function SetupRoute() {
+export function HomeRoute() {
   const c = useContainer();
   const navigate = useNavigate();
   const lastSetup = useStore(c.settings, (s) => s.lastSetup);
@@ -190,11 +202,88 @@ export function SetupRoute() {
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
-  const candidates =
-    useLiveQuery<CandidateWord[]>(async () => {
-      const states = await sessionPlanner.selectCandidates(c.repos.scheduling, c.userId, c.now(), CANDIDATE_LIMIT);
-      return states.map((s) => ({ wordId: s.wordId, surface: s.wordId }));
-    }, [c]) ?? [];
+  // Setup-open auto-suggestion (Requirement 5.1): ask the WordSuggestionService for ABC-ordered
+  // "next to learn" words (introduced/excluded removed), surfacing a shortfall notice when the
+  // gateway can't fill the request. Falls back to the due/weak candidates if suggestion yields none.
+  const [candidates, setCandidates] = useState<CandidateWord[]>([]);
+  const [suggestionShortfall, setSuggestionShortfall] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await c.suggestions.suggest(
+          {
+            userId: c.userId,
+            level: examScale.examToCefr(lastSetup.examTarget),
+            intent: lastSetup.intent,
+            excludedWordIds: lastSetup.excludedWordIds ?? [],
+            count: CANDIDATE_LIMIT,
+          },
+          c.repos.scheduling,
+        );
+        if (cancelled) return;
+        if (result.candidates.length > 0) {
+          setCandidates(result.candidates);
+          setSuggestionShortfall(
+            result.shortfall ? '提案できる新しい単語が不足しています。手動で追加できます。' : null,
+          );
+          return;
+        }
+        // Suggestion empty (gateway unavailable / exhausted): fall back to due/weak candidates.
+        const states = await sessionPlanner.selectCandidates(c.repos.scheduling, c.userId, c.now(), CANDIDATE_LIMIT);
+        if (cancelled) return;
+        setCandidates(states.map((s) => ({ wordId: s.wordId, surface: s.wordId })));
+        setSuggestionShortfall(
+          result.shortfall?.reason === 'gateway_unavailable'
+            ? '単語提案サービスに接続できませんでした。手動で追加できます。'
+            : null,
+        );
+      } catch {
+        if (!cancelled) setCandidates([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when the difficulty/intent seed changes.
+  }, [c, lastSetup.examTarget, lastSetup.intent, lastSetup.excludedWordIds]);
+
+  // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
+  // learner to confirm before any chapter body is produced. Only active when storyMode is on.
+  const { storyMode, characterIllustrations } = resolveFeatureFlags();
+  const [pendingPlan, setPendingPlan] = useState<StoryPlan | null>(null);
+  const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
+  // True while character portraits stream in on the confirmation gate (6.8); enrichment only.
+  const [illustrating, setIllustrating] = useState(false);
+  const activeIllustrationRequest = useRef(0);
+
+  /** Run the standard article generate → validate → persist → render pipeline. */
+  const runArticlePipeline = async (setup: SetupConfig): Promise<void> => {
+    const targetWordIds = await resolveTargetWordIds(c, setup);
+    const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+    const wordData = await loadWordDataMap(c, targetWordIds);
+    const outcome = await runGenerationPipeline(
+      {
+        createOrchestrator: c.createOrchestrator,
+        scheduling: c.repos.scheduling,
+        passages: c.repos.passages,
+        progress: c.repos.progress,
+        timingMaps: c.repos.timingMaps,
+        tts: c.tts,
+        session: c.session,
+        player: c.player,
+        now: c.now,
+        genId: c.genId,
+        voiceId: voiceId || c.voiceId,
+        wordData,
+      },
+      effectiveSetup,
+      c.userId,
+    );
+    if (outcome.ok && outcome.passageId) navigate(`/p/${outcome.passageId}`);
+    else if (!outcome.ok) setGenerationError(generationErrorMessage(outcome.error));
+  };
 
   const onGenerate = async (setup: SetupConfig): Promise<void> => {
     if (generating) return;
@@ -202,10 +291,69 @@ export function SetupRoute() {
     setGenerationError(null);
     c.settings.getState().setLastSetup(setup);
     try {
-      // No hand-picked words → auto-propose new vocabulary to teach for this level + theme.
+      // Story path: generate the plan and STOP at the confirmation gate (no body yet, 6.3).
+      if (storyMode && setup.contentType !== 'article') {
+        const planned = await c.storyPlanner.planStory({
+          contentType: setup.contentType,
+          genre: setup.storyOptions?.genre ?? 'fantasy',
+          homageTitle: setup.storyOptions?.homageTitle,
+          intent: setup.intent,
+          level: examScale.examToCefr(setup.examTarget),
+        });
+        if (!planned.ok) {
+          setGenerationError(generationErrorMessage(planned.error));
+          return;
+        }
+        // Show the plan immediately (gate is up), then stream in character portraits (6.8). Illustration
+        // is enrichment: it never blocks confirmation, so failures are swallowed and just leave placeholders.
+        setPendingSetup(setup);
+        setPendingPlan(planned.value);
+        activeIllustrationRequest.current += 1;
+        setIllustrating(false);
+        if (characterIllustrations) {
+          const illustrationRequest = activeIllustrationRequest.current;
+          setIllustrating(true);
+          void c.storyPlanner
+            .illustrateCharacters(planned.value, (index, illustrationUrl) => {
+              if (activeIllustrationRequest.current !== illustrationRequest) return;
+              setPendingPlan((prev) => {
+                if (!prev || prev.storyId !== planned.value.storyId) return prev;
+                const characters = prev.characters.map((ch, i) => (i === index ? { ...ch, illustrationUrl } : ch));
+                return { ...prev, characters };
+              });
+            })
+            .finally(() => {
+              if (activeIllustrationRequest.current === illustrationRequest) {
+                setIllustrating(false);
+              }
+            });
+        }
+        return;
+      }
+      await runArticlePipeline(setup);
+    } catch (error) {
+      setGenerationError(generationErrorMessage(error));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Confirmation gate passed: persist the plan, then generate + persist the first chapter and read it.
+  const onConfirmPlan = async (plan: StoryPlan): Promise<void> => {
+    if (generating) return;
+    if (!pendingSetup) {
+      setGenerationError('執筆に必要な設定が見つかりません。やり直してください。');
+      return;
+    }
+    setGenerating(true);
+    setGenerationError(null);
+    try {
+      await c.storyPlanner.confirmPlan(c.userId, plan);
+      const setup = pendingSetup;
       const targetWordIds = await resolveTargetWordIds(c, setup);
       const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
       const wordData = await loadWordDataMap(c, targetWordIds);
+      const chapterIndex = 0;
       const outcome = await runGenerationPipeline(
         {
           createOrchestrator: c.createOrchestrator,
@@ -223,9 +371,19 @@ export function SetupRoute() {
         },
         effectiveSetup,
         c.userId,
+        {
+          passageId: `${plan.storyId}:${chapterIndex}`,
+          storyContext: { storyId: plan.storyId, chapterIndex, plan },
+        },
       );
-      if (outcome.ok) navigate('/read');
-      else setGenerationError(generationErrorMessage(outcome.error));
+      if (!outcome.ok) {
+        setGenerationError(generationErrorMessage(outcome.error));
+        return;
+      }
+      activeIllustrationRequest.current += 1;
+      setPendingPlan(null);
+      setPendingSetup(null);
+      navigate(`/s/${plan.storyId}/${chapterIndex}`);
     } catch (error) {
       setGenerationError(generationErrorMessage(error));
     } finally {
@@ -233,13 +391,54 @@ export function SetupRoute() {
     }
   };
 
+  const snapshot = useLiveQuery(
+    () =>
+      loadDashboardSnapshot(
+        { loadStates: c.loadStates, progress: c.repos.progress, reviewLog: c.repos.reviewLog, passages: c.repos.passages },
+        c.userId,
+        c.now(),
+      ),
+    [c],
+  );
+
+  const resume = async (): Promise<void> => {
+    await restoreReadingSession({ passages: c.repos.passages, progress: c.repos.progress, session: c.session }, c.userId);
+    const active = c.session.getState().passage;
+    if (active) navigate(readerPathFor(active.passageId, active.source.meta.storyRef));
+  };
+
+  if (pendingPlan) {
+    return (
+      <StoryPlanReview
+        plan={pendingPlan}
+        illustrating={illustrating}
+        confirming={generating}
+        confirmError={generationError}
+        onConfirm={(p) => void onConfirmPlan(p)}
+        onCancel={() => {
+          activeIllustrationRequest.current += 1;
+          setPendingPlan(null);
+          setPendingSetup(null);
+          setIllustrating(false);
+        }}
+      />
+    );
+  }
+
   return (
-    <SetupScreen
-      candidates={candidates}
-      initial={lastSetup}
-      generating={generating}
-      generationError={generationError}
-      onGenerate={(s) => void onGenerate(s)}
+    <HomeScreen
+      setup={{
+        candidates,
+        suggestionShortfall,
+        initial: lastSetup,
+        generating,
+        generationError,
+        onGenerate: (s) => void onGenerate(s),
+      }}
+      snapshot={snapshot ?? undefined}
+      now={c.now()}
+      onContinue={() => void resume()}
+      onStartReview={() => navigate('/review')}
     />
   );
 }
@@ -248,7 +447,51 @@ export function SetupRoute() {
 
 export function ReadingRoute() {
   const c = useContainer();
+  const navigate = useNavigate();
+  const params = useParams();
+  const targetPassageId =
+    params.storyId && params.chapterIndex !== undefined
+      ? `${params.storyId}:${params.chapterIndex}`
+      : params.passageId;
   const passage = useStore(c.session, (s) => s.passage);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    if (!targetPassageId) return;
+    if (passage?.passageId === targetPassageId) {
+      setNotFound(false);
+      return;
+    }
+    let cancelled = false;
+    setNotFound(false); // clear any prior not-found while the new open is in flight (no error flash)
+    void (async () => {
+      const opened = await openPassage(
+        { passages: c.repos.passages, progress: c.repos.progress, session: c.session },
+        c.userId,
+        targetPassageId,
+      );
+      if (!cancelled) setNotFound(opened === null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [c, targetPassageId, passage?.passageId]);
+
+  const voiceId = useStore(c.settings, (s) => s.voiceId);
+  const lastSetup = useStore(c.settings, (s) => s.lastSetup);
+  const [generatingNextChapter, setGeneratingNextChapter] = useState(false);
+  const [nextChapterError, setNextChapterError] = useState<string | null>(null);
+
+  const storyDetails = useLiveQuery<
+    { story: StoryRecord; chapters: PassageRecord[] } | null | undefined
+  >(async () => {
+    const storyId = passage?.source.meta.storyRef?.storyId;
+    if (!storyId) return null;
+    const story = await c.repos.stories.get(storyId);
+    if (!story || story.userId !== c.userId) return null;
+    const chapters = story.plan.contentType === 'long_story' ? await c.repos.passages.byStory(c.userId, storyId) : [];
+    return { story, chapters };
+  }, [c, passage?.passageId, passage?.source.meta.storyRef?.storyId]);
 
   const studyWords = useLiveQuery<StudyWord[] | undefined>(async () => {
     if (!passage) return undefined;
@@ -296,6 +539,96 @@ export function ReadingRoute() {
     if (progress) await c.repos.progress.upsert(progress);
   };
 
+  const generateNextStoryChapter = async (): Promise<void> => {
+    const active = c.session.getState().passage;
+    const ref = active?.source.meta.storyRef;
+    const continuation = storyDetails?.story.plan.contentType === 'long_story' ? storyDetails : null;
+    if (!active || !ref || !continuation || generatingNextChapter) return;
+
+    setGeneratingNextChapter(true);
+    setNextChapterError(null);
+    try {
+      const nextIndex = ref.chapterIndex + 1;
+      const existing = continuation.chapters.find((chapter) => chapterIndexOf(chapter) === nextIndex);
+      if (existing) {
+        const indexed = indexedFromRecord(existing);
+        c.session.getState().startPassage(indexed, c.now());
+        const progress = c.session.getState().toReadingProgress(c.userId);
+        if (progress) await c.repos.progress.upsert(progress);
+        c.player.getState().setStatus('unavailable');
+        // Sync the address bar to the already-generated chapter so a reload/share reopens the right
+        // one (the reader is URL-addressable now). The session already holds this chapter, so the
+        // ReadingRoute open-effect's guard short-circuits — no redundant re-open.
+        navigate(`/s/${ref.storyId}/${nextIndex}`);
+        return;
+      }
+
+      let plan = continuation.story.plan;
+      const summary = priorSummaryJa(continuation.chapters, ref.chapterIndex);
+      if (nextIndex >= plan.chapters.length) {
+        const extended = await c.storyPlanner.extendPlan(plan, nextIndex, summary);
+        if (!extended.ok) {
+          setNextChapterError('プロットを延長できませんでした。時間をおいて再試行してください。');
+          return;
+        }
+        plan = extended.value;
+        await c.repos.stories.put({ ...continuation.story, plan });
+      }
+
+      const setup = storyContinuationSetup(lastSetup, active, plan);
+      const targetWordIds = await resolveTargetWordIds(c, setup);
+      const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+      const wordData = await loadWordDataMap(c, targetWordIds);
+      const outcome = await runGenerationPipeline(
+        {
+          createOrchestrator: c.createOrchestrator,
+          scheduling: c.repos.scheduling,
+          passages: c.repos.passages,
+          progress: c.repos.progress,
+          timingMaps: c.repos.timingMaps,
+          tts: c.tts,
+          session: c.session,
+          player: c.player,
+          now: c.now,
+          genId: c.genId,
+          voiceId: voiceId || c.voiceId,
+          wordData,
+        },
+        effectiveSetup,
+        c.userId,
+        {
+          passageId: `${plan.storyId}:${nextIndex}`,
+          storyContext: {
+            storyId: plan.storyId,
+            chapterIndex: nextIndex,
+            plan,
+            ...(summary ? { priorSummaryJa: summary } : {}),
+          },
+        },
+      );
+      if (!outcome.ok) {
+        setNextChapterError(generationErrorMessage(outcome.error));
+        return;
+      }
+      navigate(`/s/${plan.storyId}/${nextIndex}`);
+    } catch {
+      setNextChapterError('続きを生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setGeneratingNextChapter(false);
+    }
+  };
+
+  if (notFound) {
+    return (
+      <div style={notFoundStyle}>
+        <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink }}>文章が見つかりません</div>
+        <button type="button" onClick={() => navigate('/library')} style={notFoundButtonStyle}>
+          文章一覧へ
+        </button>
+      </div>
+    );
+  }
+
   // The display-improvement cluster (Requirements 1–4) is shipped, so the reading-layout flag is
   // on by default; resolveFeatureFlags still allows an override to disable it.
   const { newReadingLayout } = resolveFeatureFlags();
@@ -307,6 +640,12 @@ export function ReadingRoute() {
       newLayout={newReadingLayout}
       onLookup={onLookup}
       onCompleteReading={() => void completeReading()}
+      storyPlan={storyDetails?.story.plan}
+      onGenerateNextChapter={
+        storyDetails?.story.plan.contentType === 'long_story' ? () => void generateNextStoryChapter() : undefined
+      }
+      generatingNextChapter={generatingNextChapter}
+      nextChapterError={nextChapterError}
       renderWordDetail={(wordId, onClose) => <WordDetailRoute wordId={wordId} onClose={onClose} />}
     />
   );
@@ -406,6 +745,72 @@ export function WordbookRoute() {
   );
 }
 
+// ── Library (passage list) ────────────────────────────────────────────────────
+
+export function LibraryRoute() {
+  const c = useContainer();
+  const navigate = useNavigate();
+
+  const passages = useLiveQuery(() => c.repos.passages.all(c.userId), [c]);
+  const storyTitles = useLiveQuery(async () => {
+    const stories = await c.repos.stories.recent(c.userId, 200);
+    return Object.fromEntries(stories.map((s) => [s.storyId, s.plan.titleJa] as const));
+  }, [c]);
+
+  if (!passages) return <ScreenSkeleton />;
+
+  return (
+    <LibraryScreen
+      passages={passages}
+      storyTitles={storyTitles ?? {}}
+      onOpenArticle={(passageId) => navigate(`/p/${passageId}`)}
+      onOpenStory={(storyId) => navigate(`/s/${storyId}`)}
+    />
+  );
+}
+
+// ── Story directory ───────────────────────────────────────────────────────────
+
+export function StoryDirectoryRoute() {
+  const c = useContainer();
+  const navigate = useNavigate();
+  const params = useParams();
+  const storyId = params.storyId ?? '';
+
+  const data = useLiveQuery(async () => {
+    const story = await c.repos.stories.get(storyId);
+    if (!story || story.userId !== c.userId) return null;
+    const chapters = await c.repos.passages.byStory(c.userId, storyId);
+    const generated = new Set(chapters.map((ch) => ch.passage.meta.storyRef?.chapterIndex ?? 0));
+    const rows: StoryChapterRow[] = story.plan.chapters.map((ch) => ({
+      chapterIndex: ch.index,
+      headingJa: ch.headingJa,
+      generated: generated.has(ch.index),
+    }));
+    return { plan: story.plan, rows };
+  }, [c, storyId]);
+
+  if (data === undefined) return <ScreenSkeleton />;
+  if (data === null) {
+    return (
+      <div style={notFoundStyle}>
+        <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink }}>物語が見つかりません</div>
+        <button type="button" onClick={() => navigate('/library')} style={notFoundButtonStyle}>
+          文章一覧へ
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <StoryDirectoryScreen
+      plan={data.plan}
+      chapters={data.rows}
+      onOpenChapter={(chapterIndex) => navigate(`/s/${storyId}/${chapterIndex}`)}
+    />
+  );
+}
+
 // ── Shared word-detail overlay (8.4) ─────────────────────────────────────────
 
 function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => void }): ReactNode {
@@ -458,6 +863,27 @@ const closeButtonStyle: CSSProperties = {
   background: colors.surfaceBlue,
   border: `1px solid ${colors.primaryBorder}`,
   borderRadius: 8,
+  padding: '8px 18px',
+  cursor: 'pointer',
+};
+
+const notFoundStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 16,
+  padding: '80px 24px',
+  background: colors.surfacePage,
+};
+
+const notFoundButtonStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.chip,
   padding: '8px 18px',
   cursor: 'pointer',
 };

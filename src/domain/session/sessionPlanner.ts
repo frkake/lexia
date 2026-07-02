@@ -8,6 +8,7 @@
  */
 
 import { masteryProjector } from '../srs/masteryProjector';
+import { examScale } from '../difficulty/examScale';
 import type { SchedulingRepository } from '../../types/ports';
 import type {
   UserId,
@@ -15,6 +16,7 @@ import type {
   SetupConfig,
   GenerationRequest,
   GenerationTargetWord,
+  StoryContext,
   WordData,
 } from '../../types/domain';
 
@@ -40,6 +42,7 @@ export interface SessionPlanner {
     setup: SetupConfig,
     states: WordSchedulingState[],
     wordData?: Record<string, WordData>,
+    storyContext?: StoryContext,
   ): GenerationRequest;
 }
 
@@ -79,6 +82,7 @@ function buildRequest(
   setup: SetupConfig,
   states: WordSchedulingState[],
   wordData?: Record<string, WordData>,
+  storyContext?: StoryContext,
 ): GenerationRequest {
   const byWord = new Map(states.map((s) => [s.wordId, s]));
   const excluded = new Set(setup.excludedWordIds);
@@ -103,11 +107,14 @@ function buildRequest(
   }
 
   return {
-    level: setup.level,
-    themes: setup.themes,
+    // Resolve the exam-based difficulty to the internal CEFR pivot (generation/validation use CEFR).
+    level: examScale.examToCefr(setup.examTarget),
+    intent: setup.intent,
     newWordRatio: setup.newWordRatio,
-    length: setup.length,
+    wordTarget: setup.wordTarget,
+    contentType: setup.contentType,
     targetWords,
+    ...(storyContext ? { storyContext } : {}),
   };
 }
 

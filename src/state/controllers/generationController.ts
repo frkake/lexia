@@ -25,7 +25,7 @@ import type {
   TimingMapRepository,
   TtsSynthesisPort,
 } from '../../types/ports';
-import type { IndexedPassage, SetupConfig, UserId, WordData, WordSchedulingState } from '../../types/domain';
+import type { IndexedPassage, SetupConfig, StoryContext, UserId, WordData, WordSchedulingState } from '../../types/domain';
 
 export interface GenerationControllerDeps {
   /** Builds a fresh orchestrator bound to the given passageId. */
@@ -60,10 +60,18 @@ export interface GenerationOutcome {
   audio?: Promise<boolean>;
 }
 
+export interface GenerationPipelineOptions {
+  /** Optional fixed passage id, used for story chapters so the id is stable and readable. */
+  passageId?: string;
+  /** Optional story context threaded into SessionPlanner.buildRequest. */
+  storyContext?: StoryContext;
+}
+
 export async function runGenerationPipeline(
   deps: GenerationControllerDeps,
   setup: SetupConfig,
   userId: UserId,
+  options: GenerationPipelineOptions = {},
 ): Promise<GenerationOutcome> {
   const planner = deps.planner ?? sessionPlanner;
   const now = deps.now();
@@ -82,14 +90,14 @@ export async function runGenerationPipeline(
     }
   }
 
-  const req = planner.buildRequest(setup, states, deps.wordData);
-  const passageId = deps.genId();
+  const req = planner.buildRequest(setup, states, deps.wordData, options.storyContext);
+  const passageId = options.passageId ?? deps.genId();
   const result = await deps.createOrchestrator(passageId).generate(req);
 
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
-  const passage = result.value;
+  const passage = attachStoryRef(result.value, options.storyContext);
 
   // Persist the passage, then render NOW (text viewable + lookup-able before audio).
   await deps.passages.put({ passageId, userId, createdAt: now, passage: passage.source });
@@ -104,6 +112,23 @@ export async function runGenerationPipeline(
   const audio = synthesizeAudio(deps, passage);
 
   return { ok: true, passageId, passage, audio };
+}
+
+function attachStoryRef(passage: IndexedPassage, storyContext?: StoryContext): IndexedPassage {
+  if (!storyContext) return passage;
+  return {
+    ...passage,
+    source: {
+      ...passage.source,
+      meta: {
+        ...passage.source.meta,
+        storyRef: {
+          storyId: storyContext.storyId,
+          chapterIndex: storyContext.chapterIndex,
+        },
+      },
+    },
+  };
 }
 
 /** Background audio stage: synthesize, persist the TimingMap, ready the player. */
