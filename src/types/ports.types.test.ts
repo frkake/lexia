@@ -108,6 +108,7 @@ describe('ports', () => {
       get: async () => undefined,
       put: async () => {},
       recent: async () => [],
+      all: async () => [],
       byStory: async () => [],
     };
     const timing: TimingMapRepository = { get: async () => undefined, put: async () => {} };
