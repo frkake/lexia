@@ -311,13 +311,28 @@ export function ReadingScreen({
       </div>
 
       {activeWordId && renderWordDetail ? (
-        <div role="dialog" aria-label="単語詳細" style={detailOverlayStyle}>
+        <div
+          role="dialog"
+          aria-label="単語詳細"
+          style={detailOverlayStyle}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeDetail();
+          }}
+        >
           {renderWordDetail(activeWordId, closeDetail)}
         </div>
       ) : null}
 
       {storyPlan && storyPlanOpen ? (
-        <div role="dialog" aria-modal="true" aria-label="物語設定" style={detailOverlayStyle}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="物語設定"
+          style={detailOverlayStyle}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setStoryPlanOpen(false);
+          }}
+        >
           <StoryPlanDialog plan={storyPlan} onClose={() => setStoryPlanOpen(false)} />
         </div>
       ) : null}

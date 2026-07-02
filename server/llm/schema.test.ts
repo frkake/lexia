@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildAnnotationMessages,
+  buildCharacterIllustrationPrompt,
   buildPassageMessages,
+  buildStoryPlanMessages,
   buildStoryPlanExtensionMessages,
   buildSuggestionMessages,
   maxTokensForWordTarget,
@@ -90,6 +92,35 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
 describe('maxTokensForWordTarget', () => {
   it('is monotonic in the word target', () => {
     expect(maxTokensForWordTarget(800)).toBeGreaterThan(maxTokensForWordTarget(200));
+  });
+});
+
+describe('buildStoryPlanMessages — memorable illustrated cast guidance', () => {
+  it('asks for characters that can carry memorable visual motifs into portraits', () => {
+    const { system } = buildStoryPlanMessages({
+      contentType: 'short_story',
+      genre: 'fantasy',
+      intent: 'daily',
+      level: 'B1',
+    });
+    expect(system).toContain('memorable');
+    expect(system).toContain('signature motif/color/prop/silhouette');
+  });
+});
+
+describe('buildCharacterIllustrationPrompt', () => {
+  it('biases portraits toward stylized, memorable illustration instead of photorealism', () => {
+    const prompt = buildCharacterIllustrationPrompt({
+      name: 'Aria',
+      role: '主人公',
+      descriptionJa: '赤い羽根つき帽子をかぶった勇敢な少女',
+      genre: 'fantasy',
+      styleHint: '幻想的な作風',
+    });
+    expect(prompt).toContain('Highly stylized 2D');
+    expect(prompt).toContain('not photorealistic');
+    expect(prompt).toContain('memorable silhouette');
+    expect(prompt).toContain('signature outfit, color accent, or prop');
   });
 });
 

@@ -587,6 +587,8 @@ const STORY_PLAN_SYSTEM = [
   '(titleJa, synopsisJa, character descriptionJa, chapter headingJa/beatJa) are written in Japanese.',
   '',
   '- characters: a small cast (2-5) with a name, a role, and a short Japanese description each.',
+  '  Make each character memorable and visually distinctive: include a clear personality hook plus',
+  '  one signature motif/color/prop/silhouette detail that can carry through to illustrations.',
   '- synopsisJa: a 2-4 sentence Japanese plot summary consistent with the genre.',
   '- chapters: a short story has EXACTLY ONE chapter (index 0); a long story has several (index 0..n)',
   '  each with a Japanese heading and a one-line beat describing what happens.',
@@ -709,7 +711,9 @@ export function buildCharacterIllustrationPrompt(req: {
   return [
     `Character portrait illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
     `Character description (Japanese): ${req.descriptionJa}`,
-    'Clean, friendly illustrated character portrait; waist-up; single character centered;',
+    'Highly stylized 2D storybook/anime-inspired character art; clearly illustrated, not photorealistic;',
+    'memorable silhouette; expressive face; signature outfit, color accent, or prop from the description;',
+    'clean graphic shapes; rich but controlled colors; waist-up; single character centered;',
     `soft even lighting; simple neutral background; no text, letters, watermark, or logo.${style}`,
   ].join(' ');
 }

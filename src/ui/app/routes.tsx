@@ -439,7 +439,6 @@ export function HomeRoute() {
       now={c.now()}
       onContinue={() => void resume()}
       onStartReview={() => navigate('/review')}
-      onOpenPassage={() => void resume()}
     />
   );
 }

@@ -132,7 +132,14 @@ export function WordbookScreen({ words, renderWordDetail }: WordbookScreenProps)
       </div>
 
       {selected && renderWordDetail ? (
-        <div role="dialog" aria-label="単語詳細" style={detailOverlayStyle}>
+        <div
+          role="dialog"
+          aria-label="単語詳細"
+          style={detailOverlayStyle}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeDetail();
+          }}
+        >
           {renderWordDetail(selected, closeDetail)}
         </div>
       ) : null}

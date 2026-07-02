@@ -90,10 +90,15 @@ describe('<ReadingScreen/>', () => {
         <button onClick={onClose}>閉じる</button>
       </div>
     ));
-    const { getByText, getByTestId, queryByTestId } = renderScreen({ passage: makePassage(), renderWordDetail });
+    const { getByRole, getByText, getByTestId, queryByTestId } = renderScreen({ passage: makePassage(), renderWordDetail });
     expect(queryByTestId('detail')).toBeNull();
     fireEvent.click(within(getByTestId('passage-prose')).getByText('restless'));
     expect(queryByTestId('detail')!.textContent).toContain('restless');
+    fireEvent.click(getByTestId('detail'));
+    expect(queryByTestId('detail')).toBeTruthy();
+    fireEvent.click(getByRole('dialog', { name: '単語詳細' }));
+    expect(queryByTestId('detail')).toBeNull();
+    fireEvent.click(within(getByTestId('passage-prose')).getByText('restless'));
     fireEvent.click(getByText('閉じる'));
     expect(queryByTestId('detail')).toBeNull();
   });
@@ -168,7 +173,9 @@ describe('<ReadingScreen/>', () => {
     expect(getByText('Mia')).toBeTruthy();
     expect(getByText('プロット')).toBeTruthy();
     expect(getByText(/星の門を開く/)).toBeTruthy();
-    fireEvent.click(getByRole('button', { name: '物語設定を閉じる' }));
+    fireEvent.click(getByText('キャラクター設定'));
+    expect(getByRole('dialog', { name: '物語設定' })).toBeTruthy();
+    fireEvent.click(getByRole('dialog', { name: '物語設定' }));
     expect(queryByRole('dialog', { name: '物語設定' })).toBeNull();
   });
 

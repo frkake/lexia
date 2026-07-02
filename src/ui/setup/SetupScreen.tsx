@@ -148,9 +148,9 @@ export function SetupScreen({
     <div className="setup-page" style={{ display: 'flex', justifyContent: 'center', background: colors.surfacePage, padding: '40px 24px' }}>
       <div className="setup-card" style={cardStyle}>
         <div style={{ padding: '34px 40px 30px' }}>
-          <h1 style={{ fontFamily: fonts.serifJp, fontSize: 27, fontWeight: 500, color: colors.ink, margin: 0 }}>
+          <h2 style={{ fontFamily: fonts.serifJp, fontSize: 27, fontWeight: 500, color: colors.ink, margin: 0 }}>
             学習をはじめる
-          </h1>
+          </h2>
           <div style={{ fontFamily: fonts.ui, fontSize: 13, color: colors.muted, marginTop: 5 }}>
             あなたの未学習・苦手な単語を織り込んだ文章を生成します。
           </div>

@@ -273,3 +273,76 @@ body {
     border-left: 1px solid var(--border-card);
   }
 }
+
+/*
+ * Home (/) — the "writing desk": a masthead band over a two-column body so the page reads
+ * across the width instead of stacking three tall full-width blocks down one column (which
+ * made it far too long). The body is `[ compose | ledger ]`: the generation form is the wide
+ * working surface and the progress dashboard runs down a slim right margin (its `rail` layout).
+ * Page height ≈ band + max(form, ledger). The child screens are reused verbatim; here we only
+ * neutralize their standalone-page chrome (own centering padding / max-width / background).
+ * The 1440px cap lets the two columns spread across a wide screen while keeping the outer
+ * gutters from collapsing on ultrawide monitors.
+ */
+.home-page {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 40px 40px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.home-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+/* The ledger is a sticky right margin on desktop so it stays in view as the form scrolls. */
+.home-ledger {
+  position: sticky;
+  top: 24px;
+}
+
+/* SetupScreen drops its own page padding + fills its column (it centers itself when standalone). */
+.home-page .setup-page {
+  padding: 0 !important;
+  background: transparent;
+  justify-content: stretch !important;
+}
+
+.home-page .setup-card {
+  max-width: none !important;
+}
+
+/* Tablet / narrow desktop: the two columns no longer both fit — collapse to one, ledger last. */
+@media (max-width: 900px) {
+  .home-body {
+    grid-template-columns: 1fr;
+  }
+
+  .home-ledger {
+    position: static;
+  }
+}
+
+@media (max-width: 600px) {
+  .home-page {
+    padding: 20px 16px 28px;
+    gap: 20px;
+  }
+
+  .home-masthead {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 18px !important;
+    padding: 20px !important;
+  }
+
+  /* Full-width stat tiles that split the row so the day's figures stay glanceable on a phone. */
+  .home-stats > div {
+    flex: 1;
+  }
+}
