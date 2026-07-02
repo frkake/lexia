@@ -93,3 +93,72 @@ function memStorage() {
   const m = new Map<string, string>();
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
 }
+
+import { openPassage } from './sessionBootstrap';
+import type { PassageRepository, PassageRecord, ProgressRepository } from '../../types/ports';
+import type { ReadingProgress } from '../../types/domain';
+
+function record(passageId: string, userId: string): PassageRecord {
+  const passage: PassageOutput = {
+    meta: { title: 'T', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+    sentences: [
+      { tokens: ['One', '.'], translationJa: '一。' },
+      { tokens: ['Two', '.'], translationJa: '二。' },
+      { tokens: ['Three', '.'], translationJa: '三。' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+  };
+  return { passageId, userId: userId as UserId, createdAt: 1, passage };
+}
+
+function deps(records: PassageRecord[], progress: ReadingProgress[] = []) {
+  const passages: Pick<PassageRepository, 'get'> = {
+    async get(id) {
+      return records.find((r) => r.passageId === id);
+    },
+  };
+  const progressRepo: Pick<ProgressRepository, 'get'> = {
+    async get(userId, passageId) {
+      return progress.find((p) => p.userId === userId && p.passageId === passageId);
+    },
+  };
+  return {
+    passages: passages as PassageRepository,
+    progress: progressRepo as ProgressRepository,
+    session: createSessionStore(),
+  };
+}
+
+describe('openPassage', () => {
+  it('loads a passage into the session and restores the saved sentence position', async () => {
+    const d = deps(
+      [record('p1', 'u')],
+      [{ userId: 'u' as UserId, passageId: 'p1', sentenceIndex: 2, percent: 100, status: 'in_progress', startedAt: 1 }],
+    );
+    const result = await openPassage(d, 'u' as UserId, 'p1');
+    expect(result?.passageId).toBe('p1');
+    expect(d.session.getState().passage?.passageId).toBe('p1');
+    expect(d.session.getState().sentenceIndex).toBe(2);
+  });
+
+  it('starts at sentence 0 when there is no saved progress', async () => {
+    const d = deps([record('p1', 'u')]);
+    await openPassage(d, 'u' as UserId, 'p1');
+    expect(d.session.getState().sentenceIndex).toBe(0);
+  });
+
+  it('returns null for an unknown passage and leaves the session untouched', async () => {
+    const d = deps([record('p1', 'u')]);
+    const result = await openPassage(d, 'u' as UserId, 'missing');
+    expect(result).toBeNull();
+    expect(d.session.getState().passage).toBeNull();
+  });
+
+  it('returns null when the passage belongs to another user', async () => {
+    const d = deps([record('p1', 'other')]);
+    const result = await openPassage(d, 'u' as UserId, 'p1');
+    expect(result).toBeNull();
+  });
+});
