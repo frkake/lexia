@@ -1,5 +1,5 @@
 /**
- * L4 — router: the five client routes under the resident AppShell (design.md
+ * L4 — router: the client routes under the resident AppShell (design.md
  * "router.tsx", 12.1). `createBrowserRouter` is built lazily (it touches window.history)
  * so importing the route table stays side-effect free for tests. Each route mounts its
  * container (src/ui/app/routes.tsx), which wires the screen to live data + the flow

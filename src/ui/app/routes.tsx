@@ -2,10 +2,10 @@
  * L4 — route containers: the thin wiring that connects each presentational screen to the
  * live data and flow controllers via the AppContext container. This is where tasks 10.1–10.4
  * surface in the UI:
- *   - SetupRoute → runGenerationPipeline (Flow 1: generate→validate→persist→render→TTS).
- *   - ReadingRoute → applyRecallSignal on a word tap (Flow 3: reading-time recall).
+ *   - HomeRoute → runGenerationPipeline (Flow 1: generate→validate→persist→render→TTS) + dashboard summary.
+ *   - ReadingRoute → opens a passage by URL (openPassage) + applyRecallSignal on a word tap (Flow 3).
  *   - ReviewRoute → applyReviewRating on a rating (Flow 2: reschedule→log→reproject).
- *   - DashboardRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
+ *   - LibraryRoute / StoryDirectoryRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
  * Reads are reactive (`useLiveQuery`) so any repository write re-renders immediately.
  */
 
@@ -464,6 +464,7 @@ export function ReadingRoute() {
       return;
     }
     let cancelled = false;
+    setNotFound(false); // clear any prior not-found while the new open is in flight (no error flash)
     void (async () => {
       const opened = await openPassage(
         { passages: c.repos.passages, progress: c.repos.progress, session: c.session },

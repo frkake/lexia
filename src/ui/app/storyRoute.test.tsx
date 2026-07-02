@@ -154,7 +154,6 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(screen.getByText('キャラクター設定')).toBeTruthy();
     expect(screen.getByText('Mia')).toBeTruthy();
     expect(screen.getByText('少女が星を探す短い物語。')).toBeTruthy();
-    db.close();
   });
 
   it('shows body-generation errors on the story confirmation gate', async () => {
@@ -197,7 +196,6 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     );
     expect(screen.getByText('この設定で執筆する')).toBeTruthy();
     expect(router.state.location.pathname).toBe('/');
-    db.close();
   });
 
   it('keeps the current plan illustrating when an older portrait request finishes after regenerate', async () => {
@@ -255,7 +253,6 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(screen.getByTestId('character-portrait-loading')).toBeTruthy();
     expect(screen.queryByTestId('character-portrait-placeholder')).toBeNull();
     expect(screen.queryByAltText('Mia')).toBeNull();
-    db.close();
   });
 
   it('generates the next long-story chapter and extends the plot when chapter beats run out', async () => {
@@ -325,6 +322,5 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(storedStory?.plan.chapters.map((chapter) => chapter.index)).toEqual([0, 1]);
     const passages = await repos.passages.byStory(userId, 'story_1');
     expect(passages.map((p) => p.passage.meta.storyRef?.chapterIndex)).toEqual([0, 1]);
-    db.close();
   });
 });
