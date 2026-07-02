@@ -1,12 +1,13 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { restoreReadingSession, hydrateSettings } from './sessionBootstrap';
+import { restoreReadingSession, hydrateSettings, openPassage } from './sessionBootstrap';
 import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
 import { createSessionStore } from '../stores/sessionStore';
 import { createSettingsStore } from '../stores/settingsStore';
-import type { PassageOutput, Settings, UserId } from '../../types/domain';
+import type { PassageOutput, Settings, UserId, ReadingProgress } from '../../types/domain';
+import type { PassageRepository, PassageRecord, ProgressRepository } from '../../types/ports';
 
 let seq = 0;
 async function freshEnv() {
@@ -94,10 +95,6 @@ function memStorage() {
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
 }
 
-import { openPassage } from './sessionBootstrap';
-import type { PassageRepository, PassageRecord, ProgressRepository } from '../../types/ports';
-import type { ReadingProgress } from '../../types/domain';
-
 function record(passageId: string, userId: string): PassageRecord {
   const passage: PassageOutput = {
     meta: { title: 'T', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
@@ -160,5 +157,6 @@ describe('openPassage', () => {
     const d = deps([record('p1', 'other')]);
     const result = await openPassage(d, 'u' as UserId, 'p1');
     expect(result).toBeNull();
+    expect(d.session.getState().passage).toBeNull();
   });
 });
