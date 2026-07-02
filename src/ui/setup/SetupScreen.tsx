@@ -13,6 +13,7 @@ import { useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
 import { ExamLevelPicker } from './ExamLevelPicker';
 import { WordTargetSlider } from './WordTargetSlider';
+import { lengthSpec } from '../../domain/generation/lengthSpec';
 import type { ContentType, ExamCriterion, LearningIntent, SetupConfig, StoryGenre } from '../../types/domain';
 
 export interface CandidateWord {
@@ -58,6 +59,11 @@ const GENRES: { value: StoryGenre; label: string }[] = [
 
 /** Default word target when none is seeded (mid of the article range). */
 const DEFAULT_WORD_TARGET = 400;
+
+function clampWordTarget(contentType: ContentType, value: number): number {
+  const range = lengthSpec.wordRange(contentType);
+  return Math.min(range.max, Math.max(range.min, value));
+}
 
 /** Which required conditions are still unmet. Target words are optional. */
 export function setupMissing(examTarget: ExamCriterion | undefined, targetWordIds: string[]): string[] {
@@ -123,11 +129,12 @@ export function SetupScreen({
   const generate = (): void => {
     setAttempted(true);
     if (missing.length > 0 || !examTarget) return;
+    const effectiveWordTarget = clampWordTarget(contentType, wordTarget);
     onGenerate?.({
       examTarget,
       intent,
       newWordRatio,
-      wordTarget,
+      wordTarget: effectiveWordTarget,
       contentType,
       ...(isStory
         ? { storyOptions: { genre, ...(homageTitle.trim() ? { homageTitle: homageTitle.trim() } : {}) } }
@@ -195,7 +202,10 @@ export function SetupScreen({
                     type="button"
                     data-testid={`content-type-${value}`}
                     aria-pressed={on}
-                    onClick={() => setContentType(value)}
+                    onClick={() => {
+                      setContentType(value);
+                      setWordTarget((prev) => clampWordTarget(value, prev));
+                    }}
                     style={contentTypeStyle(on)}
                   >
                     {label}

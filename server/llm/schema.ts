@@ -11,7 +11,14 @@
  * half-open `[tokenStart, tokenEnd)` token ranges within one sentence.
  */
 
-import type { GenerationRequest, LearningIntent, PassageAnnotationRequest, Sentence } from '../../src/types/domain';
+import type {
+  GenerationRequest,
+  LearningIntent,
+  PassageAnnotationRequest,
+  Sentence,
+  StoryPlan,
+  StoryPlanExtensionRequest,
+} from '../../src/types/domain';
 import { lengthSpec } from '../../src/domain/generation/lengthSpec';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 
@@ -234,8 +241,8 @@ export function maxTokensForWordTarget(wordTarget: number): number {
 }
 
 const PASSAGE_SYSTEM = [
-  'You generate short English reading passages for a vocabulary-learning app whose users are',
-  'Japanese speakers. You ALWAYS reply with a single JSON object matching the PassageOutput',
+  'You generate English reading passages and story chapters for a vocabulary-learning app whose',
+  'users are Japanese speakers. You ALWAYS reply with a single JSON object matching the PassageOutput',
   'schema below — no prose, no markdown, no code fences.',
   '',
   'Tokenization (critical): each sentence is an ARRAY OF TOKENS, not a string. A token is one',
@@ -316,10 +323,13 @@ function passageUser(req: GenerationRequest): string {
   if (req.storyContext) {
     lines.push(
       '',
-      'This passage is one chapter of a longer story. Keep it consistent with this plot and prior context',
-      '(reuse the same characters and setting; continue the plot; do NOT copy any source text verbatim):',
+      'This passage is STORY PROSE, not a plan. Write the requested chapter body only.',
+      'Keep it consistent with this plot and prior context (reuse the same characters and setting;',
+      'continue the plot beat for this chapter; do NOT copy any source text verbatim):',
       JSON.stringify(
         {
+          storyTitleJa: req.storyContext.plan.titleJa,
+          contentType: req.storyContext.plan.contentType,
           chapterIndex: req.storyContext.chapterIndex,
           synopsisJa: req.storyContext.plan.synopsisJa,
           characters: req.storyContext.plan.characters,
@@ -610,6 +620,98 @@ export function buildStoryPlanMessages(req: {
 /** Output-token budget for a story plan (scaffold only, not prose). */
 export function storyPlanMaxTokens(): number {
   return 1600;
+}
+
+/** JSON Schema for extending a StoryPlan with additional future chapter beats. */
+export const STORY_PLAN_EXTENSION_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    synopsisJa: { type: 'string' },
+    chapters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          index: { type: 'integer' },
+          headingJa: { type: 'string' },
+          beatJa: { type: 'string' },
+        },
+        required: ['index', 'headingJa', 'beatJa'],
+      },
+    },
+  },
+  required: ['synopsisJa', 'chapters'],
+} as const;
+
+const STORY_PLAN_EXTENSION_SYSTEM = [
+  'You extend an existing long-story PLAN for a Japanese-audience English reading app.',
+  'Reply with a single JSON object matching the StoryPlanExtension schema — no prose, no markdown,',
+  'no code fences. All human-readable fields are written in Japanese.',
+  '',
+  '- Keep the existing title, genre, characters, and established plot facts unchanged.',
+  '- Do NOT rewrite existing chapters. Create only future chapter beats starting at nextChapterIndex.',
+  '- If the original outline has run out, continue with a coherent new arc that follows from the',
+  '  priorSummaryJa and keeps the same central conflict/motifs.',
+  '- synopsisJa should be the updated whole-story overview including the new future arc.',
+  '',
+  'HOMAGE (copyright): when a homage is present, echo only style and motifs. Never reuse source',
+  'proper nouns, character names, actual events, or text.',
+].join('\n');
+
+function storyPlanForPrompt(plan: StoryPlan): StoryPlan {
+  return {
+    ...plan,
+    characters: plan.characters.map((character) => ({
+      name: character.name,
+      role: character.role,
+      descriptionJa: character.descriptionJa,
+    })),
+  };
+}
+
+export function buildStoryPlanExtensionMessages(req: StoryPlanExtensionRequest): { system: string; user: string } {
+  const additionalChapters = Math.max(1, Math.min(req.additionalChapters ?? 3, 6));
+  const ask = {
+    plan: storyPlanForPrompt(req.plan),
+    nextChapterIndex: req.nextChapterIndex,
+    priorSummaryJa: req.priorSummaryJa ?? '',
+    additionalChapters,
+  };
+  return {
+    system: STORY_PLAN_EXTENSION_SYSTEM,
+    user: `Extend this long-story plan with exactly ${additionalChapters} new chapter beats:\n${JSON.stringify(ask, null, 2)}`,
+  };
+}
+
+/** Output-token budget for plot extension (scaffold only, not prose). */
+export function storyPlanExtensionMaxTokens(additionalChapters = 3): number {
+  return Math.min(2200, 900 + Math.max(1, additionalChapters) * 260);
+}
+
+// ── Character illustration (Requirement 6.8) ─────────────────────────────────
+
+/**
+ * Build the English image prompt for one character portrait. The character's Japanese description is
+ * passed through verbatim (image models read Japanese; a machine translation would drift), wrapped in
+ * a fixed style directive so the whole cast reads as one coherent illustrated set. `styleHint` (the
+ * plan's homage note or genre) biases mood/palette without ever reproducing a source work.
+ */
+export function buildCharacterIllustrationPrompt(req: {
+  name: string;
+  role: string;
+  descriptionJa: string;
+  genre: string;
+  styleHint?: string;
+}): string {
+  const style = req.styleHint?.trim() ? ` Overall style/mood: ${req.styleHint.trim()}.` : '';
+  return [
+    `Character portrait illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
+    `Character description (Japanese): ${req.descriptionJa}`,
+    'Clean, friendly illustrated character portrait; waist-up; single character centered;',
+    `soft even lighting; simple neutral background; no text, letters, watermark, or logo.${style}`,
+  ].join(' ');
 }
 
 const SUGGEST_SYSTEM = [

@@ -6,7 +6,7 @@
  */
 
 import type { StoryGateway } from '../../types/ports';
-import type { StoryPlan, StoryPlanRequest } from '../../types/domain';
+import type { CharacterIllustrationRequest, StoryPlan, StoryPlanExtensionRequest, StoryPlanRequest } from '../../types/domain';
 
 export interface HttpStoryGatewayOptions {
   baseUrl?: string;
@@ -39,5 +39,43 @@ export class HttpStoryGateway implements StoryGateway {
     const body = (await response.json()) as { storyPlan?: StoryPlan };
     if (!body.storyPlan) throw new Error('story plan response missing storyPlan');
     return body.storyPlan;
+  }
+
+  async extendStoryPlan(req: StoryPlanExtensionRequest): Promise<StoryPlan> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/story:extend`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(req),
+      });
+    } catch (cause) {
+      throw new Error(`story extension request failed: ${cause instanceof Error ? cause.message : 'network error'}`);
+    }
+    if (!response.ok) {
+      throw new Error(`story extension request failed (${response.status})`);
+    }
+    const body = (await response.json()) as { storyPlan?: StoryPlan };
+    if (!body.storyPlan) throw new Error('story extension response missing storyPlan');
+    return body.storyPlan;
+  }
+
+  async illustrateCharacter(req: CharacterIllustrationRequest): Promise<string> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/story:illustrate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(req),
+      });
+    } catch (cause) {
+      throw new Error(`character illustration request failed: ${cause instanceof Error ? cause.message : 'network error'}`);
+    }
+    if (!response.ok) {
+      throw new Error(`character illustration request failed (${response.status})`);
+    }
+    const body = (await response.json()) as { illustrationUrl?: string };
+    if (!body.illustrationUrl) throw new Error('illustration response missing illustrationUrl');
+    return body.illustrationUrl;
   }
 }

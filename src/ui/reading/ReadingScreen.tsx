@@ -8,7 +8,7 @@
  */
 
 import { useNavigate } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { PassageRenderer } from './PassageRenderer';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
@@ -22,7 +22,7 @@ import { useSessionStore, sessionStore } from '../../state/stores/sessionStore';
 import { useSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import { usePlayerStore } from '../../state/stores/playerStore';
 import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
-import type { IndexedPassage } from '../../types/domain';
+import type { IndexedPassage, StoryPlan } from '../../types/domain';
 
 const FONT_STEPS = [0.85, 1, 1.15, 1.3, 1.45];
 
@@ -49,6 +49,12 @@ export interface ReadingScreenProps {
   onLookup?: (wordId: string) => void;
   /** Reading-time recognition: learner finished the passage without looking up the rest. */
   onCompleteReading?: () => void;
+  /** Long-story continuation: generate or open the next chapter from the current story plan. */
+  onGenerateNextChapter?: () => void;
+  generatingNextChapter?: boolean;
+  nextChapterError?: string | null;
+  /** Story-only settings scaffold shown from the body page. */
+  storyPlan?: StoryPlan;
   /**
    * Feature-flag switch (6.1 / 7.4): when true, render the 3-zone layout (sentence-unit grid,
    * right-cell translation, line-aligned rail). Default false preserves the legacy reading layout.
@@ -56,12 +62,24 @@ export interface ReadingScreenProps {
   newLayout?: boolean;
 }
 
-export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCompleteReading, newLayout = false }: ReadingScreenProps) {
+export function ReadingScreen({
+  passage,
+  rail,
+  renderWordDetail,
+  onLookup,
+  onCompleteReading,
+  onGenerateNextChapter,
+  generatingNextChapter = false,
+  nextChapterError = null,
+  storyPlan,
+  newLayout = false,
+}: ReadingScreenProps) {
   const navigate = useNavigate();
   const sessionPassage = useSessionStore((s) => s.passage);
   const activeWordId = useSessionStore((s) => s.activeWordId);
   const fontScale = useSettingsStore((s) => s.fontScale);
   const translationMode = useSettingsStore((s) => s.translationMode);
+  const [storyPlanOpen, setStoryPlanOpen] = useState(false);
   // Follow-along: the TTS playhead token (HighlightController) emphasizes its span.
   const activeTokenId = usePlayerStore((s) => s.currentTokenId);
 
@@ -111,6 +129,9 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
       document.removeEventListener('click', onClick);
     };
   }, []);
+  useEffect(() => {
+    setStoryPlanOpen(false);
+  }, [active?.source.meta.storyRef?.storyId]);
 
   if (!active) {
     return (
@@ -187,6 +208,11 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
                 {metaLine}
               </div>
               <div className="reading-toolbar-controls" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                {storyPlan ? (
+                  <button type="button" data-testid="story-settings" onClick={() => setStoryPlanOpen(true)} style={storySettingsButtonStyle}>
+                    物語設定
+                  </button>
+                ) : null}
                 <TranslationModeToggle />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} aria-label="文字サイズ">
                   <button type="button" aria-label="文字を小さく" onClick={() => stepFont(-1)} style={sizeButtonStyle}>
@@ -247,11 +273,30 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
 
             <Legend />
 
-            {onCompleteReading ? (
-              <div style={{ marginTop: 22, display: 'flex', justifyContent: 'flex-end' }}>
-                <button type="button" data-testid="reading-complete" onClick={onCompleteReading} style={completeButtonStyle}>
-                  読了として記録
-                </button>
+            {onCompleteReading || onGenerateNextChapter ? (
+              <div style={{ marginTop: 22, display: 'flex', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+                {nextChapterError ? (
+                  <div role="alert" style={storyErrorStyle}>
+                    {nextChapterError}
+                  </div>
+                ) : null}
+                {onGenerateNextChapter ? (
+                  <button
+                    type="button"
+                    data-testid="generate-next-chapter"
+                    onClick={onGenerateNextChapter}
+                    disabled={generatingNextChapter}
+                    aria-busy={generatingNextChapter}
+                    style={nextChapterButtonStyle(generatingNextChapter)}
+                  >
+                    {generatingNextChapter ? '続きを生成しています…' : '続きを生成'}
+                  </button>
+                ) : null}
+                {onCompleteReading ? (
+                  <button type="button" data-testid="reading-complete" onClick={onCompleteReading} style={completeButtonStyle}>
+                    読了として記録
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -270,7 +315,82 @@ export function ReadingScreen({ passage, rail, renderWordDetail, onLookup, onCom
           {renderWordDetail(activeWordId, closeDetail)}
         </div>
       ) : null}
+
+      {storyPlan && storyPlanOpen ? (
+        <div role="dialog" aria-modal="true" aria-label="物語設定" style={detailOverlayStyle}>
+          <StoryPlanDialog plan={storyPlan} onClose={() => setStoryPlanOpen(false)} />
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function StoryPlanDialog({ plan, onClose }: { plan: StoryPlan; onClose: () => void }) {
+  const contentType = plan.contentType === 'long_story' ? '長編物語' : '短編物語';
+  return (
+    <section style={storyDialogStyle}>
+      <div style={storyDialogHeaderStyle}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 4 }}>
+            {contentType} · {plan.genre}
+          </div>
+          <h2 style={storyDialogTitleStyle}>{plan.titleJa}</h2>
+        </div>
+        <button type="button" aria-label="物語設定を閉じる" onClick={onClose} style={storyDialogCloseStyle}>
+          ×
+        </button>
+      </div>
+
+      <div style={storyDialogBodyStyle}>
+        <section>
+          <h3 style={storySectionTitleStyle}>物語全体の概要</h3>
+          <p style={storySynopsisStyle}>{plan.synopsisJa}</p>
+          {plan.homage?.title ? (
+            <p style={storyMetaNoteStyle}>参考スタイル: {plan.homage.title}</p>
+          ) : null}
+        </section>
+
+        <section>
+          <h3 style={storySectionTitleStyle}>キャラクター設定</h3>
+          <div style={storyCharacterListStyle}>
+            {plan.characters.map((character) => (
+              <article key={`${character.name}:${character.role}`} style={storyCharacterItemStyle}>
+                {character.illustrationUrl ? (
+                  <img src={character.illustrationUrl} alt={character.name} style={storyCharacterImageStyle} />
+                ) : (
+                  <div aria-hidden="true" style={storyCharacterInitialStyle}>
+                    {[...character.name][0] ?? '?'}
+                  </div>
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: fonts.serif, fontSize: 16, fontWeight: 600, color: colors.ink }}>
+                    {character.name}
+                  </div>
+                  <div style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, marginTop: 1 }}>
+                    {character.role}
+                  </div>
+                  <div style={{ fontFamily: fonts.ui, fontSize: 12.5, color: colors.inkSoft, marginTop: 5, lineHeight: 1.55 }}>
+                    {character.descriptionJa}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 style={storySectionTitleStyle}>プロット</h3>
+          <ol style={storyPlotListStyle}>
+            {plan.chapters.map((chapter) => (
+              <li key={chapter.index} style={storyPlotItemStyle}>
+                <span style={{ fontWeight: 600, color: colors.ink }}>{chapter.headingJa}</span>
+                {chapter.beatJa ? <span style={{ color: colors.inkSoft }}> {chapter.beatJa}</span> : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -292,6 +412,42 @@ const completeButtonStyle: React.CSSProperties = {
   borderRadius: radius.control,
   padding: '9px 16px',
   cursor: 'pointer',
+};
+
+const storySettingsButtonStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '7px 11px',
+  cursor: 'pointer',
+};
+
+const nextChapterButtonStyle = (busy: boolean): React.CSSProperties => ({
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  color: '#fff',
+  background: colors.primary,
+  border: 'none',
+  borderRadius: radius.control,
+  padding: '9px 16px',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.72 : 1,
+});
+
+const storyErrorStyle: React.CSSProperties = {
+  flexBasis: '100%',
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.control,
+  padding: '8px 11px',
 };
 
 const backButtonStyle: React.CSSProperties = {
@@ -335,4 +491,132 @@ const detailOverlayStyle: React.CSSProperties = {
   background: 'rgba(25,40,65,.28)',
   padding: 20,
   zIndex: 40,
+};
+
+const storyDialogStyle: React.CSSProperties = {
+  width: 'min(760px, 100%)',
+  maxHeight: 'min(82vh, 760px)',
+  display: 'flex',
+  flexDirection: 'column',
+  background: colors.surfaceCard,
+  borderRadius: radius.card,
+  boxShadow: '0 18px 60px rgba(25,40,65,.24), 0 2px 8px rgba(25,40,65,.10)',
+  overflow: 'hidden',
+};
+
+const storyDialogHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 18,
+  padding: '22px 26px 18px',
+  borderBottom: `1px solid ${colors.borderCard}`,
+};
+
+const storyDialogTitleStyle: React.CSSProperties = {
+  margin: 0,
+  fontFamily: fonts.serifJp,
+  fontSize: 25,
+  fontWeight: 600,
+  lineHeight: 1.25,
+  color: colors.ink,
+};
+
+const storyDialogCloseStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  flex: '0 0 auto',
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  background: colors.surfaceCard,
+  color: colors.inkSoft,
+  fontSize: 20,
+  lineHeight: 1,
+  cursor: 'pointer',
+};
+
+const storyDialogBodyStyle: React.CSSProperties = {
+  overflowY: 'auto',
+  padding: '22px 26px 26px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 22,
+};
+
+const storySectionTitleStyle: React.CSSProperties = {
+  margin: '0 0 9px',
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 700,
+  color: colors.ink,
+};
+
+const storySynopsisStyle: React.CSSProperties = {
+  margin: 0,
+  fontFamily: fonts.ui,
+  fontSize: 14,
+  lineHeight: 1.75,
+  color: colors.inkSoft,
+};
+
+const storyMetaNoteStyle: React.CSSProperties = {
+  margin: '8px 0 0',
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  color: colors.faint,
+};
+
+const storyCharacterListStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+  gap: 9,
+};
+
+const storyCharacterItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 11,
+  padding: '11px 12px',
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  background: colors.surfaceSubtle,
+};
+
+const storyCharacterImageStyle: React.CSSProperties = {
+  width: 52,
+  height: 52,
+  flex: '0 0 auto',
+  objectFit: 'cover',
+  borderRadius: radius.control,
+  background: colors.avatarBg,
+};
+
+const storyCharacterInitialStyle: React.CSSProperties = {
+  width: 52,
+  height: 52,
+  flex: '0 0 auto',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  background: colors.surfaceCard,
+  fontFamily: fonts.serif,
+  fontSize: 20,
+  fontWeight: 600,
+  color: colors.muted,
+};
+
+const storyPlotListStyle: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: 22,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+};
+
+const storyPlotItemStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  lineHeight: 1.55,
 };

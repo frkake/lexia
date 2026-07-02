@@ -4,7 +4,9 @@
  * One database per learner, named `lexia_<userId>` (`anonymous` before sign-in,
  * migrated on first sign-in). Numbered migrations via `version(n).stores().upgrade()`;
  * the latest declared version is APP_SCHEMA_VERSION and is mirrored into the settings
- * store. Audio/illustration blobs are never stored — only external URL references.
+ * store. Audio/illustration blobs are never stored — only external URL references. The one
+ * deliberate exception (Requirement 6.8): story character portraits have no CDN, so they are
+ * stored inline as base64 `data:` URLs within `StoryRecord.plan.characters[].illustrationUrl`.
  */
 
 import Dexie, { type Table, type Transaction } from 'dexie';

@@ -27,6 +27,9 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
   it('shows the generated characters and plot for review', () => {
     const { getByText } = render(<StoryPlanReview plan={plan()} onConfirm={() => {}} />);
     expect(getByText('竜の物語')).toBeTruthy();
+    expect(getByText('物語全体の概要')).toBeTruthy();
+    expect(getByText('キャラクター設定')).toBeTruthy();
+    expect(getByText('プロット')).toBeTruthy();
     expect(getByText(/竜と少女が世界を救う冒険。/)).toBeTruthy();
     expect(getByText('Aria')).toBeTruthy();
     expect(getByText('Draco')).toBeTruthy();
@@ -44,7 +47,7 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
   it('lets the learner edit the synopsis before confirming (6.3 edit)', () => {
     const onConfirm = vi.fn<(p: StoryPlan) => void>();
     const { getByLabelText, getByText } = render(<StoryPlanReview plan={plan()} onConfirm={onConfirm} />);
-    fireEvent.change(getByLabelText('あらすじ'), { target: { value: '新しいあらすじ' } });
+    fireEvent.change(getByLabelText('物語全体の概要'), { target: { value: '新しいあらすじ' } });
     fireEvent.click(getByText('この設定で執筆する'));
     expect(onConfirm.mock.calls[0]![0].synopsisJa).toBe('新しいあらすじ');
   });
@@ -60,5 +63,58 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     const { getByText } = render(<StoryPlanReview plan={plan()} onConfirm={() => {}} onCancel={onCancel} />);
     fireEvent.click(getByText('やり直す'));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a character portrait when the plan carries an illustrationUrl (6.8)', () => {
+    const withArt = plan({
+      characters: [{ name: 'Aria', role: '主人公', descriptionJa: '勇敢な少女', illustrationUrl: 'data:image/png;base64,QUJD' }],
+    });
+    const { getByAltText } = render(<StoryPlanReview plan={withArt} onConfirm={() => {}} />);
+    const img = getByAltText('Aria') as HTMLImageElement;
+    expect(img.tagName).toBe('IMG');
+    expect(img.src).toContain('data:image/png;base64,QUJD');
+  });
+
+  it('shows a loading skeleton for a character still being illustrated', () => {
+    const { getAllByTestId } = render(<StoryPlanReview plan={plan()} onConfirm={() => {}} illustrating />);
+    // Two characters, neither has a URL yet ⇒ two skeletons.
+    expect(getAllByTestId('character-portrait-loading')).toHaveLength(2);
+  });
+
+  it('allows confirmation while character portraits are still loading', () => {
+    const onConfirm = vi.fn<(p: StoryPlan) => void>();
+    const { getByText } = render(<StoryPlanReview plan={plan()} onConfirm={onConfirm} illustrating />);
+    fireEvent.click(getByText('この設定で執筆する'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a monogram placeholder when illustration is absent and not in progress', () => {
+    const { getAllByTestId, queryByRole } = render(<StoryPlanReview plan={plan()} onConfirm={() => {}} />);
+    expect(getAllByTestId('character-portrait-placeholder')).toHaveLength(2);
+    expect(queryByRole('img')).toBeNull();
+  });
+
+  it('still confirms via the explicit button when portraits are shown', () => {
+    const onConfirm = vi.fn<(p: StoryPlan) => void>();
+    const withArt = plan({
+      characters: [{ name: 'Aria', role: '主人公', descriptionJa: '勇敢な少女', illustrationUrl: 'data:image/png;base64,QUJD' }],
+    });
+    const { getByText } = render(<StoryPlanReview plan={withArt} onConfirm={onConfirm} illustrating />);
+    fireEvent.click(getByText('この設定で執筆する'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    // The confirmed plan carries the illustration through to persistence.
+    expect(onConfirm.mock.calls[0]![0].characters[0]!.illustrationUrl).toBe('data:image/png;base64,QUJD');
+  });
+
+  it('shows body-generation progress and errors on the confirmation gate', () => {
+    const onConfirm = vi.fn<(p: StoryPlan) => void>();
+    const { getByRole, getByText } = render(
+      <StoryPlanReview plan={plan()} onConfirm={onConfirm} confirming confirmError="本文生成に失敗しました。" />,
+    );
+    const button = getByRole('button', { name: '執筆しています…' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(getByText('本文生成に失敗しました。')).toBeTruthy();
+    fireEvent.click(button);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

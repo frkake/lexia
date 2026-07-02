@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HttpStoryGateway } from './storyGatewayHttp';
-import type { StoryPlan, StoryPlanRequest } from '../../types/domain';
+import type { CharacterIllustrationRequest, StoryPlan, StoryPlanRequest } from '../../types/domain';
 
 const req: StoryPlanRequest = { contentType: 'short_story', genre: 'fantasy', intent: 'daily', level: 'B1' };
 
@@ -37,5 +37,56 @@ describe('HttpStoryGateway.planStory', () => {
     const fetchImpl = vi.fn(async () => jsonResponse(503, { error: 'down' }));
     const gw = new HttpStoryGateway({ fetch: fetchImpl as unknown as typeof fetch });
     await expect(gw.planStory(req)).rejects.toBeTruthy();
+  });
+});
+
+describe('HttpStoryGateway.extendStoryPlan', () => {
+  it('POSTs to /api/story:extend and returns the extended story plan', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const extended = { ...plan, chapters: [...plan.chapters, { index: 1, headingJa: '第二章', beatJa: '続き' }] };
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { storyPlan: extended });
+    });
+    const gw = new HttpStoryGateway({ fetch: fetchImpl as unknown as typeof fetch });
+    const result = await gw.extendStoryPlan({ plan, nextChapterIndex: 1, priorSummaryJa: '前章の要約' });
+    expect(captured!.url).toContain('/api/story:extend');
+    expect(captured!.init?.method).toBe('POST');
+    expect(JSON.parse(String(captured!.init?.body))).toMatchObject({ nextChapterIndex: 1 });
+    expect(result.chapters).toHaveLength(2);
+  });
+
+  it('rejects (no mock fallback) on a non-2xx status', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(503, { error: 'down' }));
+    const gw = new HttpStoryGateway({ fetch: fetchImpl as unknown as typeof fetch });
+    await expect(gw.extendStoryPlan({ plan, nextChapterIndex: 1 })).rejects.toBeTruthy();
+  });
+});
+
+describe('HttpStoryGateway.illustrateCharacter (Requirement 6.8)', () => {
+  const charReq: CharacterIllustrationRequest = {
+    name: 'Aria',
+    role: 'hero',
+    descriptionJa: '勇敢な少女',
+    genre: 'fantasy',
+  };
+
+  it('POSTs to /api/story:illustrate and returns the illustration data URL', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { illustrationUrl: 'data:image/png;base64,QUJD' });
+    });
+    const gw = new HttpStoryGateway({ fetch: fetchImpl as unknown as typeof fetch });
+    const result = await gw.illustrateCharacter(charReq);
+    expect(captured!.url).toContain('/api/story:illustrate');
+    expect(captured!.init?.method).toBe('POST');
+    expect(result).toBe('data:image/png;base64,QUJD');
+  });
+
+  it('rejects (no mock fallback) on a non-2xx status', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(503, { error: 'down' }));
+    const gw = new HttpStoryGateway({ fetch: fetchImpl as unknown as typeof fetch });
+    await expect(gw.illustrateCharacter(charReq)).rejects.toBeTruthy();
   });
 });

@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildAnnotationMessages, buildPassageMessages, buildSuggestionMessages, maxTokensForWordTarget } from './schema';
-import type { GenerationRequest, PassageAnnotationRequest } from '../../src/types/domain';
+import {
+  buildAnnotationMessages,
+  buildPassageMessages,
+  buildStoryPlanExtensionMessages,
+  buildSuggestionMessages,
+  maxTokensForWordTarget,
+} from './schema';
+import type { GenerationRequest, PassageAnnotationRequest, StoryPlanExtensionRequest } from '../../src/types/domain';
 
 describe('buildPassageMessages — translationSpans guidance (Requirement 4)', () => {
   const req: GenerationRequest = {
@@ -84,6 +90,40 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
 describe('maxTokensForWordTarget', () => {
   it('is monotonic in the word target', () => {
     expect(maxTokensForWordTarget(800)).toBeGreaterThan(maxTokensForWordTarget(200));
+  });
+});
+
+describe('buildStoryPlanExtensionMessages', () => {
+  it('asks for future chapter beats starting at the next missing index and strips portrait data', () => {
+    const req: StoryPlanExtensionRequest = {
+      nextChapterIndex: 2,
+      priorSummaryJa: '主人公は星の門を開いた。',
+      additionalChapters: 2,
+      plan: {
+        storyId: 's1',
+        contentType: 'long_story',
+        genre: 'fantasy',
+        titleJa: '星の物語',
+        synopsisJa: '星を探す旅。',
+        characters: [
+          {
+            name: 'Mia',
+            role: '主人公',
+            descriptionJa: '好奇心旺盛な少女',
+            illustrationUrl: 'data:image/png;base64,TOO_BIG',
+          },
+        ],
+        chapters: [
+          { index: 0, headingJa: '第一章', beatJa: '旅立ち' },
+          { index: 1, headingJa: '第二章', beatJa: '門を開く' },
+        ],
+      },
+    };
+    const { system, user } = buildStoryPlanExtensionMessages(req);
+    expect(system).toContain('Do NOT rewrite existing chapters');
+    expect(user).toContain('"nextChapterIndex": 2');
+    expect(user).toContain('主人公は星の門を開いた。');
+    expect(user).not.toContain('TOO_BIG');
   });
 });
 

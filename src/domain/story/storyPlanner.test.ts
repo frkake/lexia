@@ -111,6 +111,86 @@ describe('StoryPlanner.confirmPlan (12.2 — persistence gated on confirmation)'
   });
 });
 
+describe('StoryPlanner.illustrateCharacters (6.8 — parallel, progressive, never throws)', () => {
+  const twoChars = (): StoryPlan =>
+    plan({
+      characters: [
+        { name: 'Aria', role: 'hero', descriptionJa: '勇敢な少女' },
+        { name: 'Draco', role: 'dragon', descriptionJa: '孤独な竜' },
+      ],
+    });
+
+  function gatewayWithIllustrator(
+    illustrate: (req: { name: string }) => Promise<string>,
+  ): StoryGateway {
+    return { planStory: async () => plan(), illustrateCharacter: (req) => illustrate(req) };
+  }
+
+  it('fills each character illustrationUrl and fires onEach per character', async () => {
+    const gw = gatewayWithIllustrator(async (req) => `data:image/png;base64,${req.name}`);
+    const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
+    const seen: Array<[number, string]> = [];
+    const result = await planner.illustrateCharacters(twoChars(), (i, url) => seen.push([i, url]));
+
+    expect(result.characters[0]!.illustrationUrl).toBe('data:image/png;base64,Aria');
+    expect(result.characters[1]!.illustrationUrl).toBe('data:image/png;base64,Draco');
+    expect(seen.sort()).toEqual([
+      [0, 'data:image/png;base64,Aria'],
+      [1, 'data:image/png;base64,Draco'],
+    ]);
+  });
+
+  it('does not reject when one character fails — others keep their portraits', async () => {
+    const gw = gatewayWithIllustrator(async (req) => {
+      if (req.name === 'Aria') throw new Error('image API down');
+      return `data:image/png;base64,${req.name}`;
+    });
+    const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
+    const result = await planner.illustrateCharacters(twoChars());
+
+    expect(result.characters[0]!.illustrationUrl).toBeUndefined();
+    expect(result.characters[1]!.illustrationUrl).toBe('data:image/png;base64,Draco');
+  });
+
+  it('returns the plan unchanged when the gateway cannot illustrate (enrichment skipped)', async () => {
+    const planner = createStoryPlanner({ gateway: gateway(plan()).gw, storyRepo: memRepo() });
+    const input = twoChars();
+    const result = await planner.illustrateCharacters(input);
+    expect(result.characters.every((c) => c.illustrationUrl === undefined)).toBe(true);
+  });
+});
+
+describe('StoryPlanner.extendPlan (long-story plot continuation)', () => {
+  it('extends the plan through the gateway when chapter beats are exhausted', async () => {
+    const seen: unknown[] = [];
+    const extended = plan({
+      chapters: [
+        { index: 0, headingJa: '第一章', beatJa: '出会い' },
+        { index: 1, headingJa: '第二章', beatJa: '星の門へ進む' },
+      ],
+    });
+    const gw: StoryGateway = {
+      planStory: async () => plan(),
+      extendStoryPlan: async (req) => {
+        seen.push(req);
+        return extended;
+      },
+    };
+    const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
+    const result = await planner.extendPlan(plan({ chapters: [{ index: 0, headingJa: '第一章', beatJa: '出会い' }] }), 1, '第一章の要約');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.chapters[1]!.beatJa).toContain('星の門');
+    expect(seen[0]).toMatchObject({ nextChapterIndex: 1, priorSummaryJa: '第一章の要約', additionalChapters: 3 });
+  });
+
+  it('returns a generation error when the gateway cannot extend the plan', async () => {
+    const planner = createStoryPlanner({ gateway: gateway(plan()).gw, storyRepo: memRepo() });
+    const result = await planner.extendPlan(plan(), 2);
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe('StoryPlanner.generateChapter (14.1 — sequential, consistency context)', () => {
   it('generates a chapter through the orchestrator with the plot + prior-summary story context', async () => {
     let capturedReq: GenerationRequest | null = null;
@@ -147,5 +227,8 @@ describe('StoryPlanner.generateChapter (14.1 — sequential, consistency context
     });
     // Same plan reference is supplied so characters/plot stay invariant across chapters.
     expect(capturedReq!.storyContext!.plan.titleJa).toBe('竜の物語');
+    if (result.ok) {
+      expect(result.value.source.meta.storyRef).toEqual({ storyId: 's1', chapterIndex: 1 });
+    }
   });
 });

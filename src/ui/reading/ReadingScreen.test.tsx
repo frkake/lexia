@@ -7,7 +7,7 @@ import { tokenizer } from '../../domain/tokenizer/joinService';
 import { sessionStore } from '../../state/stores/sessionStore';
 import { settingsStore } from '../../state/stores/settingsStore';
 import { readingUiStore } from '../../state/stores/readingUiStore';
-import type { IndexedPassage, PassageOutput } from '../../types/domain';
+import type { IndexedPassage, PassageOutput, StoryPlan } from '../../types/domain';
 
 function makePassage(): IndexedPassage {
   const source: PassageOutput = {
@@ -28,6 +28,21 @@ function makePassage(): IndexedPassage {
     ],
   };
   return tokenizer.index('p1', source);
+}
+
+function makeStoryPlan(): StoryPlan {
+  return {
+    storyId: 'story_1',
+    contentType: 'long_story',
+    genre: 'fantasy',
+    titleJa: '星の少女',
+    synopsisJa: '少女が星を探す長い旅。',
+    characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+    chapters: [
+      { index: 0, headingJa: '第一章', beatJa: '旅立ち' },
+      { index: 1, headingJa: '第二章', beatJa: '星の門を開く' },
+    ],
+  };
 }
 
 function renderScreen(props: Parameters<typeof ReadingScreen>[0] = {}) {
@@ -121,6 +136,40 @@ describe('<ReadingScreen/>', () => {
     const { getByTestId } = renderScreen({ passage: makePassage(), onCompleteReading });
     fireEvent.click(getByTestId('reading-complete'));
     expect(onCompleteReading).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a long-story continuation action when wired', () => {
+    const onGenerateNextChapter = vi.fn();
+    const { getByTestId } = renderScreen({ passage: makePassage(), onGenerateNextChapter });
+    fireEvent.click(getByTestId('generate-next-chapter'));
+    expect(onGenerateNextChapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows continuation busy state and errors', () => {
+    const { getByTestId, getByText } = renderScreen({
+      passage: makePassage(),
+      onGenerateNextChapter: vi.fn(),
+      generatingNextChapter: true,
+      nextChapterError: '続きを生成できませんでした。',
+    });
+    expect(getByTestId('generate-next-chapter').getAttribute('aria-busy')).toBe('true');
+    expect(getByText('続きを生成しています…')).toBeTruthy();
+    expect(getByText('続きを生成できませんでした。')).toBeTruthy();
+  });
+
+  it('opens story settings from the body page when a story plan is supplied', () => {
+    const { getByTestId, getByRole, getByText, queryByRole } = renderScreen({
+      passage: makePassage(),
+      storyPlan: makeStoryPlan(),
+    });
+    fireEvent.click(getByTestId('story-settings'));
+    expect(getByRole('dialog', { name: '物語設定' })).toBeTruthy();
+    expect(getByText('キャラクター設定')).toBeTruthy();
+    expect(getByText('Mia')).toBeTruthy();
+    expect(getByText('プロット')).toBeTruthy();
+    expect(getByText(/星の門を開く/)).toBeTruthy();
+    fireEvent.click(getByRole('button', { name: '物語設定を閉じる' }));
+    expect(queryByRole('dialog', { name: '物語設定' })).toBeNull();
   });
 
   it('falls back to the in-progress session passage when none is passed', () => {

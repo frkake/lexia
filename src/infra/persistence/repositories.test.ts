@@ -131,6 +131,37 @@ describe('PassageRepository', () => {
     expect((await repo.recent(userId, 2)).map((p) => p.passageId)).toEqual(['p2', 'p3']);
     db.close();
   });
+
+  it('lists story chapters by story id in chapter order', async () => {
+    const { db, userId } = await freshDb();
+    const repo = createRepositories(db).passages;
+    const mk = (id: string, storyId: string, chapterIndex: number): PassageRecord => ({
+      passageId: id,
+      userId,
+      createdAt: 100 + chapterIndex,
+      passage: {
+        meta: {
+          title: id,
+          intent: 'daily',
+          level: 'B1',
+          newCount: 0,
+          reviewCount: 0,
+          approxWords: 0,
+          storyRef: { storyId, chapterIndex },
+        },
+        sentences: [],
+        targetSpans: [],
+        collocationSpans: [],
+        noticeCues: [],
+      },
+    });
+    await repo.put(mk('s1c1', 's1', 1));
+    await repo.put(mk('s1c0', 's1', 0));
+    await repo.put(mk('s2c0', 's2', 0));
+
+    expect((await repo.byStory(userId, 's1')).map((p) => p.passageId)).toEqual(['s1c0', 's1c1']);
+    db.close();
+  });
 });
 
 describe('TimingMapRepository', () => {

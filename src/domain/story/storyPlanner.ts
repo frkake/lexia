@@ -19,6 +19,7 @@ import type {
   IndexedPassage,
   StoryContext,
   StoryPlan,
+  StoryPlanExtensionRequest,
   StoryPlanRequest,
   UserId,
 } from '../../types/domain';
@@ -26,6 +27,22 @@ import type {
 export interface StoryPlanner {
   /** Generate a story plan (does NOT persist it — persistence is gated on confirmPlan). */
   planStory(req: StoryPlanRequest): Promise<Result<StoryPlan, GenerationError>>;
+  /**
+   * Enrich a plan with a generated portrait per character (6.8). Runs all characters in PARALLEL and
+   * NEVER throws: a character whose portrait fails (or when the gateway can't illustrate) is left
+   * without an illustrationUrl. `onEach` fires as each portrait lands so the UI can reveal
+   * progressively. Returns a NEW plan (the input is not mutated).
+   */
+  illustrateCharacters(
+    plan: StoryPlan,
+    onEach?: (index: number, illustrationUrl: string) => void,
+  ): Promise<StoryPlan>;
+  /** Extend a long-story plan with more future chapter beats when the plot outline is exhausted. */
+  extendPlan(
+    plan: StoryPlan,
+    nextChapterIndex: number,
+    priorSummaryJa?: string,
+  ): Promise<Result<StoryPlan, GenerationError>>;
   /** Persist a learner-confirmed plan to the stories store (6.3). */
   confirmPlan(userId: UserId, plan: StoryPlan): Promise<void>;
   /** Generate one chapter's body, supplying the consistency context (6.6). */
@@ -58,8 +75,54 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
     }
   }
 
+  async function illustrateCharacters(
+    plan: StoryPlan,
+    onEach?: (index: number, illustrationUrl: string) => void,
+  ): Promise<StoryPlan> {
+    const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
+    if (!illustrate) return plan; // enrichment unavailable — return the plan untouched
+    // Shared style hint keeps the cast visually coherent (homage note if present, else genre).
+    const styleHint = plan.homage?.styleNoteJa || plan.genre;
+    const characters = plan.characters.map((c) => ({ ...c }));
+    await Promise.allSettled(
+      characters.map(async (character, index) => {
+        const url = await illustrate({
+          name: character.name,
+          role: character.role,
+          descriptionJa: character.descriptionJa,
+          genre: plan.genre,
+          styleHint,
+        });
+        character.illustrationUrl = url;
+        onEach?.(index, url);
+      }),
+    );
+    return { ...plan, characters };
+  }
+
   async function confirmPlan(userId: UserId, plan: StoryPlan): Promise<void> {
     await deps.storyRepo.put({ storyId: plan.storyId, userId, createdAt: now(), plan });
+  }
+
+  async function extendPlan(
+    plan: StoryPlan,
+    nextChapterIndex: number,
+    priorSummaryJa?: string,
+  ): Promise<Result<StoryPlan, GenerationError>> {
+    const extend = deps.gateway.extendStoryPlan?.bind(deps.gateway);
+    if (!extend) return err({ kind: 'refusal' });
+    const req: StoryPlanExtensionRequest = {
+      plan,
+      nextChapterIndex,
+      ...(priorSummaryJa ? { priorSummaryJa } : {}),
+      additionalChapters: 3,
+    };
+    try {
+      const extended = await extend(req);
+      return ok(extended);
+    } catch {
+      return err({ kind: 'refusal' });
+    }
   }
 
   async function generateChapter(
@@ -83,8 +146,26 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
       storyContext,
     };
     const orchestrator = deps.createOrchestrator(`${plan.storyId}:${chapterIndex}`);
-    return orchestrator.generate(req);
+    const result = await orchestrator.generate(req);
+    if (!result.ok) return result;
+    return ok(attachStoryRef(result.value, storyContext));
   }
 
-  return { planStory, confirmPlan, generateChapter };
+  return { planStory, illustrateCharacters, extendPlan, confirmPlan, generateChapter };
+}
+
+function attachStoryRef(passage: IndexedPassage, storyContext: StoryContext): IndexedPassage {
+  return {
+    ...passage,
+    source: {
+      ...passage.source,
+      meta: {
+        ...passage.source.meta,
+        storyRef: {
+          storyId: storyContext.storyId,
+          chapterIndex: storyContext.chapterIndex,
+        },
+      },
+    },
+  };
 }

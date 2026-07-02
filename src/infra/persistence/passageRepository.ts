@@ -23,4 +23,11 @@ export class DexiePassageRepository implements PassageRepository {
       .limit(limit)
       .toArray();
   }
+
+  async byStory(userId: UserId, storyId: string): Promise<PassageRecord[]> {
+    const rows = await this.db.passages.where('passage.meta.storyRef.storyId').equals(storyId).toArray();
+    return rows
+      .filter((p) => p.userId === userId)
+      .sort((a, b) => (a.passage.meta.storyRef?.chapterIndex ?? 0) - (b.passage.meta.storyRef?.chapterIndex ?? 0));
+  }
 }

@@ -1,6 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ProviderError, generatePassage, getWordData, suggestWords, annotatePassage, planStory, type Env } from './providers';
-import type { GenerationRequest } from '../../src/types/domain';
+import {
+  ProviderError,
+  generatePassage,
+  getWordData,
+  suggestWords,
+  annotatePassage,
+  planStory,
+  extendStoryPlan,
+  illustrateCharacter,
+  type Env,
+} from './providers';
+import type { CharacterIllustrationRequest, GenerationRequest } from '../../src/types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
@@ -138,6 +148,29 @@ describe('generatePassage — OpenAI provider (default)', () => {
     expect(res.passage.sentences[0]!.tokens).toContain('team');
     expect(res.passage.meta.intent).toBe('business'); // backfilled from request
     expect(res.passage.meta.level).toBe('B1');
+  });
+
+  it('attaches storyRef from storyContext even when the model omits it', async () => {
+    const fetchImpl = vi.fn(async () => openAiCompletion(samplePassage));
+    const storyReq: GenerationRequest = {
+      ...req,
+      contentType: 'long_story',
+      storyContext: {
+        storyId: 'story_1',
+        chapterIndex: 2,
+        plan: {
+          storyId: 'story_1',
+          contentType: 'long_story',
+          genre: 'fantasy',
+          titleJa: '星の物語',
+          synopsisJa: '星を探す旅。',
+          characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+          chapters: [{ index: 2, headingJa: '第三章', beatJa: '星へ近づく' }],
+        },
+      },
+    };
+    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, storyReq, fetchImpl as unknown as typeof fetch);
+    expect(res.passage.meta.storyRef).toEqual({ storyId: 'story_1', chapterIndex: 2 });
   });
 });
 
@@ -336,6 +369,135 @@ describe('planStory (Requirement 6.2 / 13.2)', () => {
         { contentType: 'long_story', genre: 'fantasy', intent: 'daily', level: 'B1' },
         fetchImpl as unknown as typeof fetch,
       ),
+    ).rejects.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe('extendStoryPlan (long-story continuation)', () => {
+  const existingPlan = {
+    storyId: 'story_1',
+    contentType: 'long_story' as const,
+    genre: 'fantasy',
+    titleJa: '星の物語',
+    synopsisJa: '星を探す旅。',
+    characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+    chapters: [{ index: 0, headingJa: '第一章', beatJa: '旅立ち' }],
+  };
+
+  it('appends generated future chapter beats starting at nextChapterIndex', async () => {
+    const fetchImpl = vi.fn(async () =>
+      openAiCompletion({
+        synopsisJa: '星を探す旅は、星の門の向こうへ続く。',
+        chapters: [
+          { index: 99, headingJa: '第二章', beatJa: '星の門を開く' },
+          { index: 100, headingJa: '第三章', beatJa: '影の街へ進む' },
+        ],
+      }),
+    );
+
+    const extended = await extendStoryPlan(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      { plan: existingPlan, nextChapterIndex: 1, priorSummaryJa: 'ミアは旅立った。', additionalChapters: 2 },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    expect(extended.synopsisJa).toContain('星の門');
+    expect(extended.chapters.map((chapter) => chapter.index)).toEqual([0, 1, 2]);
+    expect(extended.chapters[1]!.beatJa).toBe('星の門を開く');
+    const sent = JSON.parse(String(fetchImpl.mock.calls[0]![1]!.body));
+    expect(sent.response_format.json_schema.name).toBe('story_plan_extension');
+    expect(String(sent.messages[1]!.content)).toContain('ミアは旅立った。');
+  });
+
+  it('rejects non-long-story plans', async () => {
+    await expect(
+      extendStoryPlan(
+        { OPENAI_API_KEY: 'sk-real-key' },
+        { plan: { ...existingPlan, contentType: 'short_story' }, nextChapterIndex: 1 },
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portrait)', () => {
+  const charReq: CharacterIllustrationRequest = {
+    name: 'Aria',
+    role: '主人公',
+    descriptionJa: '勇敢な少女',
+    genre: 'fantasy',
+    styleHint: '幻想的な作風',
+  };
+
+  function openAiImage(b64: string): Response {
+    return jsonResponse(200, { data: [{ b64_json: b64 }] });
+  }
+
+  it('defaults to OpenAI: POSTs to the images endpoint with the key and returns a PNG data URL', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init };
+      return openAiImage('QUJD');
+    });
+    const env: Env = { OPENAI_API_KEY: 'sk-real-key' };
+
+    const dataUrl = await illustrateCharacter(env, charReq, fetchImpl as unknown as typeof fetch);
+
+    expect(captured!.url).toBe('https://api.openai.com/v1/images/generations');
+    expect((captured!.init?.headers as Record<string, string>).authorization).toBe('Bearer sk-real-key');
+    const sent = JSON.parse(String(captured!.init?.body));
+    expect(sent.model).toBe('gpt-image-1');
+    expect(sent.n).toBe(1);
+    expect(typeof sent.prompt).toBe('string');
+    // The character's role/description feed the prompt so portraits match the plan.
+    expect(sent.prompt).toContain('Aria');
+    expect(dataUrl).toBe('data:image/png;base64,QUJD');
+  });
+
+  it('honors IMAGE_MODEL and reuses OPENAI_API_KEY for the openai image provider', async () => {
+    let captured: { init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = { init };
+      return openAiImage('QUJD');
+    });
+    const env: Env = { IMAGE_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-real-key', IMAGE_MODEL: 'gpt-image-1-mini' };
+    await illustrateCharacter(env, charReq, fetchImpl as unknown as typeof fetch);
+    expect(JSON.parse(String(captured!.init?.body)).model).toBe('gpt-image-1-mini');
+  });
+
+  it('switches to Gemini (Imagen) when IMAGE_PROVIDER=gemini, reading the inline base64 image', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { predictions: [{ bytesBase64Encoded: 'R0lG' }] });
+    });
+    const env: Env = { IMAGE_PROVIDER: 'gemini', GEMINI_API_KEY: 'gm-key' };
+
+    const dataUrl = await illustrateCharacter(env, charReq, fetchImpl as unknown as typeof fetch);
+
+    expect(captured!.url).toContain('imagen');
+    expect(captured!.url).toContain('gm-key'); // key passed as query param, per the Imagen REST contract
+    expect(dataUrl).toBe('data:image/png;base64,R0lG');
+  });
+
+  it('throws a 503 ProviderError when the active image key is missing', async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      illustrateCharacter({ IMAGE_PROVIDER: 'gemini' }, charReq, fetchImpl as unknown as typeof fetch),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('maps an upstream 429 to a 429 ProviderError', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(429, { error: 'rate limited' }));
+    await expect(
+      illustrateCharacter({ OPENAI_API_KEY: 'sk-real-key' }, charReq, fetchImpl as unknown as typeof fetch),
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('raises a 502 when the provider returns no image payload', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { data: [] }));
+    await expect(
+      illustrateCharacter({ OPENAI_API_KEY: 'sk-real-key' }, charReq, fetchImpl as unknown as typeof fetch),
     ).rejects.toBeInstanceOf(ProviderError);
   });
 });

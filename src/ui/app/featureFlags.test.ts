@@ -14,9 +14,14 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     expect(DEFAULT_FEATURE_FLAGS.newGenerationSetup).toBe(true);
   });
 
-  it('keeps the not-yet-built story cluster OFF by default', () => {
-    // The story flow (Requirement 6) is not fully wired yet, so it stays default-off.
-    expect(DEFAULT_FEATURE_FLAGS.storyMode).toBe(false);
+  it('ships the story cluster ON by default once the confirmation gate is wired', () => {
+    // The story flow (Requirement 6) now goes through plan -> confirm -> chapter generation.
+    expect(DEFAULT_FEATURE_FLAGS.storyMode).toBe(true);
+  });
+
+  it('enables character illustrations by default (6.8 — graceful when no image API)', () => {
+    // Rides inside storyMode; on by default so stories are illustrated when an image API is configured.
+    expect(DEFAULT_FEATURE_FLAGS.characterIllustrations).toBe(true);
   });
 
   it('resolves to the defaults when no overrides are given', () => {
@@ -27,8 +32,8 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     // Override the default-on flag OFF to prove the override path works (kill-switch).
     const resolved = resolveFeatureFlags({ newReadingLayout: false });
     expect(resolved.newReadingLayout).toBe(false);
-    // Other flags stay at their default (storyMode is still off).
-    expect(resolved.storyMode).toBe(false);
+    // Other flags stay at their default (storyMode remains on).
+    expect(resolved.storyMode).toBe(true);
     // The shared default object is not mutated.
     expect(DEFAULT_FEATURE_FLAGS.newReadingLayout).toBe(true);
   });

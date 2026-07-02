@@ -204,6 +204,12 @@ export interface StoryCharacter {
   name: string;
   role: string;
   descriptionJa: string;
+  /**
+   * Generated portrait as a base64 `data:` URL (Requirement 6.8). Optional enrichment: absent when
+   * illustration is disabled, unconfigured, or the image call failed. Stored inline with the plan
+   * (the sole deliberate exception to lexiaDb's "blobs are never stored" convention — there is no CDN).
+   */
+  illustrationUrl?: string;
 }
 
 /** One chapter's heading + beat in the story plan (short stories have a single element). */
@@ -247,6 +253,27 @@ export interface StoryPlanRequest {
   homageTitle?: string;
   intent: LearningIntent;
   level: Cefr;
+}
+
+/** Request to extend an existing long-story plan when the next chapter beat is missing. */
+export interface StoryPlanExtensionRequest {
+  plan: StoryPlan;
+  /** First chapter index that must be newly planned. */
+  nextChapterIndex: number;
+  /** Summary of already generated chapters, used to continue the plot coherently. */
+  priorSummaryJa?: string;
+  /** Number of additional chapter beats to append. */
+  additionalChapters?: number;
+}
+
+/** Request for a single character's portrait illustration (Requirement 6.8). */
+export interface CharacterIllustrationRequest {
+  name: string;
+  role: string;
+  descriptionJa: string;
+  genre: StoryGenre;
+  /** Style/motif hint (from the plan's homage note or genre) to keep the cast visually coherent. */
+  styleHint?: string;
 }
 
 /** Persistence envelope for a confirmed story plan (`stories` store). */

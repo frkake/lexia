@@ -101,6 +101,20 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(cfg.storyOptions).toEqual({ genre: 'mystery', homageTitle: 'Sherlock Holmes' });
   });
 
+  it('clamps the emitted word target into the selected story range (7.3)', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' }, wordTarget: 400, contentType: 'article' },
+      onGenerate,
+    });
+    fireEvent.click(getByTestId('content-type-long_story'));
+    fireEvent.click(getByText('文章を生成する'));
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.contentType).toBe('long_story');
+    expect(cfg.wordTarget).toBe(800);
+  });
+
   it('excludes a tapped candidate from the target list', () => {
     const onGenerate = vi.fn<(s: SetupConfig) => void>();
     const { getByTestId, getByText } = renderScreen({

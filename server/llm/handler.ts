@@ -10,8 +10,10 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
+  CharacterIllustrationRequest,
   GenerationRequest,
   PassageAnnotationRequest,
+  StoryPlanExtensionRequest,
   StoryPlanRequest,
   WordSuggestionRequest,
 } from '../../src/types/domain';
@@ -21,6 +23,8 @@ import {
   annotatePassage,
   generatePassage,
   getWordData,
+  illustrateCharacter,
+  extendStoryPlan,
   planStory,
   suggestWords,
 } from './providers';
@@ -31,6 +35,8 @@ const GENERATE_PATH = '/api/passages:generate';
 const ANNOTATE_PATH = '/api/passages:annotate';
 const SUGGEST_PATH = '/api/words:suggest';
 const STORY_PLAN_PATH = '/api/story:plan';
+const STORY_EXTEND_PATH = '/api/story:extend';
+const STORY_ILLUSTRATE_PATH = '/api/story:illustrate';
 const WORDS_PREFIX = '/api/words/';
 
 export function createApiHandler(getEnv: () => Env) {
@@ -82,6 +88,26 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     }
     const storyPlan = await planStory(env, body);
     return sendJson(res, 200, { storyPlan });
+  }
+
+  if (path === STORY_EXTEND_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<StoryPlanExtensionRequest>(req);
+    if (!body || !body.plan || !body.plan.storyId || typeof body.nextChapterIndex !== 'number') {
+      throw new ProviderError(400, 'Invalid StoryPlanExtensionRequest body.');
+    }
+    const storyPlan = await extendStoryPlan(env, body);
+    return sendJson(res, 200, { storyPlan });
+  }
+
+  if (path === STORY_ILLUSTRATE_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<CharacterIllustrationRequest>(req);
+    if (!body || !body.name || !body.role || !body.descriptionJa || !body.genre) {
+      throw new ProviderError(400, 'Invalid CharacterIllustrationRequest body.');
+    }
+    const illustrationUrl = await illustrateCharacter(env, body);
+    return sendJson(res, 200, { illustrationUrl });
   }
 
   if (path.startsWith(WORDS_PREFIX)) {

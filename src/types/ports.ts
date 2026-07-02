@@ -23,7 +23,9 @@ import type {
   Settings,
   NoticeCue,
   PassageAnnotationRequest,
+  CharacterIllustrationRequest,
   StoryPlan,
+  StoryPlanExtensionRequest,
   StoryPlanRequest,
   StoryRecord,
 } from './domain';
@@ -67,6 +69,15 @@ export interface ContentGateway {
 export interface StoryGateway {
   /** Generate a story plan (characters, synopsis, chapters) for the requested type/genre/homage. */
   planStory(req: StoryPlanRequest): Promise<StoryPlan>;
+  /** Extend an existing long-story plan with additional future chapter beats. */
+  extendStoryPlan?(req: StoryPlanExtensionRequest): Promise<StoryPlan>;
+  /**
+   * Generate one character's portrait, returning a base64 `data:` URL (Requirement 6.8). Optional
+   * enrichment (like ContentGateway.annotatePassage) so lightweight gateways/mocks need not implement
+   * it; when absent, illustration is skipped. Credentials stay server-side; a missing/broken image
+   * API rejects (no mock fallback) and the caller degrades to no portrait.
+   */
+  illustrateCharacter?(req: CharacterIllustrationRequest): Promise<string>;
 }
 
 /** Persistence of confirmed story plans (`stories` store). */
@@ -129,6 +140,8 @@ export interface PassageRepository {
   put(record: PassageRecord): Promise<void>;
   /** Most-recently created passages first. */
   recent(userId: UserId, limit: number): Promise<PassageRecord[]>;
+  /** Story chapters for a learner, ordered by chapter index. */
+  byStory(userId: UserId, storyId: string): Promise<PassageRecord[]>;
 }
 
 export interface TimingMapRepository {

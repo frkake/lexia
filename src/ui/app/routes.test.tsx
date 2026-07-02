@@ -82,7 +82,13 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     };
 
     // No TTS backend → the port degrades; reading must still work.
-    const container = await createContainer(userId, { db, content: gateway, tts: degradingTts, now: () => 1_000_000 });
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
     const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
 
     render(
@@ -140,6 +146,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       content: gateway,
       tts: degradingTts,
       now: () => 1_000_000,
+      settings: createSettingsStore(),
     });
     const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
 

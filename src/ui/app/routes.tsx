@@ -12,7 +12,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useStore } from 'zustand';
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { DashboardScreen } from '../dashboard/DashboardScreen';
 import { SetupScreen, type CandidateWord } from '../setup/SetupScreen';
 import { StoryPlanReview } from '../setup/StoryPlanReview';
@@ -31,11 +31,13 @@ import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
 import { restoreReadingSession } from '../../state/controllers/sessionBootstrap';
 import { sessionPlanner } from '../../domain/session/sessionPlanner';
+import { tokenizer } from '../../domain/tokenizer/joinService';
 import { examScale } from '../../domain/difficulty/examScale';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
 import { colors, fonts } from '../theme/tokens';
-import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, WordData, WordSchedulingState } from '../../types/domain';
+import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, StoryRecord, WordData, WordSchedulingState } from '../../types/domain';
+import type { PassageRecord } from '../../types/ports';
 
 const CANDIDATE_LIMIT = 12;
 
@@ -112,6 +114,49 @@ function uniqueStudyWords(passage: IndexedPassage): StudyWord[] {
     words.push({ wordId: span.wordId, surface: span.surface || span.wordId, reappearCount: span.reappearInfo?.count });
   }
   return words;
+}
+
+function clampStoryWordTarget(wordTarget: number): number {
+  const range = lengthSpec.wordRange('long_story');
+  return Math.min(range.max, Math.max(range.min, wordTarget));
+}
+
+function storyContinuationSetup(setup: SetupConfig, passage: IndexedPassage, plan: StoryPlan): SetupConfig {
+  return {
+    ...setup,
+    intent: passage.source.meta.intent,
+    contentType: 'long_story',
+    wordTarget: clampStoryWordTarget(setup.wordTarget),
+    storyOptions: {
+      genre: plan.genre,
+      ...(plan.homage?.title ? { homageTitle: plan.homage.title } : {}),
+    },
+  };
+}
+
+function chapterIndexOf(record: PassageRecord): number {
+  return record.passage.meta.storyRef?.chapterIndex ?? 0;
+}
+
+function indexedFromRecord(record: PassageRecord): IndexedPassage {
+  return tokenizer.index(record.passageId, record.passage);
+}
+
+function priorSummaryJa(chapters: PassageRecord[], throughChapterIndex: number): string | undefined {
+  const lines = chapters
+    .filter((chapter) => chapterIndexOf(chapter) <= throughChapterIndex)
+    .sort((a, b) => chapterIndexOf(a) - chapterIndexOf(b))
+    .slice(-4)
+    .map((chapter) => {
+      const chapterNo = chapterIndexOf(chapter) + 1;
+      const translations = chapter.passage.sentences
+        .map((sentence) => sentence.translationJa.trim())
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' ');
+      return `第${chapterNo}章「${chapter.passage.meta.title}」: ${translations || '本文生成済み。'}`;
+    });
+  return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 function escapeRegExp(s: string): string {
@@ -239,9 +284,12 @@ export function SetupRoute() {
 
   // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
   // learner to confirm before any chapter body is produced. Only active when storyMode is on.
-  const { storyMode } = resolveFeatureFlags();
+  const { storyMode, characterIllustrations } = resolveFeatureFlags();
   const [pendingPlan, setPendingPlan] = useState<StoryPlan | null>(null);
   const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
+  // True while character portraits stream in on the confirmation gate (6.8); enrichment only.
+  const [illustrating, setIllustrating] = useState(false);
+  const activeIllustrationRequest = useRef(0);
 
   /** Run the standard article generate → validate → persist → render pipeline. */
   const runArticlePipeline = async (setup: SetupConfig): Promise<void> => {
@@ -285,11 +333,33 @@ export function SetupRoute() {
           intent: setup.intent,
           level: examScale.examToCefr(setup.examTarget),
         });
-        if (planned.ok) {
-          setPendingSetup(setup);
-          setPendingPlan(planned.value);
-        } else {
+        if (!planned.ok) {
           setGenerationError(generationErrorMessage(planned.error));
+          return;
+        }
+        // Show the plan immediately (gate is up), then stream in character portraits (6.8). Illustration
+        // is enrichment: it never blocks confirmation, so failures are swallowed and just leave placeholders.
+        setPendingSetup(setup);
+        setPendingPlan(planned.value);
+        activeIllustrationRequest.current += 1;
+        setIllustrating(false);
+        if (characterIllustrations) {
+          const illustrationRequest = activeIllustrationRequest.current;
+          setIllustrating(true);
+          void c.storyPlanner
+            .illustrateCharacters(planned.value, (index, illustrationUrl) => {
+              if (activeIllustrationRequest.current !== illustrationRequest) return;
+              setPendingPlan((prev) => {
+                if (!prev || prev.storyId !== planned.value.storyId) return prev;
+                const characters = prev.characters.map((ch, i) => (i === index ? { ...ch, illustrationUrl } : ch));
+                return { ...prev, characters };
+              });
+            })
+            .finally(() => {
+              if (activeIllustrationRequest.current === illustrationRequest) {
+                setIllustrating(false);
+              }
+            });
         }
         return;
       }
@@ -303,26 +373,47 @@ export function SetupRoute() {
 
   // Confirmation gate passed: persist the plan, then generate + persist the first chapter and read it.
   const onConfirmPlan = async (plan: StoryPlan): Promise<void> => {
-    if (!pendingSetup) return;
+    if (generating) return;
+    if (!pendingSetup) {
+      setGenerationError('執筆に必要な設定が見つかりません。やり直してください。');
+      return;
+    }
     setGenerating(true);
     setGenerationError(null);
     try {
       await c.storyPlanner.confirmPlan(c.userId, plan);
       const setup = pendingSetup;
-      const base = sessionPlanner.buildRequest(setup, [], undefined);
-      const result = await c.storyPlanner.generateChapter(plan, 0, base);
-      if (!result.ok) {
-        setGenerationError(generationErrorMessage(result.error));
+      const targetWordIds = await resolveTargetWordIds(c, setup);
+      const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+      const wordData = await loadWordDataMap(c, targetWordIds);
+      const chapterIndex = 0;
+      const outcome = await runGenerationPipeline(
+        {
+          createOrchestrator: c.createOrchestrator,
+          scheduling: c.repos.scheduling,
+          passages: c.repos.passages,
+          progress: c.repos.progress,
+          timingMaps: c.repos.timingMaps,
+          tts: c.tts,
+          session: c.session,
+          player: c.player,
+          now: c.now,
+          genId: c.genId,
+          voiceId: voiceId || c.voiceId,
+          wordData,
+        },
+        effectiveSetup,
+        c.userId,
+        {
+          passageId: `${plan.storyId}:${chapterIndex}`,
+          storyContext: { storyId: plan.storyId, chapterIndex, plan },
+        },
+      );
+      if (!outcome.ok) {
+        setGenerationError(generationErrorMessage(outcome.error));
         return;
       }
-      const indexed = result.value;
-      await c.repos.passages.put({
-        passageId: indexed.passageId,
-        userId: c.userId,
-        createdAt: c.now(),
-        passage: indexed.source,
-      });
-      c.session.getState().startPassage(indexed, c.now());
+      activeIllustrationRequest.current += 1;
       setPendingPlan(null);
       setPendingSetup(null);
       navigate('/read');
@@ -337,10 +428,15 @@ export function SetupRoute() {
     return (
       <StoryPlanReview
         plan={pendingPlan}
+        illustrating={illustrating}
+        confirming={generating}
+        confirmError={generationError}
         onConfirm={(p) => void onConfirmPlan(p)}
         onCancel={() => {
+          activeIllustrationRequest.current += 1;
           setPendingPlan(null);
           setPendingSetup(null);
+          setIllustrating(false);
         }}
       />
     );
@@ -363,6 +459,21 @@ export function SetupRoute() {
 export function ReadingRoute() {
   const c = useContainer();
   const passage = useStore(c.session, (s) => s.passage);
+  const voiceId = useStore(c.settings, (s) => s.voiceId);
+  const lastSetup = useStore(c.settings, (s) => s.lastSetup);
+  const [generatingNextChapter, setGeneratingNextChapter] = useState(false);
+  const [nextChapterError, setNextChapterError] = useState<string | null>(null);
+
+  const storyDetails = useLiveQuery<
+    { story: StoryRecord; chapters: PassageRecord[] } | null | undefined
+  >(async () => {
+    const storyId = passage?.source.meta.storyRef?.storyId;
+    if (!storyId) return null;
+    const story = await c.repos.stories.get(storyId);
+    if (!story || story.userId !== c.userId) return null;
+    const chapters = story.plan.contentType === 'long_story' ? await c.repos.passages.byStory(c.userId, storyId) : [];
+    return { story, chapters };
+  }, [c, passage?.passageId, passage?.source.meta.storyRef?.storyId]);
 
   const studyWords = useLiveQuery<StudyWord[] | undefined>(async () => {
     if (!passage) return undefined;
@@ -410,6 +521,79 @@ export function ReadingRoute() {
     if (progress) await c.repos.progress.upsert(progress);
   };
 
+  const generateNextStoryChapter = async (): Promise<void> => {
+    const active = c.session.getState().passage;
+    const ref = active?.source.meta.storyRef;
+    const continuation = storyDetails?.story.plan.contentType === 'long_story' ? storyDetails : null;
+    if (!active || !ref || !continuation || generatingNextChapter) return;
+
+    setGeneratingNextChapter(true);
+    setNextChapterError(null);
+    try {
+      const nextIndex = ref.chapterIndex + 1;
+      const existing = continuation.chapters.find((chapter) => chapterIndexOf(chapter) === nextIndex);
+      if (existing) {
+        const indexed = indexedFromRecord(existing);
+        c.session.getState().startPassage(indexed, c.now());
+        const progress = c.session.getState().toReadingProgress(c.userId);
+        if (progress) await c.repos.progress.upsert(progress);
+        c.player.getState().setStatus('unavailable');
+        return;
+      }
+
+      let plan = continuation.story.plan;
+      const summary = priorSummaryJa(continuation.chapters, ref.chapterIndex);
+      if (nextIndex >= plan.chapters.length) {
+        const extended = await c.storyPlanner.extendPlan(plan, nextIndex, summary);
+        if (!extended.ok) {
+          setNextChapterError('プロットを延長できませんでした。時間をおいて再試行してください。');
+          return;
+        }
+        plan = extended.value;
+        await c.repos.stories.put({ ...continuation.story, plan });
+      }
+
+      const setup = storyContinuationSetup(lastSetup, active, plan);
+      const targetWordIds = await resolveTargetWordIds(c, setup);
+      const effectiveSetup = targetWordIds === setup.targetWordIds ? setup : { ...setup, targetWordIds };
+      const wordData = await loadWordDataMap(c, targetWordIds);
+      const outcome = await runGenerationPipeline(
+        {
+          createOrchestrator: c.createOrchestrator,
+          scheduling: c.repos.scheduling,
+          passages: c.repos.passages,
+          progress: c.repos.progress,
+          timingMaps: c.repos.timingMaps,
+          tts: c.tts,
+          session: c.session,
+          player: c.player,
+          now: c.now,
+          genId: c.genId,
+          voiceId: voiceId || c.voiceId,
+          wordData,
+        },
+        effectiveSetup,
+        c.userId,
+        {
+          passageId: `${plan.storyId}:${nextIndex}`,
+          storyContext: {
+            storyId: plan.storyId,
+            chapterIndex: nextIndex,
+            plan,
+            ...(summary ? { priorSummaryJa: summary } : {}),
+          },
+        },
+      );
+      if (!outcome.ok) {
+        setNextChapterError(generationErrorMessage(outcome.error));
+      }
+    } catch {
+      setNextChapterError('続きを生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setGeneratingNextChapter(false);
+    }
+  };
+
   // The display-improvement cluster (Requirements 1–4) is shipped, so the reading-layout flag is
   // on by default; resolveFeatureFlags still allows an override to disable it.
   const { newReadingLayout } = resolveFeatureFlags();
@@ -421,6 +605,12 @@ export function ReadingRoute() {
       newLayout={newReadingLayout}
       onLookup={onLookup}
       onCompleteReading={() => void completeReading()}
+      storyPlan={storyDetails?.story.plan}
+      onGenerateNextChapter={
+        storyDetails?.story.plan.contentType === 'long_story' ? () => void generateNextStoryChapter() : undefined
+      }
+      generatingNextChapter={generatingNextChapter}
+      nextChapterError={nextChapterError}
       renderWordDetail={(wordId, onClose) => <WordDetailRoute wordId={wordId} onClose={onClose} />}
     />
   );
