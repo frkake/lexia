@@ -557,6 +557,10 @@ export function ReadingRoute() {
         const progress = c.session.getState().toReadingProgress(c.userId);
         if (progress) await c.repos.progress.upsert(progress);
         c.player.getState().setStatus('unavailable');
+        // Sync the address bar to the already-generated chapter so a reload/share reopens the right
+        // one (the reader is URL-addressable now). The session already holds this chapter, so the
+        // ReadingRoute open-effect's guard short-circuits — no redundant re-open.
+        navigate(`/s/${ref.storyId}/${nextIndex}`);
         return;
       }
 

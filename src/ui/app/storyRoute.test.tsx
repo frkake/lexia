@@ -323,4 +323,61 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     const passages = await repos.passages.byStory(userId, 'story_1');
     expect(passages.map((p) => p.passage.meta.storyRef?.chapterIndex)).toEqual([0, 1]);
   });
+
+  it('advances the URL to an already-generated next chapter without regenerating', async () => {
+    const userId = 'story_route_existing_next_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    const twoChapterPlan: StoryPlan = {
+      ...LONG_PLAN,
+      chapters: [
+        { index: 0, headingJa: '第一章', beatJa: '旅立ち' },
+        { index: 1, headingJa: '第二章', beatJa: '星の門' },
+      ],
+    };
+    await repos.stories.put({ storyId: twoChapterPlan.storyId, userId, createdAt: 1_000, plan: twoChapterPlan });
+    await repos.passages.put({ passageId: 'story_1:0', userId, createdAt: 1_000, passage: chapterPassage(0, '星の少女 第一章') });
+    await repos.passages.put({ passageId: 'story_1:1', userId, createdAt: 1_100, passage: chapterPassage(1, '星の少女 第二章') });
+
+    let generateCalls = 0;
+    const noRegenContent: ContentGateway = {
+      generatePassage: async () => {
+        generateCalls += 1;
+        return { passage: chapterPassage(1, '星の少女 第二章'), stopReason: 'end_turn' };
+      },
+      getWordData: async () => {
+        throw new Error('unused');
+      },
+      suggestWords: async () => [],
+    };
+    const session = createSessionStore();
+    session.getState().startPassage(tokenizer.index('story_1:0', chapterPassage(0, '星の少女 第一章')), 1_000);
+    const container = await createContainer(userId, {
+      db,
+      content: noRegenContent,
+      story: { planStory: async () => twoChapterPlan },
+      tts: degradingTts,
+      now: () => 2_000,
+      settings: createSettingsStore(),
+      session,
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/s/story_1/0'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('続きを生成')).toBeTruthy();
+    fireEvent.click(screen.getByText('続きを生成'));
+
+    // The already-generated chapter opens AND the address bar advances to it (URL/content stay in sync).
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/1'));
+    await waitFor(() => expect(screen.getAllByText('星の少女 第二章').length).toBeGreaterThan(0));
+    // No regeneration happened — the existing chapter was reused.
+    expect(generateCalls).toBe(0);
+  });
 });
