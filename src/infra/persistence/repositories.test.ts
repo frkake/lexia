@@ -252,3 +252,31 @@ describe('WordCacheRepository', () => {
     db.close();
   });
 });
+
+describe('DexiePassageRepository.all', () => {
+  it('returns all passages for the user, newest first, excluding other users', async () => {
+    const db = new LexiaDb('all_user');
+    await db.open();
+    const repos = createRepositories(db);
+    const mk = (passageId: string, userId: string, createdAt: number): PassageRecord => ({
+      passageId,
+      userId: userId as UserId,
+      createdAt,
+      passage: {
+        meta: { title: passageId, intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 0 },
+        sentences: [],
+        targetSpans: [],
+        collocationSpans: [],
+        noticeCues: [],
+      },
+    });
+    await repos.passages.put(mk('a', 'all_user', 100));
+    await repos.passages.put(mk('b', 'all_user', 300));
+    await repos.passages.put(mk('c', 'all_user', 200));
+    await repos.passages.put(mk('x', 'other_user', 999));
+
+    const all = await repos.passages.all('all_user' as UserId);
+    expect(all.map((p) => p.passageId)).toEqual(['b', 'c', 'a']);
+    db.close();
+  });
+});

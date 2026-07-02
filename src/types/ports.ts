@@ -140,6 +140,8 @@ export interface PassageRepository {
   put(record: PassageRecord): Promise<void>;
   /** Most-recently created passages first. */
   recent(userId: UserId, limit: number): Promise<PassageRecord[]>;
+  /** Every passage for a learner, most-recently created first (library + search input). */
+  all(userId: UserId): Promise<PassageRecord[]>;
   /** Story chapters for a learner, ordered by chapter index. */
   byStory(userId: UserId, storyId: string): Promise<PassageRecord[]>;
 }

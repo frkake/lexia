@@ -24,6 +24,15 @@ export class DexiePassageRepository implements PassageRepository {
       .toArray();
   }
 
+  /** Every passage for a learner, newest first (uses the `createdAt` index). */
+  all(userId: UserId): Promise<PassageRecord[]> {
+    return this.db.passages
+      .orderBy('createdAt')
+      .reverse()
+      .filter((p) => p.userId === userId)
+      .toArray();
+  }
+
   async byStory(userId: UserId, storyId: string): Promise<PassageRecord[]> {
     const rows = await this.db.passages.where('passage.meta.storyRef.storyId').equals(storyId).toArray();
     return rows
