@@ -10,11 +10,16 @@ describe('appRoutes', () => {
     expect(appRoutes[0]!.element).toEqual(<AppShell />);
   });
 
-  it('wires the five primary destinations under the shell', () => {
+  it('wires the new IA destinations under the shell', () => {
     const children = appRoutes[0]!.children ?? [];
-    const hasIndex = children.some((c) => 'index' in c && c.index);
+    const hasIndex = children.some((c) => 'index' in c && c.index); // home (generation)
     const paths = children.flatMap((c) => ('path' in c && c.path ? [c.path] : []));
-    expect(hasIndex).toBe(true); // dashboard
-    expect(paths).toEqual(expect.arrayContaining(['read', 'review', 'setup', 'wordbook']));
+    expect(hasIndex).toBe(true);
+    expect(paths).toEqual(
+      expect.arrayContaining(['library', 'p/:passageId', 's/:storyId', 's/:storyId/:chapterIndex', 'review', 'wordbook']),
+    );
+    // The retired tabs are gone.
+    expect(paths).not.toContain('read');
+    expect(paths).not.toContain('setup');
   });
 });

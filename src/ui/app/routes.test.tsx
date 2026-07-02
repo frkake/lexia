@@ -89,7 +89,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       now: () => 1_000_000,
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -113,7 +113,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     await waitFor(() => expect(container.player.getState().status).toBe('unavailable'));
     expect(await createRepositories(db).passages.recent(userId, 5)).toHaveLength(1);
 
-    fireEvent.click(screen.getByText('読了として記録'));
+    fireEvent.click(await screen.findByText('読了として記録'));
     await waitFor(async () => {
       const progress = await createRepositories(db).progress.get(userId, container.session.getState().passage!.passageId);
       expect(progress?.status).toBe('completed');
@@ -148,7 +148,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       now: () => 1_000_000,
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -201,7 +201,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       now: () => 1_000_000,
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -276,7 +276,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
       player: createPlayerStore(),
       settings: createSettingsStore(),
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
 
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -291,7 +291,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
 
     // No mock passage: the connection error is shown and we stay on Setup.
     expect(await screen.findByText('生成サービスに接続できませんでした。時間をおいて再試行してください。')).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/setup');
+    expect(router.state.location.pathname).toBe('/');
     expect(await createRepositories(db).passages.recent(userId, 5)).toHaveLength(0);
   });
 });

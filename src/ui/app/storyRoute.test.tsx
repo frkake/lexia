@@ -111,7 +111,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       now: () => 1_000_000,
       settings,
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -138,7 +138,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
 
     // Confirm → chapter is generated, persisted with the story link, and we land on Reading.
     fireEvent.click(screen.getByText('この設定で執筆する'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/read'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'));
     await waitFor(async () => {
       const stories = await createRepositories(db).stories.recent(userId, 5);
       expect(stories).toHaveLength(1);
@@ -178,7 +178,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       now: () => 1_000_000,
       settings,
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -196,7 +196,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       '文章が長すぎて生成が途中で止まりました。文章の長さを短くしてください。',
     );
     expect(screen.getByText('この設定で執筆する')).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/setup');
+    expect(router.state.location.pathname).toBe('/');
     db.close();
   });
 
@@ -225,7 +225,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       now: () => 1_000_000,
       settings,
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/setup'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -304,7 +304,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       settings: createSettingsStore(),
       session,
     });
-    const router = createMemoryRouter(appRoutes, { initialEntries: ['/read'] });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/s/story_1/0'] });
     render(
       <QueryClientProvider client={new QueryClient()}>
         <AppProvider container={container}>
@@ -317,7 +317,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     fireEvent.click(screen.getByText('続きを生成'));
 
     await waitFor(() => expect(screen.getAllByText('星の少女 第二章').length).toBeGreaterThan(0));
-    expect(router.state.location.pathname).toBe('/read');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/1'));
     const reqSeen = capturedReq as unknown as GenerationRequest;
     expect(reqSeen.storyContext).toMatchObject({ storyId: 'story_1', chapterIndex: 1 });
     expect(reqSeen.storyContext?.priorSummaryJa).toContain('星の少女 第一章');

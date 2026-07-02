@@ -9,12 +9,14 @@
  * Reads are reactive (`useLiveQuery`) so any repository write re-renders immediately.
  */
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useStore } from 'zustand';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { DashboardScreen } from '../dashboard/DashboardScreen';
-import { SetupScreen, type CandidateWord } from '../setup/SetupScreen';
+import { type CandidateWord } from '../setup/SetupScreen';
+import { HomeScreen } from '../home/HomeScreen';
+import { LibraryScreen } from '../library/LibraryScreen';
+import { StoryDirectoryScreen, type StoryChapterRow } from '../story/StoryDirectoryScreen';
 import { StoryPlanReview } from '../setup/StoryPlanReview';
 import { ReadingScreen } from '../reading/ReadingScreen';
 import { StudyWordsList, type StudyWord } from '../reading/StudyWordsList';
@@ -29,17 +31,22 @@ import { loadDashboardSnapshot } from '../../state/controllers/dashboardControll
 import { runGenerationPipeline } from '../../state/controllers/generationController';
 import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
-import { restoreReadingSession } from '../../state/controllers/sessionBootstrap';
+import { openPassage, restoreReadingSession } from '../../state/controllers/sessionBootstrap';
 import { sessionPlanner } from '../../domain/session/sessionPlanner';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { examScale } from '../../domain/difficulty/examScale';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
-import { colors, fonts } from '../theme/tokens';
+import { colors, fonts, radius } from '../theme/tokens';
 import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, StoryRecord, WordData, WordSchedulingState } from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
 
 const CANDIDATE_LIMIT = 12;
+
+/** Reader URL for a passage: story chapters are /s/:storyId/:chapterIndex, articles are /p/:id. */
+function readerPathFor(passageId: string, storyRef?: { storyId: string; chapterIndex: number }): string {
+  return storyRef ? `/s/${storyRef.storyId}/${storyRef.chapterIndex}` : `/p/${passageId}`;
+}
 
 function stripCacheNamespace(data: WordData): WordData {
   const copy = { ...data } as WordData & { userId?: unknown };
@@ -185,49 +192,9 @@ function ScreenSkeleton() {
   );
 }
 
-// ── Dashboard (10.3 reflection, 9.3) ─────────────────────────────────────────
+// ── Home → generate (10.1, Flow 1) ───────────────────────────────────────────
 
-export function DashboardRoute() {
-  const c = useContainer();
-  const navigate = useNavigate();
-
-  const snapshot = useLiveQuery(
-    () =>
-      loadDashboardSnapshot(
-        {
-          loadStates: c.loadStates,
-          progress: c.repos.progress,
-          reviewLog: c.repos.reviewLog,
-          passages: c.repos.passages,
-        },
-        c.userId,
-        c.now(),
-      ),
-    [c],
-  );
-
-  if (!snapshot) return <ScreenSkeleton />;
-
-  // Resume the most-recent in-progress passage at its saved position (10.4 restore).
-  const resume = async (): Promise<void> => {
-    await restoreReadingSession({ passages: c.repos.passages, progress: c.repos.progress, session: c.session }, c.userId);
-    navigate('/read');
-  };
-
-  return (
-    <DashboardScreen
-      snapshot={snapshot}
-      now={c.now()}
-      onContinue={() => void resume()}
-      onStartReview={() => navigate('/review')}
-      onOpenPassage={() => void resume()}
-    />
-  );
-}
-
-// ── Setup → generate (10.1, Flow 1) ──────────────────────────────────────────
-
-export function SetupRoute() {
+export function HomeRoute() {
   const c = useContainer();
   const navigate = useNavigate();
   const lastSetup = useStore(c.settings, (s) => s.lastSetup);
@@ -314,8 +281,8 @@ export function SetupRoute() {
       effectiveSetup,
       c.userId,
     );
-    if (outcome.ok) navigate('/read');
-    else setGenerationError(generationErrorMessage(outcome.error));
+    if (outcome.ok && outcome.passageId) navigate(`/p/${outcome.passageId}`);
+    else if (!outcome.ok) setGenerationError(generationErrorMessage(outcome.error));
   };
 
   const onGenerate = async (setup: SetupConfig): Promise<void> => {
@@ -416,12 +383,28 @@ export function SetupRoute() {
       activeIllustrationRequest.current += 1;
       setPendingPlan(null);
       setPendingSetup(null);
-      navigate('/read');
+      navigate(`/s/${plan.storyId}/${chapterIndex}`);
     } catch (error) {
       setGenerationError(generationErrorMessage(error));
     } finally {
       setGenerating(false);
     }
+  };
+
+  const snapshot = useLiveQuery(
+    () =>
+      loadDashboardSnapshot(
+        { loadStates: c.loadStates, progress: c.repos.progress, reviewLog: c.repos.reviewLog, passages: c.repos.passages },
+        c.userId,
+        c.now(),
+      ),
+    [c],
+  );
+
+  const resume = async (): Promise<void> => {
+    await restoreReadingSession({ passages: c.repos.passages, progress: c.repos.progress, session: c.session }, c.userId);
+    const active = c.session.getState().passage;
+    if (active) navigate(readerPathFor(active.passageId, active.source.meta.storyRef));
   };
 
   if (pendingPlan) {
@@ -443,13 +426,20 @@ export function SetupRoute() {
   }
 
   return (
-    <SetupScreen
-      candidates={candidates}
-      suggestionShortfall={suggestionShortfall}
-      initial={lastSetup}
-      generating={generating}
-      generationError={generationError}
-      onGenerate={(s) => void onGenerate(s)}
+    <HomeScreen
+      setup={{
+        candidates,
+        suggestionShortfall,
+        initial: lastSetup,
+        generating,
+        generationError,
+        onGenerate: (s) => void onGenerate(s),
+      }}
+      snapshot={snapshot ?? undefined}
+      now={c.now()}
+      onContinue={() => void resume()}
+      onStartReview={() => navigate('/review')}
+      onOpenPassage={() => void resume()}
     />
   );
 }
@@ -458,7 +448,35 @@ export function SetupRoute() {
 
 export function ReadingRoute() {
   const c = useContainer();
+  const navigate = useNavigate();
+  const params = useParams();
+  const targetPassageId =
+    params.storyId && params.chapterIndex !== undefined
+      ? `${params.storyId}:${params.chapterIndex}`
+      : params.passageId;
   const passage = useStore(c.session, (s) => s.passage);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    if (!targetPassageId) return;
+    if (passage?.passageId === targetPassageId) {
+      setNotFound(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const opened = await openPassage(
+        { passages: c.repos.passages, progress: c.repos.progress, session: c.session },
+        c.userId,
+        targetPassageId,
+      );
+      if (!cancelled) setNotFound(opened === null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [c, targetPassageId, passage?.passageId]);
+
   const voiceId = useStore(c.settings, (s) => s.voiceId);
   const lastSetup = useStore(c.settings, (s) => s.lastSetup);
   const [generatingNextChapter, setGeneratingNextChapter] = useState(false);
@@ -586,13 +604,26 @@ export function ReadingRoute() {
       );
       if (!outcome.ok) {
         setNextChapterError(generationErrorMessage(outcome.error));
+        return;
       }
+      navigate(`/s/${plan.storyId}/${nextIndex}`);
     } catch {
       setNextChapterError('続きを生成できませんでした。時間をおいて再試行してください。');
     } finally {
       setGeneratingNextChapter(false);
     }
   };
+
+  if (notFound) {
+    return (
+      <div style={notFoundStyle}>
+        <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink }}>文章が見つかりません</div>
+        <button type="button" onClick={() => navigate('/library')} style={notFoundButtonStyle}>
+          文章一覧へ
+        </button>
+      </div>
+    );
+  }
 
   // The display-improvement cluster (Requirements 1–4) is shipped, so the reading-layout flag is
   // on by default; resolveFeatureFlags still allows an override to disable it.
@@ -710,6 +741,72 @@ export function WordbookRoute() {
   );
 }
 
+// ── Library (passage list) ────────────────────────────────────────────────────
+
+export function LibraryRoute() {
+  const c = useContainer();
+  const navigate = useNavigate();
+
+  const passages = useLiveQuery(() => c.repos.passages.all(c.userId), [c]);
+  const storyTitles = useLiveQuery(async () => {
+    const stories = await c.repos.stories.recent(c.userId, 200);
+    return Object.fromEntries(stories.map((s) => [s.storyId, s.plan.titleJa] as const));
+  }, [c]);
+
+  if (!passages) return <ScreenSkeleton />;
+
+  return (
+    <LibraryScreen
+      passages={passages}
+      storyTitles={storyTitles ?? {}}
+      onOpenArticle={(passageId) => navigate(`/p/${passageId}`)}
+      onOpenStory={(storyId) => navigate(`/s/${storyId}`)}
+    />
+  );
+}
+
+// ── Story directory ───────────────────────────────────────────────────────────
+
+export function StoryDirectoryRoute() {
+  const c = useContainer();
+  const navigate = useNavigate();
+  const params = useParams();
+  const storyId = params.storyId ?? '';
+
+  const data = useLiveQuery(async () => {
+    const story = await c.repos.stories.get(storyId);
+    if (!story || story.userId !== c.userId) return null;
+    const chapters = await c.repos.passages.byStory(c.userId, storyId);
+    const generated = new Set(chapters.map((ch) => ch.passage.meta.storyRef?.chapterIndex ?? 0));
+    const rows: StoryChapterRow[] = story.plan.chapters.map((ch) => ({
+      chapterIndex: ch.index,
+      headingJa: ch.headingJa,
+      generated: generated.has(ch.index),
+    }));
+    return { plan: story.plan, rows };
+  }, [c, storyId]);
+
+  if (data === undefined) return <ScreenSkeleton />;
+  if (data === null) {
+    return (
+      <div style={notFoundStyle}>
+        <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink }}>物語が見つかりません</div>
+        <button type="button" onClick={() => navigate('/library')} style={notFoundButtonStyle}>
+          文章一覧へ
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <StoryDirectoryScreen
+      plan={data.plan}
+      chapters={data.rows}
+      onOpenChapter={(chapterIndex) => navigate(`/s/${storyId}/${chapterIndex}`)}
+    />
+  );
+}
+
 // ── Shared word-detail overlay (8.4) ─────────────────────────────────────────
 
 function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => void }): ReactNode {
@@ -762,6 +859,27 @@ const closeButtonStyle: CSSProperties = {
   background: colors.surfaceBlue,
   border: `1px solid ${colors.primaryBorder}`,
   borderRadius: 8,
+  padding: '8px 18px',
+  cursor: 'pointer',
+};
+
+const notFoundStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 16,
+  padding: '80px 24px',
+  background: colors.surfacePage,
+};
+
+const notFoundButtonStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.chip,
   padding: '8px 18px',
   cursor: 'pointer',
 };
