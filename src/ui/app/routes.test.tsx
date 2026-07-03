@@ -67,6 +67,16 @@ function sched(userId: UserId): WordSchedulingState {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
   it('Setup generates a passage and navigates into Reading (audio degrades, text continues)', async () => {
     const userId = 'route_user' as UserId;
@@ -226,13 +236,14 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     });
   });
 
-  it('re-syncs generated target words to a custom vocabulary level before generation', async () => {
-    const userId = 'route_custom_level_user' as UserId;
+  it('re-syncs generated target words after level edits without replacing setup chips', async () => {
+    const userId = 'route_generate_keeps_candidates_user' as UserId;
     const db = new LexiaDb(userId);
     await db.open();
 
     let suggestCalls = 0;
     const suggestRequests: WordSuggestionRequest[] = [];
+    const passageGate = deferred<{ passage: PassageOutput; stopReason: 'end_turn' }>();
     const gateway: ContentGateway = {
       async suggestWords(req) {
         suggestCalls += 1;
@@ -240,10 +251,10 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
         return suggestCalls === 1 ? ['alpha'] : ['deal'];
       },
       async generatePassage() {
-        return { passage: validPassage(), stopReason: 'end_turn' };
+        return passageGate.promise;
       },
-      async getWordData() {
-        return wordData;
+      async getWordData(wordId) {
+        return { ...wordData, wordId, headword: wordId };
       },
     };
 
@@ -267,8 +278,14 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     fireEvent.change(screen.getByTestId('advanced-vocabulary-level'), { target: { value: 'C1' } });
     fireEvent.click(screen.getByText('文章を生成する'));
 
+    await waitFor(() => expect(suggestCalls).toBe(2));
+    expect(suggestRequests[0]?.level).toBe('B1');
+    expect(suggestRequests[1]?.level).toBe('C1');
+    expect(screen.getByTestId('target-alpha')).toBeTruthy();
+    expect(screen.queryByTestId('target-deal')).toBeNull();
+
+    passageGate.resolve({ passage: validPassage(), stopReason: 'end_turn' });
     await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
-    expect(suggestRequests[suggestRequests.length - 1]?.level).toBe('C1');
     await waitFor(async () => {
       const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
       expect(seeded?.level).toBe('C1');

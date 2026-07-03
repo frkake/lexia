@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  PASSAGE_JSON_SCHEMA,
   buildAnnotationMessages,
   buildCharacterIllustrationPrompt,
   buildPassageMessages,
@@ -11,6 +12,30 @@ import {
   maxTokensForWordTarget,
 } from './schema';
 import type { GenerationRequest, PassageAnnotationRequest, StoryPlanExtensionRequest } from '../../src/types/domain';
+
+function assertOpenAiStrictObjectSchema(schema: unknown, path = 'schema'): void {
+  if (!schema || typeof schema !== 'object') return;
+  const obj = schema as { type?: unknown; properties?: Record<string, unknown>; required?: unknown; items?: unknown };
+  const types = Array.isArray(obj.type) ? obj.type : [obj.type];
+  if (types.includes('object') && obj.properties) {
+    expect(obj.required, `${path}.required`).toEqual(Object.keys(obj.properties));
+  }
+  for (const [key, value] of Object.entries(obj.properties ?? {})) {
+    assertOpenAiStrictObjectSchema(value, `${path}.properties.${key}`);
+  }
+  if (obj.items) assertOpenAiStrictObjectSchema(obj.items, `${path}.items`);
+}
+
+describe('PASSAGE_JSON_SCHEMA', () => {
+  it('keeps every object property required for OpenAI strict structured outputs', () => {
+    assertOpenAiStrictObjectSchema(PASSAGE_JSON_SCHEMA);
+  });
+
+  it('does not ask the passage model to emit image-enrichment fields', () => {
+    const meta = PASSAGE_JSON_SCHEMA.properties.meta;
+    expect('sceneIllustrationUrl' in meta.properties).toBe(false);
+  });
+});
 
 describe('buildPassageMessages — translationSpans guidance (Requirement 4)', () => {
   const req: GenerationRequest = {

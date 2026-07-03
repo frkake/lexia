@@ -281,6 +281,7 @@ export function HomeRoute() {
   const [suggestionShortfall, setSuggestionShortfall] = useState<string | null>(null);
   const [refreshingCandidates, setRefreshingCandidates] = useState(false);
   const [candidateRefreshError, setCandidateRefreshError] = useState<string | null>(null);
+  const [candidateSetup, setCandidateSetup] = useState<SetupConfig>(lastSetup);
   const [lastSuggestionKey, setLastSuggestionKey] = useState<string | null>(null);
 
   const loadCandidates = useCallback(
@@ -315,7 +316,7 @@ export function HomeRoute() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadCandidates(lastSetup)
+    void loadCandidates(candidateSetup)
       .then((loaded) => {
         if (!cancelled) commitLoadedCandidates(loaded);
       })
@@ -328,7 +329,7 @@ export function HomeRoute() {
     return () => {
       cancelled = true;
     };
-  }, [commitLoadedCandidates, lastSetup, loadCandidates]);
+  }, [candidateSetup, commitLoadedCandidates, loadCandidates]);
 
   const refreshCandidates = async (
     setup: SetupConfig,
@@ -351,18 +352,23 @@ export function HomeRoute() {
   const resetTargetWords = (setup: SetupConfig): void => {
     // Drop hand-picked additions and past exclusions from the persisted setup so the section
     // returns to a plain auto-selection. Clearing excludedWordIds means previously-suppressed words
-    // can be proposed again. The candidate-load effect re-fires on the lastSetup change and
-    // re-suggests with no avoid list.
+    // can be proposed again. Candidate reloads are explicit here, not tied to generation saves.
     setCandidateRefreshError(null);
-    c.settings.getState().setLastSetup({ ...setup, targetWordIds: [], excludedWordIds: [] });
+    const clearedSetup = { ...setup, targetWordIds: [], excludedWordIds: [] };
+    setCandidateSetup(clearedSetup);
+    c.settings.getState().setLastSetup(clearedSetup);
   };
 
-  const setupWithFreshAutoCandidates = async (setup: SetupConfig): Promise<SetupConfig> => {
+  const setupForGeneration = async (setup: SetupConfig): Promise<SetupConfig> => {
     if (lastSuggestionKey === suggestionKeyFor(setup)) return setup;
-    const fresh = await refreshCandidates(setup, []);
-    const freshIds = selectedIds(fresh);
-    if (isUneditedAutoSelection(setup, candidates)) return { ...setup, targetWordIds: freshIds };
-    return { ...setup, targetWordIds: mergeWordIds(freshIds, manualTargetWordIds(setup, candidates)) };
+    try {
+      const loaded = await loadCandidates(setup, []);
+      const freshIds = selectedIds(loaded.candidates);
+      if (isUneditedAutoSelection(setup, candidates)) return { ...setup, targetWordIds: freshIds };
+      return { ...setup, targetWordIds: mergeWordIds(freshIds, manualTargetWordIds(setup, candidates)) };
+    } catch {
+      return setup;
+    }
   };
 
   // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
@@ -407,7 +413,7 @@ export function HomeRoute() {
     setGenerating(true);
     setGenerationError(null);
     try {
-      const effectiveSetup = await setupWithFreshAutoCandidates(setup);
+      const effectiveSetup = await setupForGeneration(setup);
       c.settings.getState().setLastSetup(effectiveSetup);
       // Story path: generate the plan and STOP at the confirmation gate (no body yet, 6.3).
       if (storyMode && effectiveSetup.contentType !== 'article') {

@@ -73,7 +73,6 @@ export const PASSAGE_JSON_SCHEMA = {
         newCount: { type: 'integer' },
         reviewCount: { type: 'integer' },
         approxWords: { type: 'integer' },
-        sceneIllustrationUrl: { type: 'string' },
       },
       required: ['title', 'intent', 'level', 'newCount', 'reviewCount', 'approxWords'],
     },
