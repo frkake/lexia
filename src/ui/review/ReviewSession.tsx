@@ -40,7 +40,7 @@ export interface ReviewSessionProps {
 }
 
 const RATINGS: { rating: Rating; label: string; style: 'again' | 'hard' | 'good' | 'easy' }[] = [
-  { rating: 1, label: 'もう一度', style: 'again' },
+  { rating: 1, label: '知らなかった', style: 'again' },
   { rating: 2, label: '難しい', style: 'hard' },
   { rating: 3, label: '普通', style: 'good' },
   { rating: 4, label: '簡単', style: 'easy' },

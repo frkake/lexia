@@ -19,6 +19,7 @@ import type {
   ContentType,
   ExamCriterion,
   LearningIntent,
+  MasteryStage,
   ReadabilityLevel,
   SetupConfig,
   StoryGenre,
@@ -27,6 +28,9 @@ import type {
 export interface CandidateWord {
   wordId: string;
   surface: string;
+  level?: Cefr;
+  reason?: 'new' | 'due' | 'weak';
+  stage?: MasteryStage;
 }
 
 export interface SetupScreenProps {
@@ -38,6 +42,16 @@ export interface SetupScreenProps {
   initial?: Partial<SetupConfig>;
   /** Receives the assembled config once required conditions are met. */
   onGenerate?: (setup: SetupConfig) => void;
+  /** Refreshes only the auto-selected candidate words; manual additions/exclusions stay local. */
+  onRefreshCandidates?: (setup: SetupConfig) => void;
+  /**
+   * Clears manual edits (exclusions + additions) so the section returns to a plain auto-selection,
+   * and asks the route to drop the persisted target/excluded words (so past exclusions no longer
+   * suppress suggestions). Receives the setup with `targetWordIds`/`excludedWordIds` emptied.
+   */
+  onResetTargetWords?: (setup: SetupConfig) => void;
+  refreshingCandidates?: boolean;
+  candidateRefreshError?: string | null;
   generating?: boolean;
   generationError?: string | null;
 }
@@ -92,11 +106,22 @@ export function setupMissing(examTarget: ExamCriterion | undefined, targetWordId
   return missing;
 }
 
+function candidateReasonLabel(candidate: CandidateWord): string | null {
+  if (candidate.reason === 'due') return '復習';
+  if (candidate.reason === 'weak') return '苦手';
+  if (candidate.reason === 'new') return '新出';
+  return null;
+}
+
 export function SetupScreen({
   candidates = [],
   suggestionShortfall = null,
   initial,
   onGenerate,
+  onRefreshCandidates,
+  onResetTargetWords,
+  refreshingCandidates = false,
+  candidateRefreshError = null,
   generating = false,
   generationError = null,
 }: SetupScreenProps) {
@@ -151,19 +176,17 @@ export function SetupScreen({
     setAdding(false);
   };
 
-  const generate = (): void => {
-    setAttempted(true);
-    if (missing.length > 0 || !examTarget) return;
+  const buildSetup = (selectedExamTarget: ExamCriterion): SetupConfig => {
     const effectiveWordTarget = clampWordTarget(contentType, wordTarget);
     const advancedDifficulty =
       vocabularyLevel !== 'auto' || readabilityLevel !== 'auto'
         ? {
             ...(vocabularyLevel !== 'auto' ? { vocabularyLevel } : {}),
             ...(readabilityLevel !== 'auto' ? { readabilityLevel } : {}),
-          }
+        }
         : undefined;
-    onGenerate?.({
-      examTarget,
+    return {
+      examTarget: selectedExamTarget,
       intent,
       newWordRatio,
       wordTarget: effectiveWordTarget,
@@ -174,7 +197,34 @@ export function SetupScreen({
         : {}),
       targetWordIds,
       excludedWordIds: [...excluded],
+    };
+  };
+
+  const refreshCandidates = (): void => {
+    onRefreshCandidates?.(buildSetup(examTarget ?? DEFAULT_EXAM));
+  };
+
+  const hasManualEdits = excluded.size > 0 || added.length > 0;
+
+  const resetTargetWords = (): void => {
+    // Clear local edits so every auto candidate is selected again and no manual word remains.
+    setExcluded(new Set());
+    setAdded([]);
+    setDraft('');
+    setAdding(false);
+    // buildSetup reads the (now-stale) memoized selection, so emit the cleared selection directly:
+    // all current candidates, no exclusions. The route drops these from the persisted setup too.
+    onResetTargetWords?.({
+      ...buildSetup(examTarget ?? DEFAULT_EXAM),
+      targetWordIds: candidates.map((c) => c.wordId),
+      excludedWordIds: [],
     });
+  };
+
+  const generate = (): void => {
+    setAttempted(true);
+    if (missing.length > 0 || !examTarget) return;
+    onGenerate?.(buildSetup(examTarget));
   };
 
   return (
@@ -348,7 +398,37 @@ export function SetupScreen({
 
           {/* Target words */}
           <section>
-            <Label text="今回織り込む単語" hint="未学習・苦手から自動提案" mb={5} />
+            <div style={targetHeaderStyle}>
+              <Label text="今回織り込む単語" hint="未学習・苦手から自動提案" mb={0} />
+              {onRefreshCandidates || onResetTargetWords ? (
+                <div style={targetActionsStyle}>
+                  {onResetTargetWords ? (
+                    <button
+                      type="button"
+                      data-testid="reset-candidates"
+                      onClick={resetTargetWords}
+                      disabled={!hasManualEdits || refreshingCandidates || generating}
+                      title="手動で追加・除外した単語を消して自動提案に戻します"
+                      style={resetButtonStyle(!hasManualEdits || refreshingCandidates || generating)}
+                    >
+                      リセット
+                    </button>
+                  ) : null}
+                  {onRefreshCandidates ? (
+                    <button
+                      type="button"
+                      data-testid="refresh-candidates"
+                      onClick={refreshCandidates}
+                      disabled={refreshingCandidates || generating}
+                      aria-busy={refreshingCandidates}
+                      style={refreshButtonStyle(refreshingCandidates || generating)}
+                    >
+                      {refreshingCandidates ? '更新中…' : '単語を更新'}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 12 }}>
               指定しない場合は、選んだレベルと趣向に合わせた文章を生成します
             </div>
@@ -357,9 +437,15 @@ export function SetupScreen({
                 {suggestionShortfall}
               </div>
             ) : null}
+            {candidateRefreshError ? (
+              <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.terracotta, marginBottom: 12 }}>
+                {candidateRefreshError}
+              </div>
+            ) : null}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {candidates.map((c) => {
                 const off = excluded.has(c.wordId);
+                const reason = candidateReasonLabel(c);
                 return (
                   <button
                     key={c.wordId}
@@ -368,8 +454,10 @@ export function SetupScreen({
                     aria-pressed={!off}
                     onClick={() => toggleExclude(c.wordId)}
                     style={targetChipStyle(off)}
+                    title={reason ?? undefined}
                   >
                     {c.surface}
+                    {reason ? <span style={targetReasonStyle}>{reason}</span> : null}
                   </button>
                 );
               })}
@@ -464,7 +552,51 @@ const contentTypeStyle = (on: boolean): CSSProperties => ({
   cursor: 'pointer',
 });
 
+const targetHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginBottom: 5,
+};
+
+const targetActionsStyle: CSSProperties = {
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+};
+
+const refreshButtonStyle = (busy: boolean): CSSProperties => ({
+  flex: 'none',
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 600,
+  color: busy ? colors.faint : colors.primary,
+  background: busy ? '#F4F6F9' : colors.surfaceBlue,
+  border: `1px solid ${busy ? colors.borderControl : colors.primaryBorder}`,
+  borderRadius: radius.chip,
+  padding: '6px 12px',
+  cursor: busy ? 'wait' : 'pointer',
+});
+
+const resetButtonStyle = (disabled: boolean): CSSProperties => ({
+  flex: 'none',
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 600,
+  color: disabled ? colors.faint : colors.inkSoft,
+  background: 'transparent',
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.chip,
+  padding: '6px 12px',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+});
+
 const targetChipStyle = (off: boolean): CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
   fontFamily: fonts.serif,
   fontSize: 14,
   color: off ? colors.faint : colors.primaryDeep,
@@ -475,6 +607,12 @@ const targetChipStyle = (off: boolean): CSSProperties => ({
   cursor: 'pointer',
   textDecoration: off ? 'line-through' : 'none',
 });
+
+const targetReasonStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 10.5,
+  color: colors.faint,
+};
 
 const addChipStyle: CSSProperties = {
   fontFamily: fonts.ui,

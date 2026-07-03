@@ -91,6 +91,7 @@ export async function runGenerationPipeline(
   }
 
   const req = planner.buildRequest(setup, states, deps.wordData, options.storyContext);
+  for (const state of toSeed) state.level = req.level;
   const passageId = options.passageId ?? deps.genId();
   const result = await deps.createOrchestrator(passageId).generate(req);
 

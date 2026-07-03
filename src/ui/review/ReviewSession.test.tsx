@@ -73,7 +73,8 @@ describe('<ReviewSession/>', () => {
 
   it('labels each difficulty button with the simulated next interval (9.4)', () => {
     const { getByTestId } = renderSession();
-    expect(within(getByTestId('rate-1')).getByText('10分')).toBeTruthy(); // Again ladder
+    expect(within(getByTestId('rate-1')).getByText('10分')).toBeTruthy(); // Unknown/Again ladder
+    expect(getByTestId('rate-1').textContent).toContain('知らなかった');
     expect(within(getByTestId('rate-2')).getByText('1日')).toBeTruthy(); // Hard ladder
     expect(getByTestId('rate-3').textContent).toContain('普通');
     expect(getByTestId('rate-4').textContent).toContain('簡単');

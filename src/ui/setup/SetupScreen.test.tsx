@@ -143,6 +143,95 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(cfg.excludedWordIds).toContain('concede');
   });
 
+  it('refreshes auto candidates without dropping manual additions or exclusions', () => {
+    const onRefreshCandidates = vi.fn<(s: SetupConfig) => void>();
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText, getByLabelText, rerender, queryByTestId } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onRefreshCandidates,
+      onGenerate,
+    });
+
+    fireEvent.click(getByTestId('target-concede'));
+    fireEvent.click(getByText('＋ 追加'));
+    fireEvent.change(getByLabelText('追加する単語'), { target: { value: 'zest' } });
+    fireEvent.click(getByText('追加'));
+    fireEvent.click(getByTestId('refresh-candidates'));
+
+    expect(onRefreshCandidates).toHaveBeenCalledTimes(1);
+    expect(onRefreshCandidates.mock.calls[0]![0].excludedWordIds).toContain('concede');
+    expect(onRefreshCandidates.mock.calls[0]![0].targetWordIds).toContain('zest');
+
+    rerender(
+      <SetupScreen
+        candidates={[{ wordId: 'adapt', surface: 'adapt' }]}
+        initial={{ examTarget: { kind: 'eiken', value: '2' } }}
+        onRefreshCandidates={onRefreshCandidates}
+        onGenerate={onGenerate}
+      />,
+    );
+    expect(queryByTestId('target-mitigate')).toBeNull();
+    expect(getByTestId('target-adapt')).toBeTruthy();
+
+    fireEvent.click(getByText('文章を生成する'));
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.targetWordIds).toEqual(['adapt', 'zest']);
+    expect(cfg.excludedWordIds).toContain('concede');
+  });
+
+  it('resets manual edits and emits a cleared selection, restoring all auto candidates', () => {
+    const onResetTargetWords = vi.fn<(s: SetupConfig) => void>();
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText, getByLabelText, queryByTestId } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onResetTargetWords,
+      onGenerate,
+    });
+
+    // Hand-edit: exclude one candidate, add a manual word.
+    fireEvent.click(getByTestId('target-concede'));
+    fireEvent.click(getByText('＋ 追加'));
+    fireEvent.change(getByLabelText('追加する単語'), { target: { value: 'zest' } });
+    fireEvent.click(getByText('追加'));
+    expect(getByTestId('target-zest')).toBeTruthy();
+
+    fireEvent.click(getByTestId('reset-candidates'));
+
+    // The route is asked to clear the persisted target/excluded words.
+    expect(onResetTargetWords).toHaveBeenCalledTimes(1);
+    const resetArg = onResetTargetWords.mock.calls[0]![0];
+    expect(resetArg.excludedWordIds).toEqual([]);
+    expect(resetArg.targetWordIds).toEqual(['mitigate', 'concede', 'candid']);
+
+    // Manual addition is gone; the previously-excluded candidate is selected again.
+    expect(queryByTestId('target-zest')).toBeNull();
+    expect(getByTestId('target-concede').getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(getByText('文章を生成する'));
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.targetWordIds).toEqual(['mitigate', 'concede', 'candid']);
+    expect(cfg.excludedWordIds).toEqual([]);
+  });
+
+  it('disables reset when there are no manual edits to clear', () => {
+    const onResetTargetWords = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onResetTargetWords,
+    });
+    expect(getByTestId('reset-candidates').hasAttribute('disabled')).toBe(true);
+    fireEvent.click(getByTestId('target-concede'));
+    expect(getByTestId('reset-candidates').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('omits the reset button when no reset handler is wired', () => {
+    const { queryByTestId } = renderScreen({ candidates: CANDIDATES });
+    expect(queryByTestId('reset-candidates')).toBeNull();
+  });
+
   it('seeds selections from the initial config', () => {
     const onGenerate = vi.fn<(s: SetupConfig) => void>();
     const { getByText } = renderScreen({
@@ -160,9 +249,14 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
   it('shows generation progress and service errors', () => {
     const { getByRole, getByText } = renderScreen({
       candidates: CANDIDATES,
+      refreshingCandidates: true,
+      candidateRefreshError: '単語候補を更新できませんでした。',
       generating: true,
       generationError: '生成サービスに接続できませんでした。',
+      onRefreshCandidates: vi.fn(),
     });
+    expect(getByRole('button', { name: '更新中…' }).getAttribute('aria-busy')).toBe('true');
+    expect(getByText('単語候補を更新できませんでした。')).toBeTruthy();
     expect(getByRole('button', { name: '生成しています…' }).getAttribute('aria-busy')).toBe('true');
     expect(getByText('生成サービスに接続できませんでした。')).toBeTruthy();
   });

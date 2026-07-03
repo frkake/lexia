@@ -45,8 +45,6 @@ export interface ReadingScreenProps {
   rail?: ReactNode;
   /** WordDetailCard renderer for the selected word (task 8.4). */
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
-  /** Reading-time recognition: a word tap is a lookup (RecallEventService, task 10.2). */
-  onLookup?: (wordId: string) => void;
   /** Reading-time recognition: learner finished the passage without looking up the rest. */
   onCompleteReading?: () => void;
   /** Long-story continuation: generate or open the next chapter from the current story plan. */
@@ -66,7 +64,6 @@ export function ReadingScreen({
   passage,
   rail,
   renderWordDetail,
-  onLookup,
   onCompleteReading,
   onGenerateNextChapter,
   generatingNextChapter = false,
@@ -150,7 +147,6 @@ export function ReadingScreen({
 
   const metaLine = `${meta.intent} · LEVEL ${meta.level} · 新出 ${meta.newCount} / 復習 ${meta.reviewCount}`;
   const selectWord = (wordId: string): void => {
-    onLookup?.(wordId); // a tap is a lookup → grade Again (RecallEventService, 10.2)
     sessionStore.getState().setActiveWord(wordId);
   };
   const closeDetail = (): void => sessionStore.getState().setActiveWord(null);

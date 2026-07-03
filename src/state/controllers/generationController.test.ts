@@ -126,6 +126,7 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     const seeded = await repos.scheduling.get(userId, 'deal');
     expect(seeded).toBeDefined();
     expect(seeded?.mastery).toBe('New');
+    expect(seeded?.level).toBe('B1');
     const inProgress = await repos.progress.byStatus(userId, 'in_progress');
     expect(inProgress.map((p) => p.passageId)).toContain(PASSAGE_ID);
   });

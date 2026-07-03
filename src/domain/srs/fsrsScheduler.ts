@@ -174,6 +174,7 @@ function seed(
     lastSource: 'review',
     mastery: 'Learning',
     reappearCount: prior?.reappearCount ?? 0,
+    ...(prior?.level ? { level: prior.level } : {}),
   };
 }
 

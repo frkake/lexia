@@ -14,7 +14,7 @@ import { createPlayerStore } from '../../state/stores/playerStore';
 import { createSessionStore } from '../../state/stores/sessionStore';
 import { createSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import type { ContentGateway } from '../../types/ports';
-import type { PassageOutput, UserId, WordData, WordSchedulingState } from '../../types/domain';
+import type { PassageOutput, UserId, WordData, WordSchedulingState, WordSuggestionRequest } from '../../types/domain';
 
 const wordData: WordData = {
   wordId: 'deal',
@@ -53,6 +53,7 @@ function sched(userId: UserId): WordSchedulingState {
   return {
     userId,
     wordId: 'deal',
+    level: 'B1',
     stability: 4,
     difficulty: 5,
     reps: 2,
@@ -225,6 +226,105 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     });
   });
 
+  it('refreshes setup candidate words from the route wiring', async () => {
+    const userId = 'route_refresh_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+
+    let suggestCalls = 0;
+    const suggestRequests: WordSuggestionRequest[] = [];
+    const gateway: ContentGateway = {
+      async suggestWords(req) {
+        suggestCalls += 1;
+        suggestRequests.push(req);
+        return suggestCalls === 1 ? ['alpha'] : ['beta'];
+      },
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('target-alpha')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('refresh-candidates'));
+    expect(await screen.findByTestId('target-beta')).toBeTruthy();
+    expect(screen.queryByTestId('target-alpha')).toBeNull();
+    expect(suggestCalls).toBeGreaterThanOrEqual(2);
+    expect(suggestRequests[1]?.exclude).toContain('alpha');
+  });
+
+  it('resets setup target words from the route wiring, clearing exclusions and reloading candidates', async () => {
+    const userId = 'route_reset_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+
+    let suggestCalls = 0;
+    const suggestRequests: WordSuggestionRequest[] = [];
+    const gateway: ContentGateway = {
+      async suggestWords(req) {
+        suggestCalls += 1;
+        suggestRequests.push(req);
+        return ['alpha', 'gamma'];
+      },
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    // Exclude a candidate, then reset.
+    expect(await screen.findByTestId('target-alpha')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('target-alpha')); // exclude alpha
+    fireEvent.click(screen.getByTestId('reset-candidates'));
+
+    // lastSetup is persisted with cleared target/excluded words.
+    await waitFor(() => {
+      const setup = container.settings.getState().lastSetup;
+      expect(setup.excludedWordIds).toEqual([]);
+      expect(setup.targetWordIds).toEqual([]);
+    });
+
+    // Candidates reload with no avoid list, so the previously-excluded word is offered again.
+    expect(await screen.findByTestId('target-alpha')).toBeTruthy();
+    expect(suggestRequests[suggestRequests.length - 1]?.exclude ?? []).not.toContain('alpha');
+  });
+
   it('enriches the live Review route with WordData and caches it for the wordbook', async () => {
     const userId = 'route_review_user' as UserId;
     const db = new LexiaDb(userId);
@@ -257,6 +357,42 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     await screen.findByText('取引');
     expect(screen.getByText('close a deal')).toBeTruthy();
     await waitFor(async () => expect(await repos.wordCache.get(userId, 'deal')).toMatchObject(wordData));
+  });
+
+  it('marks a word as unknown from the word detail card and records an Again review', async () => {
+    const userId = 'route_unknown_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    await repos.scheduling.upsert(sched(userId));
+
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    const container = await createContainer(userId, { db, content: gateway, tts: degradingTts, now: () => 1_000_000 });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/wordbook'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('word-row-deal'));
+    fireEvent.click(await screen.findByTestId('mark-unknown'));
+
+    await waitFor(async () => {
+      const log = await repos.reviewLog.since(userId, 0);
+      expect(log.some((entry) => entry.wordId === 'deal' && entry.rating === 1 && entry.source === 'review')).toBe(true);
+    });
   });
 
   it('surfaces an error from Setup when the generation API is unavailable (no silent fallback)', async () => {

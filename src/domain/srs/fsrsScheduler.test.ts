@@ -44,6 +44,12 @@ describe('FsrsScheduler.initial', () => {
     expect(s.learningStep).toBe(1);
     expect(s.dueAt).toBe(now + FIRST_DISPLAY_LADDER_MS[1]);
   });
+
+  it('preserves a New word vocabulary level when bootstrapping the first review', () => {
+    const now = 1_000_000;
+    const s = fsrs.review(graduated({ stability: undefined, reps: 0, mastery: 'New', level: 'B2' }), 3, now);
+    expect(s.level).toBe('B2');
+  });
 });
 
 describe('FsrsScheduler.retrievability / nextIntervalMs', () => {

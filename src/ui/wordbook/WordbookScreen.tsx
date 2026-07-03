@@ -18,6 +18,7 @@ export interface WordbookEntry {
   headword: string;
   gloss?: string;
   stage: MasteryStage;
+  due?: boolean;
 }
 
 export interface WordbookScreenProps {
@@ -26,7 +27,7 @@ export interface WordbookScreenProps {
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
 }
 
-type Filter = MasteryStage | 'all';
+type Filter = MasteryStage | 'all' | 'due';
 
 const STAGE_JA: Record<MasteryStage, string> = {
   New: '未学習',
@@ -37,6 +38,7 @@ const STAGE_JA: Record<MasteryStage, string> = {
 
 const FILTERS: { value: Filter; label: string; stage?: MasteryStage }[] = [
   { value: 'all', label: 'すべて' },
+  { value: 'due', label: '要復習' },
   { value: 'New', label: '未学習', stage: 'New' },
   { value: 'Learning', label: '学習中', stage: 'Learning' },
   { value: 'Consolidating', label: '定着', stage: 'Consolidating' },
@@ -51,7 +53,8 @@ export function WordbookScreen({ words, renderWordDetail }: WordbookScreenProps)
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return words.filter((w) => {
-      if (filter !== 'all' && w.stage !== filter) return false;
+      if (filter === 'due' && !w.due) return false;
+      if (filter !== 'all' && filter !== 'due' && w.stage !== filter) return false;
       if (!q) return true;
       return w.headword.toLowerCase().includes(q) || (w.gloss ?? '').toLowerCase().includes(q);
     });
@@ -124,6 +127,7 @@ export function WordbookScreen({ words, renderWordDetail }: WordbookScreenProps)
                 ) : (
                   <span style={{ flex: 1 }} />
                 )}
+                {w.due ? <span style={dueBadgeStyle}>要復習</span> : null}
                 <span style={{ fontFamily: fonts.ui, fontSize: 11, color: colors.muted }}>{STAGE_JA[w.stage]}</span>
               </button>
             ))
@@ -189,6 +193,18 @@ const rowStyle = (divider: boolean): CSSProperties => ({
   borderBottom: divider ? `1px solid ${colors.dividerRow}` : 'none',
   cursor: 'pointer',
 });
+
+const dueBadgeStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 10.5,
+  fontWeight: 600,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.chip,
+  padding: '3px 8px',
+  marginRight: 8,
+};
 
 const detailOverlayStyle: CSSProperties = {
   position: 'fixed',

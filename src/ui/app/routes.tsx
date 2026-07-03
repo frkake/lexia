@@ -3,7 +3,8 @@
  * live data and flow controllers via the AppContext container. This is where tasks 10.1–10.4
  * surface in the UI:
  *   - HomeRoute → runGenerationPipeline (Flow 1: generate→validate→persist→render→TTS) + dashboard summary.
- *   - ReadingRoute → opens a passage by URL (openPassage) + applyRecallSignal on a word tap (Flow 3).
+ *   - ReadingRoute → opens a passage by URL (openPassage) + read-through recall on completion.
+ *   - WordDetailRoute → explicit「知らなかった」marks use the review rating path (Again).
  *   - ReviewRoute → applyReviewRating on a rating (Flow 2: reschedule→log→reproject).
  *   - LibraryRoute / StoryDirectoryRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
  * Reads are reactive (`useLiveQuery`) so any repository write re-renders immediately.
@@ -12,7 +13,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useStore } from 'zustand';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { type CandidateWord } from '../setup/SetupScreen';
 import { HomeScreen } from '../home/HomeScreen';
 import { LibraryScreen } from '../library/LibraryScreen';
@@ -41,6 +42,54 @@ import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, Stor
 import type { PassageRecord } from '../../types/ports';
 
 const CANDIDATE_LIMIT = 12;
+
+function suggestionKeyFor(setup: SetupConfig): string {
+  return JSON.stringify({
+    level: resolveVocabularyLevel(setup),
+    intent: setup.intent,
+    wordTarget: setup.wordTarget,
+    newWordRatio: setup.newWordRatio,
+    excluded: [...(setup.excludedWordIds ?? [])].map((w) => w.toLowerCase()).sort(),
+  });
+}
+
+function selectedIds(candidates: CandidateWord[]): string[] {
+  return candidates.map((candidate) => candidate.wordId);
+}
+
+function sameWordSet(a: string[], b: string[]): boolean {
+  const normalize = (words: string[]): string[] => words.map((w) => w.trim().toLowerCase()).filter(Boolean).sort();
+  const aa = normalize(a);
+  const bb = normalize(b);
+  return aa.length === bb.length && aa.every((w, i) => w === bb[i]);
+}
+
+function isUneditedAutoSelection(setup: SetupConfig, candidates: CandidateWord[]): boolean {
+  return setup.excludedWordIds.length === 0 && sameWordSet(setup.targetWordIds, selectedIds(candidates));
+}
+
+function suggestionNotice(shortfall: { reason: 'exhausted' | 'gateway_unavailable' } | undefined): string | null {
+  if (!shortfall) return null;
+  if (shortfall.reason === 'gateway_unavailable') {
+    return '単語提案サービスに接続できませんでした。復習語だけを表示しています。手動で追加できます。';
+  }
+  return '提案できる単語が不足しています。手動で追加できます。';
+}
+
+function mergeWordIds(...groups: string[][]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const group of groups) {
+    for (const raw of group) {
+      const word = raw.trim();
+      const key = word.toLowerCase();
+      if (!word || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(word);
+    }
+  }
+  return merged;
+}
 
 /** Reader URL for a passage: story chapters are /s/:storyId/:chapterIndex, articles are /p/:id. */
 function readerPathFor(passageId: string, storyRef?: { storyId: string; chapterIndex: number }): string {
@@ -86,14 +135,18 @@ async function loadAndCacheWordData(c: Container, wordId: string): Promise<WordD
  * to learn). Falls back to the original (empty) selection if suggestion is unavailable or fails.
  */
 async function resolveTargetWordIds(c: Container, setup: SetupConfig): Promise<string[]> {
-  if (setup.targetWordIds.length > 0 || !c.content.suggestWords) return setup.targetWordIds;
+  if (setup.targetWordIds.length > 0 || setup.excludedWordIds.length > 0) return setup.targetWordIds;
   try {
-    const suggested = await c.content.suggestWords({
+    const result = await c.suggestions.suggest({
+      userId: c.userId,
       level: resolveVocabularyLevel(setup),
       intent: setup.intent,
-      count: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
-      exclude: setup.excludedWordIds,
-    });
+      now: c.now(),
+      excludedWordIds: setup.excludedWordIds,
+      count: CANDIDATE_LIMIT,
+      desiredNewCount: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
+    }, c.repos.scheduling);
+    const suggested = result.candidates.map((candidate) => candidate.wordId);
     return suggested.length > 0 ? suggested : setup.targetWordIds;
   } catch {
     return setup.targetWordIds;
@@ -221,47 +274,87 @@ export function HomeRoute() {
   // gateway can't fill the request. Falls back to the due/weak candidates if suggestion yields none.
   const [candidates, setCandidates] = useState<CandidateWord[]>([]);
   const [suggestionShortfall, setSuggestionShortfall] = useState<string | null>(null);
+  const [refreshingCandidates, setRefreshingCandidates] = useState(false);
+  const [candidateRefreshError, setCandidateRefreshError] = useState<string | null>(null);
+  const [lastSuggestionKey, setLastSuggestionKey] = useState<string | null>(null);
+
+  const loadCandidates = useCallback(
+    async (
+      setup: SetupConfig,
+      avoidWordIds: string[] = [],
+    ): Promise<{ candidates: CandidateWord[]; notice: string | null; key: string }> => {
+      const key = suggestionKeyFor(setup);
+      const excludedWordIds = mergeWordIds(setup.excludedWordIds ?? [], avoidWordIds);
+      const result = await c.suggestions.suggest(
+        {
+          userId: c.userId,
+          level: resolveVocabularyLevel(setup),
+          intent: setup.intent,
+          now: c.now(),
+          excludedWordIds,
+          count: CANDIDATE_LIMIT,
+          desiredNewCount: lengthSpec.newWordsFor(setup.wordTarget, setup.newWordRatio),
+        },
+        c.repos.scheduling,
+      );
+      return { candidates: result.candidates, notice: suggestionNotice(result.shortfall), key };
+    },
+    [c],
+  );
+
+  const commitLoadedCandidates = useCallback((loaded: { candidates: CandidateWord[]; notice: string | null; key: string }): void => {
+    setCandidates(loaded.candidates);
+    setSuggestionShortfall(loaded.notice);
+    setLastSuggestionKey(loaded.key);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const result = await c.suggestions.suggest(
-          {
-            userId: c.userId,
-            level: resolveVocabularyLevel(lastSetup),
-            intent: lastSetup.intent,
-            excludedWordIds: lastSetup.excludedWordIds ?? [],
-            count: CANDIDATE_LIMIT,
-          },
-          c.repos.scheduling,
-        );
-        if (cancelled) return;
-        if (result.candidates.length > 0) {
-          setCandidates(result.candidates);
-          setSuggestionShortfall(
-            result.shortfall ? '提案できる新しい単語が不足しています。手動で追加できます。' : null,
-          );
-          return;
+    void loadCandidates(lastSetup)
+      .then((loaded) => {
+        if (!cancelled) commitLoadedCandidates(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCandidates([]);
+          setSuggestionShortfall('単語候補を読み込めませんでした。手動で追加できます。');
         }
-        // Suggestion empty (gateway unavailable / exhausted): fall back to due/weak candidates.
-        const states = await sessionPlanner.selectCandidates(c.repos.scheduling, c.userId, c.now(), CANDIDATE_LIMIT);
-        if (cancelled) return;
-        setCandidates(states.map((s) => ({ wordId: s.wordId, surface: s.wordId })));
-        setSuggestionShortfall(
-          result.shortfall?.reason === 'gateway_unavailable'
-            ? '単語提案サービスに接続できませんでした。手動で追加できます。'
-            : null,
-        );
-      } catch {
-        if (!cancelled) setCandidates([]);
-      }
-    })();
+      });
     return () => {
       cancelled = true;
     };
-    // Re-run when the difficulty/intent seed changes.
-  }, [c, lastSetup.examTarget, lastSetup.intent, lastSetup.excludedWordIds]);
+  }, [commitLoadedCandidates, lastSetup, loadCandidates]);
+
+  const refreshCandidates = async (setup: SetupConfig): Promise<CandidateWord[]> => {
+    setRefreshingCandidates(true);
+    setCandidateRefreshError(null);
+    try {
+      const loaded = await loadCandidates(setup, selectedIds(candidates));
+      commitLoadedCandidates(loaded);
+      return loaded.candidates;
+    } catch {
+      setCandidateRefreshError('単語候補を更新できませんでした。時間をおいて再試行してください。');
+      return candidates;
+    } finally {
+      setRefreshingCandidates(false);
+    }
+  };
+
+  const resetTargetWords = (setup: SetupConfig): void => {
+    // Drop hand-picked additions and past exclusions from the persisted setup so the section
+    // returns to a plain auto-selection. Clearing excludedWordIds means previously-suppressed words
+    // can be proposed again. The candidate-load effect re-fires on the lastSetup change and
+    // re-suggests with no avoid list.
+    setCandidateRefreshError(null);
+    c.settings.getState().setLastSetup({ ...setup, targetWordIds: [], excludedWordIds: [] });
+  };
+
+  const setupWithFreshAutoCandidates = async (setup: SetupConfig): Promise<SetupConfig> => {
+    if (!isUneditedAutoSelection(setup, candidates)) return setup;
+    if (lastSuggestionKey === suggestionKeyFor(setup)) return setup;
+    const fresh = await refreshCandidates(setup);
+    return { ...setup, targetWordIds: selectedIds(fresh) };
+  };
 
   // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
   // learner to confirm before any chapter body is produced. Only active when storyMode is on.
@@ -303,16 +396,17 @@ export function HomeRoute() {
     if (generating) return;
     setGenerating(true);
     setGenerationError(null);
-    c.settings.getState().setLastSetup(setup);
     try {
+      const effectiveSetup = await setupWithFreshAutoCandidates(setup);
+      c.settings.getState().setLastSetup(effectiveSetup);
       // Story path: generate the plan and STOP at the confirmation gate (no body yet, 6.3).
-      if (storyMode && setup.contentType !== 'article') {
+      if (storyMode && effectiveSetup.contentType !== 'article') {
         const planned = await c.storyPlanner.planStory({
-          contentType: setup.contentType,
-          genre: setup.storyOptions?.genre ?? 'fantasy',
-          homageTitle: setup.storyOptions?.homageTitle,
-          intent: setup.intent,
-          level: resolveVocabularyLevel(setup),
+          contentType: effectiveSetup.contentType,
+          genre: effectiveSetup.storyOptions?.genre ?? 'fantasy',
+          homageTitle: effectiveSetup.storyOptions?.homageTitle,
+          intent: effectiveSetup.intent,
+          level: resolveVocabularyLevel(effectiveSetup),
         });
         if (!planned.ok) {
           setGenerationError(generationErrorMessage(planned.error));
@@ -320,7 +414,7 @@ export function HomeRoute() {
         }
         // Show the plan immediately (gate is up), then stream in character portraits (6.8). Illustration
         // is enrichment: it never blocks confirmation, so failures are swallowed and just leave placeholders.
-        setPendingSetup(setup);
+        setPendingSetup(effectiveSetup);
         setPendingPlan(planned.value);
         activeIllustrationRequest.current += 1;
         setIllustrating(false);
@@ -344,7 +438,7 @@ export function HomeRoute() {
         }
         return;
       }
-      await runArticlePipeline(setup);
+      await runArticlePipeline(effectiveSetup);
     } catch (error) {
       setGenerationError(generationErrorMessage(error));
     } finally {
@@ -444,9 +538,13 @@ export function HomeRoute() {
       setup={{
         candidates,
         suggestionShortfall,
+        refreshingCandidates,
+        candidateRefreshError,
         initial: lastSetup,
         generating,
         generationError,
+        onRefreshCandidates: (s) => void refreshCandidates(s),
+        onResetTargetWords: (s) => resetTargetWords(s),
         onGenerate: (s) => void onGenerate(s),
       }}
       snapshot={snapshot ?? undefined}
@@ -507,16 +605,7 @@ export function ReadingRoute() {
     return { story, chapters };
   }, [c, passage?.passageId, passage?.source.meta.storyRef?.storyId]);
 
-  const onLookup = (wordId: string): void => {
-    void applyRecallSignal(
-      { scheduling: c.repos.scheduling, reviewLog: c.repos.reviewLog },
-      c.userId,
-      { kind: 'lookup', wordId, at: c.now() },
-    );
-  };
-
   const selectStudyWord = (wordId: string): void => {
-    onLookup(wordId);
     c.session.getState().setActiveWord(wordId);
   };
 
@@ -683,7 +772,6 @@ export function ReadingRoute() {
       passage={passage ?? undefined}
       rail={rail}
       newLayout={newReadingLayout}
-      onLookup={onLookup}
       onCompleteReading={() => void completeReading()}
       storyPlan={storyDetails?.story.plan}
       onGenerateNextChapter={
@@ -778,6 +866,7 @@ export function WordbookRoute() {
           headword: data?.headword ?? s.wordId,
           gloss: data?.core.meaningsJa[0],
           stage,
+          due: s.dueAt <= c.now(),
         };
       });
     }, [c]) ?? [];
@@ -888,6 +977,16 @@ function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => v
     };
   }, [c, wordId, voiceId]);
 
+  const markUnknown = async (targetWordId: string): Promise<void> => {
+    await applyReviewRating(
+      { scheduling: c.repos.scheduling, reviewLog: c.repos.reviewLog },
+      c.userId,
+      targetWordId,
+      1,
+      c.now(),
+    );
+  };
+
   if (!word) {
     return (
       <div style={detailLoadingStyle}>
@@ -899,7 +998,15 @@ function WordDetailRoute({ wordId, onClose }: { wordId: string; onClose: () => v
       </div>
     );
   }
-  return <WordDetailCard word={word} stage={stage} audioUrl={clipUrl ?? undefined} onClose={onClose} />;
+  return (
+    <WordDetailCard
+      word={word}
+      stage={stage}
+      audioUrl={clipUrl ?? undefined}
+      onMarkUnknown={markUnknown}
+      onClose={onClose}
+    />
+  );
 }
 
 const skeletonStyle: CSSProperties = {

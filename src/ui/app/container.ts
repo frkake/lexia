@@ -114,7 +114,7 @@ export async function createContainer(userId: UserId, seams: ContainerSeams = {}
     session: seams.session ?? sessionStore,
     player: seams.player ?? playerStore,
     settings: seams.settings ?? settingsStore,
-    suggestions: createWordSuggestionService(content),
+    suggestions: createWordSuggestionService(content, { cefrOf: seams.cefrOf }),
     storyPlanner: createStoryPlanner({
       gateway: story,
       storyRepo: repos.stories,

@@ -85,6 +85,13 @@ describe('<WordDetailCard/>', () => {
     expect(playerStore.getState().playWord).toHaveBeenCalledWith('https://tts/leverage.mp3');
   });
 
+  it('marks the word as unknown through the supplied handler', () => {
+    const onMarkUnknown = vi.fn();
+    const { getByTestId } = render(<WordDetailCard word={full} onMarkUnknown={onMarkUnknown} />);
+    fireEvent.click(getByTestId('mark-unknown'));
+    expect(onMarkUnknown).toHaveBeenCalledWith('leverage');
+  });
+
   it('collapses MORE items, expanding on demand (8.3/8.4)', () => {
     const { getByText, queryByTestId } = render(<WordDetailCard word={full} />);
     expect(queryByTestId('more-detail-語源')).toBeNull(); // detail hidden until expanded

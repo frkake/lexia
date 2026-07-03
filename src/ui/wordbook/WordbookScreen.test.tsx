@@ -4,10 +4,10 @@ import { render, fireEvent, within } from '@testing-library/react';
 import { WordbookScreen, type WordbookEntry } from './WordbookScreen';
 
 const WORDS: WordbookEntry[] = [
-  { wordId: 'mitigate', headword: 'mitigate', gloss: '和らげる', stage: 'Learning' },
+  { wordId: 'mitigate', headword: 'mitigate', gloss: '和らげる', stage: 'Learning', due: true },
   { wordId: 'leverage', headword: 'leverage', gloss: '活用する', stage: 'Consolidating' },
   { wordId: 'candid', headword: 'candid', gloss: '率直な', stage: 'Learning' },
-  { wordId: 'erode', headword: 'erode', gloss: '蝕む', stage: 'New' },
+  { wordId: 'erode', headword: 'erode', gloss: '蝕む', stage: 'New', due: true },
 ];
 
 function renderScreen(props: Partial<Parameters<typeof WordbookScreen>[0]> = {}) {
@@ -30,6 +30,16 @@ describe('<WordbookScreen/>', () => {
     expect(getByTestId('word-row-candid')).toBeTruthy();
     expect(queryByTestId('word-row-leverage')).toBeNull();
     expect(queryByTestId('word-row-erode')).toBeNull();
+  });
+
+  it('filters the list by due review status', () => {
+    const { getByTestId, queryByTestId, getAllByText } = renderScreen();
+    fireEvent.click(getByTestId('filter-due'));
+    expect(getByTestId('word-row-mitigate')).toBeTruthy();
+    expect(getByTestId('word-row-erode')).toBeTruthy();
+    expect(queryByTestId('word-row-leverage')).toBeNull();
+    expect(queryByTestId('word-row-candid')).toBeNull();
+    expect(getAllByText('要復習').length).toBeGreaterThanOrEqual(2);
   });
 
   it('searches by headword or gloss (11.2)', () => {

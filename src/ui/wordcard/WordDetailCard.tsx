@@ -23,6 +23,7 @@ export interface WordDetailCardProps {
   word: WordData;
   stage?: MasteryStage;
   audioUrl?: string;
+  onMarkUnknown?: (wordId: string) => void | Promise<void>;
   onClose?: () => void;
 }
 
@@ -101,7 +102,8 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
-export function WordDetailCard({ word, stage, audioUrl, onClose }: WordDetailCardProps) {
+export function WordDetailCard({ word, stage, audioUrl, onMarkUnknown, onClose }: WordDetailCardProps) {
+  const [markingUnknown, setMarkingUnknown] = useState(false);
   const more = word.more;
   const effectiveAudioUrl = audioUrl ?? word.audioUrl;
   const etymology = more?.etymology;
@@ -135,6 +137,18 @@ export function WordDetailCard({ word, stage, audioUrl, onClose }: WordDetailCar
     grammarPatterns.length > 0 ||
     !!metaphor ||
     commonErrors.length > 0;
+
+  const markUnknown = async (): Promise<void> => {
+    if (!onMarkUnknown || markingUnknown) return;
+    setMarkingUnknown(true);
+    try {
+      await onMarkUnknown(word.wordId);
+    } catch {
+      // Unknown marking is a learning signal; the card stays usable if persistence fails.
+    } finally {
+      setMarkingUnknown(false);
+    }
+  };
 
   return (
     <div
@@ -202,6 +216,18 @@ export function WordDetailCard({ word, stage, audioUrl, onClose }: WordDetailCar
                   習熟度: {MASTERY_JA[stage]}
                 </span>
               </div>
+            ) : null}
+            {onMarkUnknown ? (
+              <button
+                type="button"
+                data-testid="mark-unknown"
+                onClick={() => void markUnknown()}
+                disabled={markingUnknown}
+                aria-busy={markingUnknown}
+                style={unknownButtonStyle(markingUnknown)}
+              >
+                {markingUnknown ? '記録中…' : '知らなかった'}
+              </button>
             ) : null}
           </div>
         </div>
@@ -356,3 +382,16 @@ const memoryTipsStyle: CSSProperties = {
   lineHeight: 1.65,
   color: colors.inkSoft,
 };
+
+const unknownButtonStyle = (busy: boolean): CSSProperties => ({
+  marginTop: 12,
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 600,
+  color: busy ? colors.faint : colors.terracotta,
+  background: busy ? '#F4F6F9' : '#FBF3F0',
+  border: `1px solid ${busy ? colors.borderControl : colors.terracottaBorder}`,
+  borderRadius: radius.chip,
+  padding: '6px 11px',
+  cursor: busy ? 'wait' : 'pointer',
+});

@@ -62,6 +62,7 @@ describe('domain types', () => {
 
   it('a New word leaves stability undefined', () => {
     expectTypeOf<WordSchedulingState['stability']>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<WordSchedulingState['level']>().toEqualTypeOf<'A2' | 'B1' | 'B2' | 'C1' | 'C2' | undefined>();
     const s: WordSchedulingState = {
       userId: 'u1' as UserId,
       wordId: 'w1',

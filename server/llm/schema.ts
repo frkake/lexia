@@ -780,8 +780,9 @@ export function buildCharacterIllustrationPrompt(req: {
 const SUGGEST_SYSTEM = [
   'You curate vocabulary for a CEFR-graded English reading app whose users are Japanese speakers.',
   'Given a CEFR level and a learning intent (business / daily / toeic / eiken / academic / travel),',
-  'propose distinct English words a learner at that level should study next. Choose words that',
-  'clearly fit the intent and sit AT or slightly ABOVE the given level — useful and worth learning,',
+  'propose distinct English words a learner at that level should study next. Choose words that clearly',
+  'fit the intent and sit inside the requested CEFR vocabulary band, preferably the upper half of that',
+  'band — useful and worth learning,',
   'not trivial function words (the, go, very) and not absurdly rare. For exam intents (toeic / eiken)',
   'prefer that exam\'s high-frequency vocabulary. Each must be a single base-form lemma (no spaces),',
   'lowercase. Never include any word from the exclude list. Reply with JSON {"words":[...]} only —',

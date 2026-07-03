@@ -72,6 +72,8 @@ export type Rating = 1 | 2 | 3 | 4;
 export interface WordSchedulingState {
   userId: UserId;
   wordId: string;
+  /** CEFR vocabulary band when this word entered the learner's study set. */
+  level?: Cefr;
   /** S in days. `undefined` ⇒ New (not yet learned). */
   stability?: number;
   /** D in 1..10. */
@@ -508,20 +510,33 @@ export interface WordSuggestionRequest {
 
 // ── Word suggestion (Requirement 5) ──────────────────────────────────────────
 
+/** Why a word was selected for the setup candidate list. */
+export type CandidateReason = 'new' | 'due' | 'weak';
+
 /** A suggested word to weave in (base-form lemma + display surface). */
 export interface CandidateWord {
   wordId: string;
   surface: string;
+  /** CEFR band used to decide whether the candidate fits the current target level. */
+  level?: Cefr;
+  /** Source of the suggestion: new LLM proposal, due review, or low-stability weak word. */
+  reason?: CandidateReason;
+  /** Current mastery for scheduled words; absent for brand-new proposals. */
+  stage?: MasteryStage;
 }
 
 export interface SuggestionInput {
   userId: UserId;
   level: Cefr;
   intent: LearningIntent;
+  /** Current time, used to include due review words. */
+  now: number;
   /** Words the learner already excluded (lowercase lemma). */
   excludedWordIds: string[];
   /** How many candidates to present. */
   count: number;
+  /** Desired new/review target derived from wordTarget × newWordRatio, capped by `count`. */
+  desiredNewCount?: number;
 }
 
 export interface SuggestionResult {
