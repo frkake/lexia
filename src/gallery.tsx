@@ -18,10 +18,14 @@ import { SetupScreen } from './ui/setup/SetupScreen';
 import { WordbookScreen } from './ui/wordbook/WordbookScreen';
 import * as fx from './gallery.fixtures';
 import { resolveFeatureFlags } from './ui/app/featureFlags';
+import { settingsStore } from './state/stores/settingsStore';
 import { colors } from './ui/theme/tokens';
 import './ui/theme/global.css';
 
 function screenFor(key: string): ReactNode {
+  if (key === 'reading' || key === 'reading-grid' || key === 'reading-legacy') {
+    settingsStore.getState().setTranslationMode('full');
+  }
   switch (key) {
     case 'dashboard':
       return <DashboardScreen snapshot={fx.dashboardSnapshot} userName="あなた" glosses={fx.dueGlosses} now={fx.FIXED_NOW} />;

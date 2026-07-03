@@ -51,10 +51,14 @@ test('tokens: annotation encoding + notice chips (design.md 状態別注釈エ�
   // Collocation tint #E4EDF8.
   expect(await styleOf(page.locator('[data-kind="collocation"]').first(), 'backgroundColor')).toBe(rgb('#E4EDF8'));
 
-  // Notice number badges: connotation #4C9A86 / register #6B7686 / collocation #3D6CB0.
-  expect(await styleOf(page.getByTestId('notice-badge-1'), 'backgroundColor')).toBe(rgb('#4C9A86'));
-  expect(await styleOf(page.getByTestId('notice-badge-2'), 'backgroundColor')).toBe(rgb('#6B7686'));
+  // Duplicate word-level cues are absorbed into study words, so their prose marker is the study badge.
+  expect(await styleOf(page.getByTestId('study-guide-badge-decisive'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
+  expect(await styleOf(page.getByTestId('study-guide-badge-cordial'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
+  // Standalone notice number badges keep the category number color.
   expect(await styleOf(page.getByTestId('notice-badge-3'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
+  // Absorbed notice chips still carry their category colors in the guide.
+  expect(await styleOf(page.getByTestId('guide-absorbed-notice-1').getByText('コノテーション'), 'color')).toBe(rgb('#3E8C79'));
+  expect(await styleOf(page.getByTestId('guide-absorbed-notice-2').getByText('レジスター'), 'color')).toBe(rgb('#5A6675'));
 });
 
 test('layout: new 3-zone reading renders the sentence grid + JA-side new-element emphasis (6.1/4.1)', async ({ page }) => {
@@ -65,10 +69,13 @@ test('layout: new 3-zone reading renders the sentence grid + JA-side new-element
   await expect(page.getByTestId('sentence-aside-0')).toBeVisible();
   // The new-element emphasis underlines the JA slice for a new word.
   await expect(page.locator('[data-translation-new="true"]').first()).toBeVisible();
+  // The right rail is a unified learning guide, not split into notices + study words.
+  await expect(page.getByText('学習ガイド')).toBeVisible();
+  await expect(page.getByText('この文章で気づきたいこと')).toHaveCount(0);
 });
 
-test('layout: wide desktop keeps the grid two-column with a divider on the Japanese cell (GAP3/GAP4)', async ({ page }) => {
-  test.skip(({ viewport }) => !viewport || viewport.width <= 1024, 'wide desktop only');
+test('layout: wide desktop keeps the grid two-column with a divider on the Japanese cell (GAP3/GAP4)', async ({ page, viewport }) => {
+  test.skip(!viewport || viewport.width <= 1024, 'wide desktop only');
   await openGallery(page, 'reading-grid');
   // Above 1024px the grid stays side-by-side (two resolved column tracks), not collapsed.
   const cols = await page

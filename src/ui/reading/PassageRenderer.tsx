@@ -18,7 +18,7 @@
  */
 
 import { useState } from 'react';
-import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { AnnotatedSpan, type AnnotationKind } from '../shared/AnnotatedSpan';
 import { noticeStyle, cueHighlight, colors, fonts } from '../theme/tokens';
 import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
@@ -52,6 +52,20 @@ export interface PassageRendererProps {
   renderAside?: (sentenceIndex: number) => ReactNode;
   /** 'prose' (default, legacy) keeps flowing prose; 'grid' is the new sentence-unit 2-column layout. */
   layout?: PassageLayout;
+  /** Lowercase wordId -> unified guide item anchor id. Only the first target occurrence is anchored. */
+  guideAnchorIdByWordKey?: Record<string, string>;
+  /** Cue index -> unified guide item DOM id. Absorbed cues point at their study-word card. */
+  guideTargetIdByCueIndex?: Record<number, string>;
+  /** Cue index -> unified guide number shown in in-text notice badges. */
+  guideNumberByCueIndex?: Record<number, number>;
+  /** Lowercase wordId -> unified guide number shown at the first study-word occurrence. */
+  guideNumberByWordKey?: Record<string, number>;
+  /** Cue indices whose notice badge is replaced by the study-word badge. */
+  absorbedCueIndexByIndex?: Record<number, true>;
+}
+
+function targetAnchorKey(span: TargetSpan): string {
+  return `${span.wordId.trim().toLowerCase()}:${span.sentenceIndex}:${span.tokenStart}:${span.tokenEnd}`;
 }
 
 export function PassageRenderer({
@@ -62,6 +76,11 @@ export function PassageRenderer({
   renderAfterSentence,
   renderAside,
   layout = 'prose',
+  guideAnchorIdByWordKey,
+  guideTargetIdByCueIndex,
+  guideNumberByCueIndex,
+  guideNumberByWordKey,
+  absorbedCueIndexByIndex,
 }: PassageRendererProps) {
   const { source } = passage;
   // The single cue currently lit across both columns (hover preview wins over the pin).
@@ -77,12 +96,28 @@ export function PassageRenderer({
     letterSpacing: '.003em',
   };
 
-  const orderedCueIndices = [...source.noticeCues].map((c) => c.index).sort((a, b) => a - b);
+  const visibleNoticeCues = source.noticeCues.filter((c) => !absorbedCueIndexByIndex?.[c.index]);
+  const orderedCueIndices = [...visibleNoticeCues].map((c) => c.index).sort((a, b) => a - b);
   const badgePos = new Map(orderedCueIndices.map((idx, pos) => [idx, pos] as const));
   const categoryByCue = new Map(source.noticeCues.map((c) => [c.index, c.category] as const));
   const rovingClamped = Math.min(rovingPos, Math.max(0, orderedCueIndices.length - 1));
+  const firstTargetAnchorBySpan = new Map<string, string>();
+  if (guideAnchorIdByWordKey) {
+    const seen = new Set<string>();
+    const sortedTargets = [...source.targetSpans].sort(
+      (a, b) => a.sentenceIndex - b.sentenceIndex || a.tokenStart - b.tokenStart || a.tokenEnd - b.tokenEnd,
+    );
+    for (const span of sortedTargets) {
+      const key = span.wordId.trim().toLowerCase();
+      const anchor = guideAnchorIdByWordKey[key];
+      if (!anchor || seen.has(key)) continue;
+      seen.add(key);
+      firstTargetAnchorBySpan.set(targetAnchorKey(span), anchor);
+    }
+  }
 
   const densityKind = (span: TargetSpan): AnnotationKind => span.masteryDensity;
+  const lineAnchorForTarget = (span: TargetSpan): string | undefined => firstTargetAnchorBySpan.get(targetAnchorKey(span));
 
   const isActive = (tokens: IndexedToken[], start: number, end: number): boolean =>
     activeTokenId != null && tokens.slice(start, end).some((t) => t.tokenId === activeTokenId);
@@ -146,11 +181,14 @@ export function PassageRenderer({
     const active = activeCueIndex === cue.index;
     const ring = cueHighlight(cue.category).ring;
     const pos = badgePos.get(cue.index) ?? 0;
+    const displayIndex = guideNumberByCueIndex?.[cue.index] ?? cue.index;
 
     const pin = (): void => {
       readingUiStore.getState().setPinned(cue.index);
       if (typeof document !== 'undefined') {
-        document.getElementById(`notice-item-${cue.index}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+        document
+          .getElementById(guideTargetIdByCueIndex?.[cue.index] ?? `notice-item-${cue.index}`)
+          ?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
       }
     };
     const focusBadge = (next: number): void => {
@@ -187,8 +225,8 @@ export function PassageRenderer({
         data-line-anchor={cue.index}
         className="notice-badge"
         role="button"
-        aria-label={`気づき${cue.index} ${noticeStyle(cue.category).label} — 本文の該当箇所`}
-        aria-controls={`notice-item-${cue.index}`}
+        aria-label={`気づき${displayIndex} ${noticeStyle(cue.category).label} — 本文の該当箇所`}
+        aria-controls={guideTargetIdByCueIndex?.[cue.index] ?? `notice-item-${cue.index}`}
         tabIndex={pos === rovingClamped ? 0 : -1}
         onMouseEnter={() => readingUiStore.getState().setHover(cue.index)}
         onMouseLeave={() => readingUiStore.getState().setHover(null)}
@@ -219,7 +257,63 @@ export function PassageRenderer({
           ...(active ? { boxShadow: `0 0 0 2px ${ring}`, transform: 'scale(1.12)' } : null),
         }}
       >
-        {cue.index}
+        {displayIndex}
+      </span>
+    );
+  }
+
+  function studyWordBadge(span: TargetSpan): ReactNode | null {
+    const key = span.wordId.trim().toLowerCase();
+    const anchorId = guideAnchorIdByWordKey?.[key];
+    const displayIndex = guideNumberByWordKey?.[key];
+    if (!anchorId || displayIndex === undefined || lineAnchorForTarget(span) !== anchorId) return null;
+    const jumpToGuide = (): void => {
+      if (typeof document !== 'undefined') {
+        document.getElementById(`guide-item-${anchorId}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      }
+    };
+    const jump = (event: MouseEvent<HTMLSpanElement>): void => {
+      event.stopPropagation();
+      jumpToGuide();
+    };
+    return (
+      <span
+        id={`inline-guide-badge-${anchorId}`}
+        key={`study-badge-${key}`}
+        data-testid={`study-guide-badge-${key}`}
+        className="study-guide-badge"
+        role="button"
+        tabIndex={0}
+        aria-label={`学習語句${displayIndex} — 右の学習ガイドへ移動`}
+        aria-controls={`guide-item-${anchorId}`}
+        onClick={jump}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            jumpToGuide();
+          }
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 15,
+          height: 15,
+          borderRadius: '50%',
+          background: colors.primary,
+          color: '#fff',
+          fontFamily: fonts.num,
+          fontSize: 9,
+          fontWeight: 700,
+          verticalAlign: '8px',
+          marginLeft: 1,
+          lineHeight: 1,
+          scrollMarginTop: 90,
+          cursor: 'pointer',
+        }}
+      >
+        {displayIndex}
       </span>
     );
   }
@@ -291,6 +385,7 @@ export function PassageRenderer({
                 key={tok.tokenId}
                 kind={densityKind(t)}
                 active={isActive(tokens, t.tokenStart, t.tokenEnd)}
+                lineAnchorId={lineAnchorForTarget(t)}
                 onSelect={onSelectWord ? () => onSelectWord(t.wordId) : undefined}
                 title={t.wordId}
               >
@@ -301,6 +396,8 @@ export function PassageRenderer({
               `iseg-${tok.tokenId}`,
             ),
           );
+          const badge = studyWordBadge(t);
+          if (badge) inner.push(badge);
           innerLast = tokens[t.tokenEnd - 1]!.charEnd;
           i = t.tokenEnd;
         } else {
@@ -331,7 +428,10 @@ export function PassageRenderer({
       const pending = [...cuesByEnd.keys()].filter((e) => e <= end && !emittedEnds.has(e)).sort((a, b) => a - b);
       for (const e of pending) {
         emittedEnds.add(e);
-        for (const cue of cuesByEnd.get(e)!) out.push(noticeBadge(cue));
+        for (const cue of cuesByEnd.get(e)!) {
+          if (absorbedCueIndexByIndex?.[cue.index]) continue;
+          out.push(noticeBadge(cue));
+        }
       }
     };
 
@@ -362,6 +462,7 @@ export function PassageRenderer({
               key={tok.tokenId}
               kind={densityKind(target)}
               active={isActive(tokens, target.tokenStart, target.tokenEnd)}
+              lineAnchorId={lineAnchorForTarget(target)}
               onSelect={onSelectWord ? () => onSelectWord(target.wordId) : undefined}
               title={target.wordId}
             >
@@ -372,6 +473,8 @@ export function PassageRenderer({
             `seg-${tok.tokenId}`,
           ),
         );
+        const badge = studyWordBadge(target);
+        if (badge) out.push(badge);
         lastCharEnd = tokens[target.tokenEnd - 1]!.charEnd;
         emitBadges(target.tokenEnd);
         i = target.tokenEnd;

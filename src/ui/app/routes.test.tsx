@@ -57,10 +57,10 @@ function validNoticePassage(): PassageOutput {
     noticeCues: [
       {
         index: 1,
-        span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 },
-        category: 'phrase',
-        anchorText: 'closed the deal',
-        explanationJa: 'deal 単体ではなく、取引を成立させる定型表現。',
+        span: { sentenceIndex: 1, tokenStart: 0, tokenEnd: 3 },
+        category: 'sentence_structure',
+        anchorText: 'They met again',
+        explanationJa: '短い主語＋動詞＋副詞で場面を進める文。',
       },
     ],
   };
@@ -195,8 +195,9 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     await waitFor(() => expect(screen.getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid'));
     // … the first sentence's Japanese sits in its right cell …
     expect(screen.getByTestId('sentence-aside-0').textContent).toContain('今日、取引を成立させた。');
-    // … and exactly one notice rail is rendered (owned, anchor-aware — not duplicated by the route).
-    expect(screen.getAllByText('この文章で気づきたいこと')).toHaveLength(1);
+    // … and exactly one unified learning guide is rendered (not split into notice + study lists).
+    expect(screen.getAllByText('学習ガイド')).toHaveLength(1);
+    expect(screen.queryByText('この文章で気づきたいこと')).toBeNull();
 
     act(() => settingsStore.getState().setTranslationMode(prevMode)); // restore for sibling tests
   });
@@ -238,12 +239,12 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     fireEvent.click(screen.getByText('文章を生成する'));
     await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
 
-    fireEvent.click(await screen.findByLabelText('closed the deal を知らなかったとして記録'));
+    fireEvent.click(await screen.findByLabelText('They met again を知らなかったとして記録'));
 
     await waitFor(async () => {
       const log = await repos.reviewLog.since(userId, 0);
       expect(
-        log.some((entry) => entry.wordId === 'closed the deal' && entry.rating === 1 && entry.source === 'review'),
+        log.some((entry) => entry.wordId === 'They met again' && entry.rating === 1 && entry.source === 'review'),
       ).toBe(true);
     });
   });

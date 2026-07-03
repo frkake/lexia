@@ -151,20 +151,21 @@ describe('<ReadingScreen/>', () => {
 
   it('renders a default rail with notices and study words (8.3 composition)', () => {
     const { getByText, getByTestId } = renderScreen({ passage: makePassage() });
-    expect(getByText('この文章で気づきたいこと')).toBeTruthy();
-    expect(getByTestId('study-word-restless')).toBeTruthy();
+    expect(getByText('学習ガイド')).toBeTruthy();
+    expect(getByTestId('guide-item-word:restless')).toBeTruthy();
+    expect(getByTestId('guide-absorbed-notice-1').textContent).toContain('不安・苛立ちを含む否定的な響き。');
   });
 
-  it('jumps to the matching in-text badge when a notice item is clicked', () => {
+  it('jumps to the study-word badge when an absorbed notice is clicked', () => {
     const original = Element.prototype.scrollIntoView;
     const scrollSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollSpy;
     try {
-      const { getByTestId } = renderScreen({ passage: makePassage() });
-      fireEvent.click(getByTestId('notice-item-1'));
+      const { getByTestId, queryByTestId } = renderScreen({ passage: makePassage() });
+      fireEvent.click(getByTestId('guide-absorbed-notice-1'));
       expect(scrollSpy).toHaveBeenCalledTimes(1);
-      // It scrolled the badge whose id matches the cue — the in-text marker, not some other node.
-      expect(scrollSpy.mock.instances[0]).toBe(getByTestId('notice-badge-1'));
+      expect(queryByTestId('notice-badge-1')).toBeNull();
+      expect(scrollSpy.mock.instances[0]).toBe(getByTestId('study-guide-badge-restless'));
     } finally {
       Element.prototype.scrollIntoView = original;
     }
@@ -256,29 +257,24 @@ describe('<ReadingScreen/> 3-zone layout (feature-flagged, 6.1)', () => {
 
   it('still shows the notice rail in the new layout (3-zone composition)', () => {
     const { getByText } = renderScreen({ passage: makePassage(), newLayout: true });
-    expect(getByText('この文章で気づきたいこと')).toBeTruthy();
+    expect(getByText('学習ガイド')).toBeTruthy();
   });
 
-  it('renders the anchor-aware NoticeRail even when a custom rail is injected (Blocker 2)', () => {
-    // The real app injects its own rail (study words). The notice rail must STILL be the
-    // ReadingScreen-owned, anchor-aware one — not bypassed — so it can line-align in the new layout.
+  it('renders one unified guide with enriched study words when they are injected', () => {
     const { getByText, getByTestId } = renderScreen({
       passage: makePassage(),
       newLayout: true,
-      rail: <div data-testid="injected-rail">学習する単語</div>,
+      studyWords: [{ wordId: 'restless', surface: 'restless', meaningJa: '落ち着かない' }],
     });
-    // The owned NoticeRail is present (its heading) …
-    expect(getByText('この文章で気づきたいこと')).toBeTruthy();
-    // … the cue item is present so anchors can position it …
-    expect(getByTestId('notice-item-1')).toBeTruthy();
-    // … and the injected rail content is still rendered alongside it.
-    expect(getByTestId('injected-rail').textContent).toContain('学習する単語');
+    expect(getByText('学習ガイド')).toBeTruthy();
+    expect(getByTestId('guide-item-word:restless').textContent).toContain('落ち着かない');
+    expect(getByTestId('guide-absorbed-notice-1')).toBeTruthy();
   });
 
-  it('does not duplicate the notice rail when no custom rail is injected', () => {
-    const { getAllByText } = renderScreen({ passage: makePassage(), newLayout: true });
-    // Exactly one notice rail heading — the owned one (no double render).
-    expect(getAllByText('この文章で気づきたいこと')).toHaveLength(1);
+  it('does not render the old split notice heading', () => {
+    const { getAllByText, queryByText } = renderScreen({ passage: makePassage(), newLayout: true });
+    expect(getAllByText('学習ガイド')).toHaveLength(1);
+    expect(queryByText('この文章で気づきたいこと')).toBeNull();
   });
 
   it('widens the body container in the wide grid so the English column is not strangled', () => {
@@ -357,8 +353,8 @@ describe('<ReadingScreen/> 3-zone layout (feature-flagged, 6.1)', () => {
     try {
       const { container, getByTestId } = renderScreen({ passage: makePassage(), newLayout: true });
       expect((container.firstChild as HTMLElement).getAttribute('data-reading-zones')).toBe('narrow');
-      // The rail item is NOT absolutely positioned when narrow (flat-flow fallback).
-      expect(getByTestId('notice-item-1').style.position).not.toBe('absolute');
+      // The guide item is NOT absolutely positioned when narrow (flat-flow fallback).
+      expect(getByTestId('guide-item-word:restless').style.position).not.toBe('absolute');
     } finally {
       vi.unstubAllGlobals();
     }

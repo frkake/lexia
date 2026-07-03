@@ -76,6 +76,17 @@ function Harness({ fontScale, passageId, tops, enabled }: HarnessProps) {
   );
 }
 
+function StringHarness() {
+  const { anchors, containerRef } = useLineAnchors({ fontScale: 1, passageId: 'p1' });
+  return (
+    <div ref={containerRef} data-top="10">
+      <span data-line-anchor="word:deal" data-top="40">deal</span>
+      <span data-line-anchor="notice:2" data-top="90">notice</span>
+      <output data-testid="anchors">{JSON.stringify(anchors)}</output>
+    </div>
+  );
+}
+
 function readAnchors(getByTestId: (id: string) => HTMLElement): { cueIndex: number; top: number }[] {
   return JSON.parse(getByTestId('anchors').textContent || '[]');
 }
@@ -91,6 +102,15 @@ describe('useLineAnchors', () => {
       { cueIndex: 1, top: 30 },
       { cueIndex: 2, top: 70 },
       { cueIndex: 3, top: 110 },
+    ]);
+  });
+
+  it('also returns string guide item ids for study-word anchors', () => {
+    const { getByTestId } = render(<StringHarness />);
+    act(() => flushRaf());
+    expect(JSON.parse(getByTestId('anchors').textContent || '[]')).toEqual([
+      { itemId: 'notice:2', top: 80 },
+      { itemId: 'word:deal', top: 30 },
     ]);
   });
 

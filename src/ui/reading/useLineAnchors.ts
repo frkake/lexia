@@ -2,7 +2,7 @@
  * L4 — useLineAnchors (design.md "useLineAnchors", Requirement 2.1–2.3). Measures the
  * container-relative Y position of every annotation badge in the reading body so the
  * NoticeRail can align each item to the line its expression appears on. Measurement is
- * geometry-only (no domain knowledge): each badge tags itself with `data-line-anchor="<cueIndex>"`
+ * geometry-only (no domain knowledge): each badge/word tags itself with `data-line-anchor="<itemId>"`
  * and the hook collects `getBoundingClientRect().top - container.top` per cue.
  *
  * Triggers a remeasure on font-scale change, passage change, and `ResizeObserver` firing
@@ -13,15 +13,18 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-/** A measured badge: its cue index and the Y offset from the measurement container's top. */
+/** A measured inline guide anchor and its Y offset from the measurement container's top. */
 export interface LineAnchor {
-  cueIndex: number;
+  /** String id for the guide item (`word:...`, `notice:...`). */
+  itemId?: string;
+  /** Legacy numeric cue index, retained for the old NoticeRail tests/component. */
+  cueIndex?: number;
   /** Container-relative Y coordinate (px). */
   top: number;
 }
 
 export interface UseLineAnchorsResult {
-  /** cueIndex → container-relative Y, sorted by cue index. Empty when disabled. */
+  /** itemId/cueIndex → container-relative Y. Empty when disabled. */
   anchors: LineAnchor[];
   /** Attach to the element whose badges (data-line-anchor) should be measured. */
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -55,10 +58,14 @@ export function useLineAnchors({ fontScale, passageId, enabled = true }: UseLine
       const raw = node.getAttribute(LINE_ANCHOR_ATTR);
       if (raw === null) return;
       const cueIndex = Number(raw);
-      if (!Number.isFinite(cueIndex)) return;
-      next.push({ cueIndex, top: node.getBoundingClientRect().top - containerTop });
+      const top = node.getBoundingClientRect().top - containerTop;
+      if (Number.isFinite(cueIndex)) {
+        next.push({ cueIndex, top });
+      } else {
+        next.push({ itemId: raw, top });
+      }
     });
-    next.sort((a, b) => a.cueIndex - b.cueIndex);
+    next.sort((a, b) => (a.cueIndex ?? 0) - (b.cueIndex ?? 0) || (a.itemId ?? '').localeCompare(b.itemId ?? ''));
     setAnchors(next);
   }, []);
 

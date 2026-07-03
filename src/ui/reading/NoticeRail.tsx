@@ -29,7 +29,10 @@ export interface PlacedRailItem {
  * guaranteeing a gap of at least `itemHeight` between consecutive items.
  */
 export function placeRailItems(anchors: LineAnchor[], itemHeight: number): PlacedRailItem[] {
-  const sorted = [...anchors].sort((a, b) => a.top - b.top || a.cueIndex - b.cueIndex);
+  const sorted = [...anchors]
+    .map((a) => ({ cueIndex: a.cueIndex ?? Number(a.itemId), top: a.top }))
+    .filter((a): a is PlacedRailItem => Number.isFinite(a.cueIndex))
+    .sort((a, b) => a.top - b.top || a.cueIndex - b.cueIndex);
   const placed: PlacedRailItem[] = [];
   let prevBottom = -Infinity;
   for (const a of sorted) {

@@ -196,6 +196,93 @@ describe('<PassageRenderer/> sentence-level 2-column grid (3.1)', () => {
     expect(badge.getAttribute('data-line-anchor')).toBe('1');
   });
 
+  it('anchors only the first occurrence of each study word for the unified guide', () => {
+    const source: PassageOutput = {
+      meta: { title: 'T', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 8 },
+      sentences: [
+        { tokens: ['The', 'deal', 'closed', '.'], translationJa: '' },
+        { tokens: ['Another', 'deal', 'followed', '.'], translationJa: '' },
+      ],
+      targetSpans: [
+        { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' },
+        { sentenceIndex: 1, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' },
+      ],
+      collocationSpans: [],
+      noticeCues: [],
+    };
+    const { getAllByText } = render(
+      <PassageRenderer
+        passage={tokenizer.index('dup', source)}
+        layout="grid"
+        guideAnchorIdByWordKey={{ deal: 'word:deal' }}
+        guideNumberByWordKey={{ deal: 1 }}
+      />,
+    );
+    const deals = getAllByText('deal');
+    expect(deals[0]!.getAttribute('data-line-anchor')).toBe('word:deal');
+    expect(deals[1]!.getAttribute('data-line-anchor')).toBeNull();
+  });
+
+  it('renders a numbered study-word guide badge only at the first occurrence', () => {
+    const source: PassageOutput = {
+      meta: { title: 'T', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 8 },
+      sentences: [
+        { tokens: ['The', 'deal', 'closed', '.'], translationJa: '' },
+        { tokens: ['Another', 'deal', 'followed', '.'], translationJa: '' },
+      ],
+      targetSpans: [
+        { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' },
+        { sentenceIndex: 1, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' },
+      ],
+      collocationSpans: [],
+      noticeCues: [],
+    };
+    const { getByTestId, getAllByTestId } = render(
+      <PassageRenderer
+        passage={tokenizer.index('dup', source)}
+        layout="grid"
+        guideAnchorIdByWordKey={{ deal: 'word:deal' }}
+        guideNumberByWordKey={{ deal: 1 }}
+      />,
+    );
+    expect(getByTestId('study-guide-badge-deal').textContent).toBe('1');
+    expect(getAllByTestId('study-guide-badge-deal')).toHaveLength(1);
+  });
+
+  it('replaces an absorbed same-word notice badge with the study-word badge', () => {
+    const source: PassageOutput = {
+      meta: { title: 'T', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 4 },
+      sentences: [{ tokens: ['The', 'deal', 'closed', '.'], translationJa: '' }],
+      targetSpans: [
+        { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'deal', surface: 'deal', masteryDensity: 'new' },
+      ],
+      collocationSpans: [],
+      noticeCues: [
+        {
+          index: 1,
+          span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2 },
+          category: 'connotation',
+          wordId: 'deal',
+          anchorText: 'deal',
+          explanationJa: '商談らしい響き。',
+        },
+      ],
+    };
+    const { getByTestId, queryByTestId } = render(
+      <PassageRenderer
+        passage={tokenizer.index('absorbed', source)}
+        layout="grid"
+        guideAnchorIdByWordKey={{ deal: 'word:deal' }}
+        guideTargetIdByCueIndex={{ 1: 'guide-item-word:deal' }}
+        guideNumberByCueIndex={{ 1: 1 }}
+        guideNumberByWordKey={{ deal: 1 }}
+        absorbedCueIndexByIndex={{ 1: true }}
+      />,
+    );
+    expect(getByTestId('study-guide-badge-deal').textContent).toBe('1');
+    expect(queryByTestId('notice-badge-1')).toBeNull();
+  });
+
   it('keeps the grid container flagged so the layout can be detected/styled', () => {
     const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
     expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid');

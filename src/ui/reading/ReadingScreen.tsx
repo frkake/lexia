@@ -3,19 +3,19 @@
  * header, scene illustration, annotated prose (PassageRenderer) and legend into the
  * reading column, with a font-size control and a mobile back/meta affordance. Selecting a
  * word opens the WordDetailCard (injected via `renderWordDetail`). The passage comes from
- * the in-progress session unless one is passed; the right rail (NoticeRail, 8.3) and
- * per-sentence translations (SentenceTranslation, 8.2) are injected as slots.
+ * the in-progress session unless one is passed; the right rail is a unified ReadingGuideRail
+ * that merges study words and remaining notices at their first appearance.
  */
 
 import { useNavigate } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { PassageRenderer } from './PassageRenderer';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
-import { NoticeRail } from './NoticeRail';
+import { ReadingGuideRail, buildReadingGuide } from './ReadingGuideRail';
 import { useLineAnchors } from './useLineAnchors';
 import { useIsNarrow } from './useIsNarrow';
-import { StudyWordsList, type StudyWord } from './StudyWordsList';
+import type { StudyWord } from './StudyWordsList';
 import { Legend } from '../shared/Legend';
 import { colors, fonts, radius } from '../theme/tokens';
 import { useSessionStore, sessionStore } from '../../state/stores/sessionStore';
@@ -41,8 +41,9 @@ function nearestStepIndex(scale: number): number {
 
 export interface ReadingScreenProps {
   passage?: IndexedPassage;
-  /** Right-rail content (NoticeRail + StudyWordsList, task 8.3). */
-  rail?: ReactNode;
+  /** Live, mastery-enriched study words for the unified learning guide. */
+  studyWords?: StudyWord[];
+  onPlayWord?: (wordId: string) => void;
   /** WordDetailCard renderer for the selected word (task 8.4). */
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
   /** Direct right-rail recognition: mark a word or expression as unknown without opening details. */
@@ -71,7 +72,8 @@ export interface ReadingScreenProps {
 
 export function ReadingScreen({
   passage,
-  rail,
+  studyWords: suppliedStudyWords,
+  onPlayWord,
   renderWordDetail,
   onMarkUnknown,
   onCompleteReading,
@@ -130,8 +132,8 @@ export function ReadingScreen({
     };
     const onClick = (e: MouseEvent): void => {
       const t = e.target as HTMLElement | null;
-      // A click away from any notice handle dismisses the pinned pairing.
-      if (!t?.closest?.('.notice-badge, [data-testid^="notice-item-"]')) {
+      // A click away from any guide/badge handle dismisses the pinned pairing.
+      if (!t?.closest?.('.notice-badge, [data-guide-kind]')) {
         readingUiStore.getState().clearPin();
       }
     };
@@ -145,6 +147,27 @@ export function ReadingScreen({
   useEffect(() => {
     setStoryPlanOpen(false);
   }, [active?.source.meta.storyRef?.storyId]);
+
+  const fallbackStudyWords = useMemo<StudyWord[]>(() => {
+    if (!active) return [];
+    const words: StudyWord[] = [];
+    const seen = new Set<string>();
+    const ordered = [...active.source.targetSpans].sort(
+      (a, b) => a.sentenceIndex - b.sentenceIndex || a.tokenStart - b.tokenStart || a.tokenEnd - b.tokenEnd,
+    );
+    for (const t of ordered) {
+      const key = t.wordId.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      words.push({ wordId: t.wordId, surface: t.surface, reappearCount: t.reappearInfo?.count });
+    }
+    return words;
+  }, [active]);
+  const effectiveStudyWords = suppliedStudyWords ?? fallbackStudyWords;
+  const guide = useMemo(
+    () => (active ? buildReadingGuide(active, effectiveStudyWords) : null),
+    [active, effectiveStudyWords],
+  );
 
   if (!active) {
     return (
@@ -167,24 +190,17 @@ export function ReadingScreen({
   };
   const closeDetail = (): void => sessionStore.getState().setActiveWord(null);
 
-  // The NoticeRail is ALWAYS owned by ReadingScreen so it receives the line-anchor `anchors`
-  // (the only place that drives line-alignment in the new layout). The `rail` prop supplies the
-  // study-words portion BELOW it — a route injects live, mastery-enriched study words there; when
-  // absent we fall back to the bare target words derived from the passage. Injecting `rail` must
-  // not bypass (or duplicate) the anchor-aware notice rail.
-  const studyWords: StudyWord[] = [];
-  const seen = new Set<string>();
-  for (const t of active.source.targetSpans) {
-    if (seen.has(t.wordId)) continue;
-    seen.add(t.wordId);
-    studyWords.push({ wordId: t.wordId, surface: t.surface, reappearCount: t.reappearInfo?.count });
-  }
+  const activeGuide = guide ?? buildReadingGuide(active, effectiveStudyWords);
   const railContent = (
-    <>
-      {/* Line-aligned only on the wide 3-zone layout; flat flow on narrow / legacy. */}
-      <NoticeRail passage={active} anchors={lineAligned ? anchors : undefined} onMarkUnknown={onMarkUnknown} />
-      {rail ?? <StudyWordsList words={studyWords} onSelectWord={selectWord} onMarkUnknown={onMarkUnknown} />}
-    </>
+    <ReadingGuideRail
+      passage={active}
+      words={effectiveStudyWords}
+      guide={activeGuide}
+      anchors={lineAligned ? anchors : undefined}
+      onSelectWord={selectWord}
+      onPlayWord={onPlayWord}
+      onMarkUnknown={onMarkUnknown}
+    />
   );
 
   return (
@@ -290,6 +306,11 @@ export function ReadingScreen({
                   activeTokenId={activeTokenId}
                   onSelectWord={selectWord}
                   layout="grid"
+                  guideAnchorIdByWordKey={activeGuide.wordAnchorIdByKey}
+                  guideTargetIdByCueIndex={activeGuide.cueTargetIdByIndex}
+                  guideNumberByCueIndex={activeGuide.guideNumberByCueIndex}
+                  guideNumberByWordKey={activeGuide.guideNumberByWordKey}
+                  absorbedCueIndexByIndex={activeGuide.absorbedCueIndexByIndex}
                   renderAside={(i) => (
                     <SentenceTranslation
                       text={active.source.sentences[i]?.translationJa ?? ''}
@@ -305,6 +326,11 @@ export function ReadingScreen({
                   fontScale={fontScale}
                   activeTokenId={activeTokenId}
                   onSelectWord={selectWord}
+                  guideAnchorIdByWordKey={activeGuide.wordAnchorIdByKey}
+                  guideTargetIdByCueIndex={activeGuide.cueTargetIdByIndex}
+                  guideNumberByCueIndex={activeGuide.guideNumberByCueIndex}
+                  guideNumberByWordKey={activeGuide.guideNumberByWordKey}
+                  absorbedCueIndexByIndex={activeGuide.absorbedCueIndexByIndex}
                   renderAfterSentence={(i) => (
                     <SentenceTranslation text={active.source.sentences[i]?.translationJa ?? ''} mode={translationMode} />
                   )}

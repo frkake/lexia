@@ -20,7 +20,7 @@ import { LibraryScreen } from '../library/LibraryScreen';
 import { StoryDirectoryScreen, type StoryChapterRow } from '../story/StoryDirectoryScreen';
 import { StoryPlanReview } from '../setup/StoryPlanReview';
 import { ReadingScreen } from '../reading/ReadingScreen';
-import { StudyWordsList, type StudyWord } from '../reading/StudyWordsList';
+import type { StudyWord } from '../reading/StudyWordsList';
 import { resolveFeatureFlags } from './featureFlags';
 import { ReviewSession, type ReviewItem } from '../review/ReviewSession';
 import { WordbookScreen, type WordbookEntry } from '../wordbook/WordbookScreen';
@@ -657,10 +657,6 @@ export function ReadingRoute() {
     return { story, chapters };
   }, [c, passage?.passageId, passage?.source.meta.storyRef?.storyId]);
 
-  const selectStudyWord = (wordId: string): void => {
-    c.session.getState().setActiveWord(wordId);
-  };
-
   const playStudyWord = (wordId: string): void => {
     void (async () => {
       try {
@@ -705,17 +701,6 @@ export function ReadingRoute() {
       }),
     );
   }, [c, passage?.passageId]);
-
-  // The NoticeRail is owned by ReadingScreen (it receives the line-anchor positions for the new
-  // layout); the route only supplies the live, mastery-enriched study-words list beneath it.
-  const rail = passage ? (
-    <StudyWordsList
-      words={studyWords ?? uniqueStudyWords(passage)}
-      onSelectWord={selectStudyWord}
-      onPlayWord={playStudyWord}
-      onMarkUnknown={markStudyTargetUnknown}
-    />
-  ) : undefined;
 
   const completeReading = async (): Promise<void> => {
     const active = c.session.getState().passage;
@@ -892,7 +877,8 @@ export function ReadingRoute() {
   return (
     <ReadingScreen
       passage={passage ?? undefined}
-      rail={rail}
+      studyWords={passage ? (studyWords ?? uniqueStudyWords(passage)) : undefined}
+      onPlayWord={playStudyWord}
       newLayout={newReadingLayout}
       onMarkUnknown={markStudyTargetUnknown}
       onCompleteReading={() => void completeReading()}

@@ -45,12 +45,14 @@ export interface AnnotatedSpanProps {
   kind: AnnotationKind;
   /** True while this token is the one the TTS playhead is reading. */
   active?: boolean;
+  /** Optional guide/rail anchor id measured by useLineAnchors. */
+  lineAnchorId?: string;
   /** When supplied, the span becomes a selectable button (opens word detail). */
   onSelect?: () => void;
   title?: string;
 }
 
-export function AnnotatedSpan({ children, kind, active = false, onSelect, title }: AnnotatedSpanProps) {
+export function AnnotatedSpan({ children, kind, active = false, lineAnchorId, onSelect, title }: AnnotatedSpanProps) {
   const style: CSSProperties = {
     ...annotationStyle(kind, active),
     cursor: onSelect ? 'pointer' : undefined,
@@ -69,6 +71,7 @@ export function AnnotatedSpan({ children, kind, active = false, onSelect, title 
     <span
       data-kind={kind}
       data-active={String(active)}
+      data-line-anchor={lineAnchorId}
       title={title}
       onClick={onSelect}
       onKeyDown={onKeyDown}
