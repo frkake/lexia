@@ -89,6 +89,44 @@ describe('POST /api/story:illustrate (Requirement 6.8)', () => {
   });
 });
 
+describe('POST /api/passages:illustrate', () => {
+  it('returns { illustrationUrl } for a valid PassageIllustrationRequest', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ b64_json: 'U0NFTkU=' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchImpl);
+    const { res, status, json } = makeRes();
+    await run(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      makeReq('POST', '/api/passages:illustrate', {
+        title: 'Scene',
+        intent: 'daily',
+        level: 'B1',
+        sentences: [{ tokens: ['A', 'map', 'glowed', '.'], translationJa: '' }],
+      }),
+      res,
+    );
+    expect(status()).toBe(200);
+    expect(json()).toEqual({ illustrationUrl: 'data:image/png;base64,U0NFTkU=' });
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects a malformed body with 400', async () => {
+    const { res, status } = makeRes();
+    await run({ OPENAI_API_KEY: 'sk-real-key' }, makeReq('POST', '/api/passages:illustrate', { title: 'Scene' }), res);
+    expect(status()).toBe(400);
+  });
+
+  it('rejects a non-POST method with 405', async () => {
+    const { res, status } = makeRes();
+    await run({ OPENAI_API_KEY: 'sk-real-key' }, makeReq('GET', '/api/passages:illustrate'), res);
+    expect(status()).toBe(405);
+  });
+});
+
 describe('POST /api/story:extend', () => {
   const plan = {
     storyId: 'story_1',

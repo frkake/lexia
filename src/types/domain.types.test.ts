@@ -12,6 +12,7 @@ import type {
   Sentence,
   TranslationSpan,
   ReadabilityLevel,
+  PassageMeta,
 } from './domain';
 
 describe('domain types', () => {
@@ -171,5 +172,20 @@ describe('domain types', () => {
     };
     expect(annotated.translationSpans).toHaveLength(1);
     expectTypeOf<Sentence['translationSpans']>().toEqualTypeOf<TranslationSpan[] | undefined>();
+  });
+
+  it('PassageMeta keeps sceneIllustrationUrl optional for legacy passages', () => {
+    const legacy: PassageMeta = {
+      title: 'T',
+      intent: 'daily',
+      level: 'B1',
+      newCount: 0,
+      reviewCount: 0,
+      approxWords: 100,
+    };
+    const illustrated: PassageMeta = { ...legacy, sceneIllustrationUrl: 'data:image/png;base64,SCENE' };
+    expect(legacy.sceneIllustrationUrl).toBeUndefined();
+    expect(illustrated.sceneIllustrationUrl).toContain('data:image/png;base64,');
+    expectTypeOf<PassageMeta['sceneIllustrationUrl']>().toEqualTypeOf<string | undefined>();
   });
 });

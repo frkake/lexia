@@ -20,6 +20,11 @@ export interface FeatureFlags {
    * image generation independently of storyMode.
    */
   characterIllustrations: boolean;
+  /**
+   * Passage scene illustration: generate + display one visual summary image per generated passage.
+   * ON by default and graceful when the image API is unavailable.
+   */
+  passageIllustrations: boolean;
 }
 
 /**
@@ -34,6 +39,7 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   newGenerationSetup: true,
   storyMode: true,
   characterIllustrations: true,
+  passageIllustrations: true,
 };
 
 /**

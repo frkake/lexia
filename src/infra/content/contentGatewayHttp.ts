@@ -19,6 +19,7 @@ import type {
   WordSuggestionRequest,
   NoticeCue,
   PassageAnnotationRequest,
+  PassageIllustrationRequest,
 } from '../../types/domain';
 
 export type ContentGatewayErrorKind =
@@ -103,6 +104,16 @@ export class HttpContentGateway implements ContentGateway {
       body: JSON.stringify(req),
     });
     return Array.isArray(body.noticeCues) ? body.noticeCues : [];
+  }
+
+  async illustratePassage(req: PassageIllustrationRequest): Promise<string> {
+    const body = await this.request<{ illustrationUrl?: string }>('/api/passages:illustrate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    if (!body.illustrationUrl) throw this.fail('network', 200, new Error('illustration response missing illustrationUrl'));
+    return body.illustrationUrl;
   }
 
   /** Issue a request and normalize transport / status failures into ContentGatewayError. */

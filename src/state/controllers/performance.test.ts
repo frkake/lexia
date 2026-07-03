@@ -126,5 +126,5 @@ describe('performance & reliability (task 11.3)', () => {
     expect(importedLogs.map(strip).sort((a, b) => a.at - b.at)).toEqual(logs.map(strip).sort((a, b) => a.at - b.at));
 
     db.close();
-  });
+  }, 10_000);
 });

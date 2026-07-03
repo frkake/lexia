@@ -113,6 +113,11 @@ export interface PassageMeta {
   newCount: number;
   reviewCount: number;
   approxWords: number;
+  /**
+   * Generated scene illustration as a base64 `data:` URL. Optional enrichment: absent when image
+   * generation is disabled, unconfigured, pending, or failed.
+   */
+  sceneIllustrationUrl?: string;
   /** Link to the owning story chapter (Requirement 6.6). Absent for standalone articles. */
   storyRef?: { storyId: string; chapterIndex: number };
 }
@@ -292,6 +297,24 @@ export interface CharacterIllustrationRequest {
   genre: StoryGenre;
   /** Style/motif hint (from the plan's homage note or genre) to keep the cast visually coherent. */
   styleHint?: string;
+}
+
+/** Request for an illustration that represents the generated passage's main scene. */
+export interface PassageIllustrationRequest {
+  title: string;
+  intent: LearningIntent;
+  level: Cefr;
+  sentences: Sentence[];
+  story?: {
+    genre: StoryGenre;
+    titleJa: string;
+    synopsisJa: string;
+    chapterHeadingJa?: string;
+    chapterBeatJa?: string;
+    characters: Pick<StoryCharacter, 'name' | 'role' | 'descriptionJa'>[];
+    /** Style/motif hint (from the plan's homage note or genre), never a license to copy text. */
+    styleHint?: string;
+  };
 }
 
 /** Persistence envelope for a confirmed story plan (`stories` store). */

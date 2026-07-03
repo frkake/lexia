@@ -105,7 +105,14 @@ const characterCardStyle: CSSProperties = {
   minWidth: 200,
 };
 
-const portraitStyle: CSSProperties = { width: 44, height: 44, borderRadius: radius.full, objectFit: 'cover', flex: 'none' };
+const portraitStyle: CSSProperties = {
+  width: 44,
+  height: 66,
+  borderRadius: radius.control,
+  objectFit: 'contain',
+  flex: 'none',
+  background: colors.avatarBg,
+};
 
 const chapterRowStyle = (generated: boolean): CSSProperties => ({
   display: 'flex',

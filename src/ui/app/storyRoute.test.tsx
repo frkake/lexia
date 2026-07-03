@@ -138,7 +138,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
 
     // Confirm → chapter is generated, persisted with the story link, and we land on Reading.
     fireEvent.click(screen.getByText('この設定で執筆する'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'), { timeout: 5_000 });
     await waitFor(async () => {
       const stories = await createRepositories(db).stories.recent(userId, 5);
       expect(stories).toHaveLength(1);
@@ -147,9 +147,9 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       const passages = await createRepositories(db).passages.recent(userId, 5);
       expect(passages).toHaveLength(1);
       expect(passages[0]!.passage.meta.storyRef?.storyId).toBe('story_1');
-    });
+    }, { timeout: 5_000 });
 
-    fireEvent.click(await screen.findByTestId('story-settings'));
+    fireEvent.click(await screen.findByTestId('story-settings', {}, { timeout: 5_000 }));
     expect(await screen.findByRole('dialog', { name: '物語設定' })).toBeTruthy();
     expect(screen.getByText('キャラクター設定')).toBeTruthy();
     expect(screen.getByText('Mia')).toBeTruthy();

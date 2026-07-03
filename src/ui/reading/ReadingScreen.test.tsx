@@ -69,6 +69,15 @@ describe('<ReadingScreen/>', () => {
     expect(getAllByText(/新出\s*4\s*\/\s*復習\s*6/).length).toBeGreaterThan(0);
   });
 
+  it('renders a generated scene illustration when the passage has one', () => {
+    const passage = makePassage();
+    passage.source.meta.sceneIllustrationUrl = 'data:image/png;base64,SCENE';
+    const { getByAltText, queryByText } = renderScreen({ passage });
+    const image = getByAltText('The Restless Boardroom の場面イラスト') as HTMLImageElement;
+    expect(image.src).toContain('data:image/png;base64,SCENE');
+    expect(queryByText(/story illustration/)).toBeNull();
+  });
+
   it('renders the annotated prose', () => {
     const { getByTestId } = renderScreen({ passage: makePassage() });
     const prose = within(getByTestId('passage-prose'));

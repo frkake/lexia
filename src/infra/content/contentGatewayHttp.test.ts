@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { HttpContentGateway } from './contentGatewayHttp';
-import type { GenerationRequest, WordData } from '../../types/domain';
+import type { GenerationRequest, PassageOutput, WordData } from '../../types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
@@ -19,7 +19,7 @@ function gatewayWith(fetchImpl: typeof fetch): HttpContentGateway {
   return new HttpContentGateway({ baseUrl: 'https://api.test', fetch: fetchImpl });
 }
 
-const samplePassage = {
+const samplePassage: PassageOutput = {
   meta: { title: 't', intent: 'travel', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 5 },
   sentences: [{ tokens: ['She', 'stayed', 'resilient', '.'], translationJa: '' }],
   targetSpans: [],
@@ -132,5 +132,37 @@ describe('HttpContentGateway.annotatePassage', () => {
   it('returns an empty list when the reply has no cues array', async () => {
     const gw = gatewayWith(async () => jsonResponse(200, {}));
     expect(await gw.annotatePassage({ sentences: samplePassage.sentences, level: 'B1' })).toEqual([]);
+  });
+});
+
+describe('HttpContentGateway.illustratePassage', () => {
+  it('posts passage context to /api/passages:illustrate and returns the data URL', async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const gw = gatewayWith(async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(200, { illustrationUrl: 'data:image/png;base64,SCENE' });
+    });
+    const result = await gw.illustratePassage({
+      title: samplePassage.meta.title,
+      intent: samplePassage.meta.intent,
+      level: samplePassage.meta.level,
+      sentences: samplePassage.sentences,
+    });
+    expect(captured!.url).toBe('https://api.test/api/passages:illustrate');
+    expect(captured!.init?.method).toBe('POST');
+    expect(JSON.parse(String(captured!.init?.body))).toMatchObject({ title: 't', intent: 'travel', level: 'B1' });
+    expect(result).toBe('data:image/png;base64,SCENE');
+  });
+
+  it('rejects when the response omits illustrationUrl', async () => {
+    const gw = gatewayWith(async () => jsonResponse(200, {}));
+    await expect(
+      gw.illustratePassage({
+        title: samplePassage.meta.title,
+        intent: samplePassage.meta.intent,
+        level: samplePassage.meta.level,
+        sentences: samplePassage.sentences,
+      }),
+    ).rejects.toMatchObject({ kind: 'network' });
   });
 });

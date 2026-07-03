@@ -3,6 +3,7 @@ import {
   buildAnnotationMessages,
   buildCharacterIllustrationPrompt,
   buildPassageMessages,
+  buildPassageIllustrationPrompt,
   buildStoryPlanMessages,
   buildStoryPlanExtensionMessages,
   buildSuggestionMessages,
@@ -59,6 +60,13 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
     expect(user).toContain('article');
     expect(user).toContain('advanced');
     expect(system).toContain('Readability');
+  });
+
+  it('derives the sentence-structure preset from CEFR when readabilityLevel is omitted', () => {
+    const b1 = buildPassageMessages({ ...base, level: 'B1' }).user;
+    expect(b1).toContain('"readabilityLevel": "easy"');
+    const c1 = buildPassageMessages({ ...base, level: 'C1' }).user;
+    expect(c1).toContain('"readabilityLevel": "advanced"');
   });
 
   it('biases toward exam-frequent vocabulary/formats for exam intents (8.4)', () => {
@@ -129,7 +137,7 @@ describe('buildWordMessages — memory tips', () => {
 });
 
 describe('buildCharacterIllustrationPrompt', () => {
-  it('biases portraits toward stylized, memorable illustration instead of photorealism', () => {
+  it('biases character art toward stylized full-body illustration instead of photorealism', () => {
     const prompt = buildCharacterIllustrationPrompt({
       name: 'Aria',
       role: '主人公',
@@ -137,10 +145,37 @@ describe('buildCharacterIllustrationPrompt', () => {
       genre: 'fantasy',
       styleHint: '幻想的な作風',
     });
+    expect(prompt).toContain('Full-body');
     expect(prompt).toContain('Highly stylized 2D');
     expect(prompt).toContain('not photorealistic');
     expect(prompt).toContain('memorable silhouette');
+    expect(prompt).toContain('head-to-toe full body');
     expect(prompt).toContain('signature outfit, color accent, or prop');
+  });
+});
+
+describe('buildPassageIllustrationPrompt', () => {
+  it('uses passage and story context while banning text in the image', () => {
+    const prompt = buildPassageIllustrationPrompt({
+      title: '星の少女 第一章',
+      intent: 'daily',
+      level: 'B1',
+      sentences: [{ tokens: ['Mia', 'found', 'a', 'glowing', 'map', '.'], translationJa: '' }],
+      story: {
+        genre: 'fantasy',
+        titleJa: '星の少女',
+        synopsisJa: '少女が星を探す物語。',
+        chapterHeadingJa: '第一章',
+        chapterBeatJa: 'ミアが光る地図を見つける。',
+        characters: [{ name: 'Mia', role: '主人公', descriptionJa: '赤い羽根つき帽子の少女' }],
+        styleHint: '幻想的な作風',
+      },
+    });
+    expect(prompt).toContain('Mia found a glowing map.');
+    expect(prompt).toContain('星の少女');
+    expect(prompt).toContain('ミアが光る地図を見つける');
+    expect(prompt).toContain('single most representative moment');
+    expect(prompt).toContain('no text, letters, captions');
   });
 });
 

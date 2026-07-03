@@ -8,9 +8,10 @@ import {
   planStory,
   extendStoryPlan,
   illustrateCharacter,
+  illustratePassage,
   type Env,
 } from './providers';
-import type { CharacterIllustrationRequest, GenerationRequest } from '../../src/types/domain';
+import type { CharacterIllustrationRequest, GenerationRequest, PassageIllustrationRequest } from '../../src/types/domain';
 
 const req: GenerationRequest = {
   level: 'B1',
@@ -147,6 +148,17 @@ describe('generatePassage — OpenAI provider (default)', () => {
     const res = await generatePassage(env, req, fetchImpl as unknown as typeof fetch);
     expect(res.passage.sentences[0]!.tokens).toContain('team');
     expect(res.passage.meta.intent).toBe('business'); // backfilled from request
+    expect(res.passage.meta.level).toBe('B1');
+  });
+
+  it('keeps request-owned intent and level authoritative when the model returns drifted meta', async () => {
+    const drifted = {
+      ...samplePassage,
+      meta: { ...samplePassage.meta, intent: 'academic', level: 'C2' },
+    };
+    const fetchImpl = vi.fn(async () => openAiCompletion(drifted));
+    const res = await generatePassage({ OPENAI_API_KEY: 'sk-real-key' }, req, fetchImpl as unknown as typeof fetch);
+    expect(res.passage.meta.intent).toBe('business');
     expect(res.passage.meta.level).toBe('B1');
   });
 
@@ -464,9 +476,11 @@ describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portr
     const sent = JSON.parse(String(captured!.init?.body));
     expect(sent.model).toBe('gpt-image-1');
     expect(sent.n).toBe(1);
+    expect(sent.size).toBe('1024x1536');
     expect(typeof sent.prompt).toBe('string');
     // The character's role/description feed the prompt so portraits match the plan.
     expect(sent.prompt).toContain('Aria');
+    expect(sent.prompt).toContain('Full-body');
     expect(dataUrl).toBe('data:image/png;base64,QUJD');
   });
 
@@ -516,6 +530,62 @@ describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portr
     await expect(
       illustrateCharacter({ OPENAI_API_KEY: 'sk-real-key' }, charReq, fetchImpl as unknown as typeof fetch),
     ).rejects.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe('illustratePassage (IMAGE_PROVIDER-switched scene illustration)', () => {
+  function openAiScene(b64: string): Response {
+    return jsonResponse(200, { data: [{ b64_json: b64 }] });
+  }
+
+  const sceneReq: PassageIllustrationRequest = {
+    title: '星の少女 第一章',
+    intent: 'daily',
+    level: 'B1',
+    sentences: [{ tokens: ['Mia', 'found', 'a', 'glowing', 'map', '.'], translationJa: '' }],
+    story: {
+      genre: 'fantasy',
+      titleJa: '星の少女',
+      synopsisJa: '少女が星を探す物語。',
+      chapterHeadingJa: '第一章',
+      chapterBeatJa: 'ミアが光る地図を見つける。',
+      characters: [{ name: 'Mia', role: '主人公', descriptionJa: '赤い羽根つき帽子の少女' }],
+      styleHint: '幻想的な作風',
+    },
+  };
+
+  it('posts a landscape OpenAI image request and returns a PNG data URL', async () => {
+    let captured: { init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = { init };
+      return openAiScene('U0NFTkU=');
+    });
+
+    const dataUrl = await illustratePassage({ OPENAI_API_KEY: 'sk-real-key' }, sceneReq, fetchImpl as unknown as typeof fetch);
+
+    const sent = JSON.parse(String(captured!.init?.body));
+    expect(sent.size).toBe('1536x1024');
+    expect(sent.prompt).toContain('Mia found a glowing map.');
+    expect(sent.prompt).toContain('no text, letters, captions');
+    expect(dataUrl).toBe('data:image/png;base64,U0NFTkU=');
+  });
+
+  it('switches to Gemini using a 16:9 aspect ratio', async () => {
+    let captured: { init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = { init };
+      return jsonResponse(200, { predictions: [{ bytesBase64Encoded: 'R0lG' }] });
+    });
+
+    const dataUrl = await illustratePassage(
+      { IMAGE_PROVIDER: 'gemini', GEMINI_API_KEY: 'gm-key' },
+      sceneReq,
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const sent = JSON.parse(String(captured!.init?.body));
+    expect(sent.parameters.aspectRatio).toBe('16:9');
+    expect(dataUrl).toBe('data:image/png;base64,R0lG');
   });
 });
 

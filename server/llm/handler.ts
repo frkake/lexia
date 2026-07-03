@@ -1,6 +1,7 @@
 /**
  * Connect middleware implementing the ContentGateway HTTP contract (design.md API table):
  *   POST /api/passages:generate  -> { passage, stop_reason }   (400, 429, 503)
+ *   POST /api/passages:illustrate -> { illustrationUrl }        (400, 429, 503)
  *   GET  /api/words/{wordId}      -> WordData                   (404, 429, 503)
  *
  * It is mounted by the Vite plugin on the dev and preview servers, so `pnpm dev` actually
@@ -13,6 +14,7 @@ import type {
   CharacterIllustrationRequest,
   GenerationRequest,
   PassageAnnotationRequest,
+  PassageIllustrationRequest,
   StoryPlanExtensionRequest,
   StoryPlanRequest,
   WordSuggestionRequest,
@@ -24,6 +26,7 @@ import {
   generatePassage,
   getWordData,
   illustrateCharacter,
+  illustratePassage,
   extendStoryPlan,
   planStory,
   suggestWords,
@@ -33,6 +36,7 @@ type Next = (err?: unknown) => void;
 
 const GENERATE_PATH = '/api/passages:generate';
 const ANNOTATE_PATH = '/api/passages:annotate';
+const ILLUSTRATE_PASSAGE_PATH = '/api/passages:illustrate';
 const SUGGEST_PATH = '/api/words:suggest';
 const STORY_PLAN_PATH = '/api/story:plan';
 const STORY_EXTEND_PATH = '/api/story:extend';
@@ -68,6 +72,16 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     }
     const noticeCues = await annotatePassage(env, body);
     return sendJson(res, 200, { noticeCues });
+  }
+
+  if (path === ILLUSTRATE_PASSAGE_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<PassageIllustrationRequest>(req);
+    if (!body || !body.title || !body.intent || !body.level || !Array.isArray(body.sentences)) {
+      throw new ProviderError(400, 'Invalid PassageIllustrationRequest body.');
+    }
+    const illustrationUrl = await illustratePassage(env, body);
+    return sendJson(res, 200, { illustrationUrl });
   }
 
   if (path === SUGGEST_PATH) {

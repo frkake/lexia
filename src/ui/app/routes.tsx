@@ -68,6 +68,11 @@ function isUneditedAutoSelection(setup: SetupConfig, candidates: CandidateWord[]
   return setup.excludedWordIds.length === 0 && sameWordSet(setup.targetWordIds, selectedIds(candidates));
 }
 
+function manualTargetWordIds(setup: SetupConfig, candidates: CandidateWord[]): string[] {
+  const autoIds = new Set(selectedIds(candidates).map((word) => word.trim().toLowerCase()));
+  return setup.targetWordIds.filter((word) => !autoIds.has(word.trim().toLowerCase()));
+}
+
 function suggestionNotice(shortfall: { reason: 'exhausted' | 'gateway_unavailable' } | undefined): string | null {
   if (!shortfall) return null;
   if (shortfall.reason === 'gateway_unavailable') {
@@ -325,11 +330,14 @@ export function HomeRoute() {
     };
   }, [commitLoadedCandidates, lastSetup, loadCandidates]);
 
-  const refreshCandidates = async (setup: SetupConfig): Promise<CandidateWord[]> => {
+  const refreshCandidates = async (
+    setup: SetupConfig,
+    avoidWordIds: string[] = selectedIds(candidates),
+  ): Promise<CandidateWord[]> => {
     setRefreshingCandidates(true);
     setCandidateRefreshError(null);
     try {
-      const loaded = await loadCandidates(setup, selectedIds(candidates));
+      const loaded = await loadCandidates(setup, avoidWordIds);
       commitLoadedCandidates(loaded);
       return loaded.candidates;
     } catch {
@@ -350,15 +358,16 @@ export function HomeRoute() {
   };
 
   const setupWithFreshAutoCandidates = async (setup: SetupConfig): Promise<SetupConfig> => {
-    if (!isUneditedAutoSelection(setup, candidates)) return setup;
     if (lastSuggestionKey === suggestionKeyFor(setup)) return setup;
-    const fresh = await refreshCandidates(setup);
-    return { ...setup, targetWordIds: selectedIds(fresh) };
+    const fresh = await refreshCandidates(setup, []);
+    const freshIds = selectedIds(fresh);
+    if (isUneditedAutoSelection(setup, candidates)) return { ...setup, targetWordIds: freshIds };
+    return { ...setup, targetWordIds: mergeWordIds(freshIds, manualTargetWordIds(setup, candidates)) };
   };
 
   // Story confirmation gate (Requirement 6.3): when a story is generated, hold the plan for the
   // learner to confirm before any chapter body is produced. Only active when storyMode is on.
-  const { storyMode, characterIllustrations } = resolveFeatureFlags();
+  const { storyMode, characterIllustrations, passageIllustrations } = resolveFeatureFlags();
   const [pendingPlan, setPendingPlan] = useState<StoryPlan | null>(null);
   const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
   // True while character portraits stream in on the confirmation gate (6.8); enrichment only.
@@ -384,6 +393,7 @@ export function HomeRoute() {
         genId: c.genId,
         voiceId: voiceId || c.voiceId,
         wordData,
+        illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
       },
       effectiveSetup,
       c.userId,
@@ -476,6 +486,7 @@ export function HomeRoute() {
           genId: c.genId,
           voiceId: voiceId || c.voiceId,
           wordData,
+          illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
         },
         effectiveSetup,
         c.userId,
@@ -593,6 +604,7 @@ export function ReadingRoute() {
   const lastSetup = useStore(c.settings, (s) => s.lastSetup);
   const [generatingNextChapter, setGeneratingNextChapter] = useState(false);
   const [nextChapterError, setNextChapterError] = useState<string | null>(null);
+  const { newReadingLayout, passageIllustrations } = resolveFeatureFlags();
 
   const storyDetails = useLiveQuery<
     { story: StoryRecord; chapters: PassageRecord[] } | null | undefined
@@ -727,6 +739,7 @@ export function ReadingRoute() {
           genId: c.genId,
           voiceId: voiceId || c.voiceId,
           wordData,
+          illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
         },
         effectiveSetup,
         c.userId,
@@ -765,8 +778,6 @@ export function ReadingRoute() {
 
   // The display-improvement cluster (Requirements 1–4) is shipped, so the reading-layout flag is
   // on by default; resolveFeatureFlags still allows an override to disable it.
-  const { newReadingLayout } = resolveFeatureFlags();
-
   return (
     <ReadingScreen
       passage={passage ?? undefined}

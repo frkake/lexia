@@ -8,7 +8,7 @@
  */
 
 import { masteryProjector } from '../srs/masteryProjector';
-import { examScale } from '../difficulty/examScale';
+import { levelPresetForExamTarget, readabilityForCefr } from '../difficulty/levelPreset';
 import type { SchedulingRepository } from '../../types/ports';
 import type {
   UserId,
@@ -48,18 +48,14 @@ export interface SessionPlanner {
   ): GenerationRequest;
 }
 
-export function readabilityForCefr(level: Cefr): ReadabilityLevel {
-  if (level === 'A2' || level === 'B1') return 'easy';
-  if (level === 'B2') return 'standard';
-  return 'advanced';
-}
+export { readabilityForCefr };
 
 export function resolveVocabularyLevel(setup: SetupConfig): Cefr {
-  return setup.advancedDifficulty?.vocabularyLevel ?? examScale.examToCefr(setup.examTarget);
+  return setup.advancedDifficulty?.vocabularyLevel ?? levelPresetForExamTarget(setup.examTarget).vocabularyLevel;
 }
 
 export function resolveReadabilityLevel(setup: SetupConfig): ReadabilityLevel {
-  return setup.advancedDifficulty?.readabilityLevel ?? readabilityForCefr(examScale.examToCefr(setup.examTarget));
+  return setup.advancedDifficulty?.readabilityLevel ?? levelPresetForExamTarget(setup.examTarget).readabilityLevel;
 }
 
 async function selectCandidates(

@@ -14,6 +14,11 @@ import { colors, fonts, radius } from '../theme/tokens';
 import { ExamLevelPicker } from './ExamLevelPicker';
 import { WordTargetSlider } from './WordTargetSlider';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
+import {
+  customAdvancedDifficultyForExamTarget,
+  levelPresetForExamTarget,
+  type LevelPreset,
+} from '../../domain/difficulty/levelPreset';
 import type {
   Cefr,
   ContentType,
@@ -87,9 +92,6 @@ const READABILITY_OPTIONS: { value: ReadabilityLevel; label: string }[] = [
   { value: 'advanced', label: '挑戦' },
 ];
 
-type AutoCefr = Cefr | 'auto';
-type AutoReadability = ReadabilityLevel | 'auto';
-
 /** Default word target when none is seeded (mid of the article range). */
 const DEFAULT_WORD_TARGET = 400;
 
@@ -113,6 +115,18 @@ function candidateReasonLabel(candidate: CandidateWord): string | null {
   return null;
 }
 
+function initialLevelPreset(initial: Partial<SetupConfig> | undefined): LevelPreset {
+  const base = levelPresetForExamTarget(initial?.examTarget ?? DEFAULT_EXAM);
+  return {
+    vocabularyLevel: initial?.advancedDifficulty?.vocabularyLevel ?? base.vocabularyLevel,
+    readabilityLevel: initial?.advancedDifficulty?.readabilityLevel ?? base.readabilityLevel,
+  };
+}
+
+function readabilityLabel(value: ReadabilityLevel): string {
+  return READABILITY_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
 export function SetupScreen({
   candidates = [],
   suggestionShortfall = null,
@@ -126,18 +140,15 @@ export function SetupScreen({
   generationError = null,
 }: SetupScreenProps) {
   const candidateIds = useMemo(() => new Set(candidates.map((c) => c.wordId)), [candidates]);
+  const seededLevelPreset = useMemo(() => initialLevelPreset(initial), [initial]);
 
   const [examTarget, setExamTarget] = useState<ExamCriterion | undefined>(initial?.examTarget);
   const [intent, setIntent] = useState<LearningIntent>(initial?.intent ?? 'daily');
   const [newWordRatio, setNewWordRatio] = useState<number>(initial?.newWordRatio ?? 0.3);
   const [contentType, setContentType] = useState<ContentType>(initial?.contentType ?? 'article');
   const [wordTarget, setWordTarget] = useState<number>(initial?.wordTarget ?? DEFAULT_WORD_TARGET);
-  const [vocabularyLevel, setVocabularyLevel] = useState<AutoCefr>(
-    initial?.advancedDifficulty?.vocabularyLevel ?? 'auto',
-  );
-  const [readabilityLevel, setReadabilityLevel] = useState<AutoReadability>(
-    initial?.advancedDifficulty?.readabilityLevel ?? 'auto',
-  );
+  const [vocabularyLevel, setVocabularyLevel] = useState<Cefr>(seededLevelPreset.vocabularyLevel);
+  const [readabilityLevel, setReadabilityLevel] = useState<ReadabilityLevel>(seededLevelPreset.readabilityLevel);
   const [genre, setGenre] = useState<StoryGenre>(initial?.storyOptions?.genre ?? 'fantasy');
   const [homageTitle, setHomageTitle] = useState<string>(initial?.storyOptions?.homageTitle ?? '');
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.excludedWordIds ?? []));
@@ -149,6 +160,9 @@ export function SetupScreen({
   const [attempted, setAttempted] = useState(false);
 
   const isStory = contentType !== 'article';
+  const levelPreset = levelPresetForExamTarget(examTarget ?? DEFAULT_EXAM);
+  const hasCustomLevel =
+    vocabularyLevel !== levelPreset.vocabularyLevel || readabilityLevel !== levelPreset.readabilityLevel;
 
   const targetWordIds = useMemo(() => {
     const ids = candidates.filter((c) => !excluded.has(c.wordId)).map((c) => c.wordId);
@@ -176,15 +190,24 @@ export function SetupScreen({
     setAdding(false);
   };
 
+  const selectExamTarget = (criterion: ExamCriterion): void => {
+    setExamTarget(criterion);
+    const preset = levelPresetForExamTarget(criterion);
+    setVocabularyLevel(preset.vocabularyLevel);
+    setReadabilityLevel(preset.readabilityLevel);
+  };
+
+  const resetLevelPreset = (): void => {
+    setVocabularyLevel(levelPreset.vocabularyLevel);
+    setReadabilityLevel(levelPreset.readabilityLevel);
+  };
+
   const buildSetup = (selectedExamTarget: ExamCriterion): SetupConfig => {
     const effectiveWordTarget = clampWordTarget(contentType, wordTarget);
-    const advancedDifficulty =
-      vocabularyLevel !== 'auto' || readabilityLevel !== 'auto'
-        ? {
-            ...(vocabularyLevel !== 'auto' ? { vocabularyLevel } : {}),
-            ...(readabilityLevel !== 'auto' ? { readabilityLevel } : {}),
-        }
-        : undefined;
+    const advancedDifficulty = customAdvancedDifficultyForExamTarget(selectedExamTarget, {
+      vocabularyLevel,
+      readabilityLevel,
+    });
     return {
       examTarget: selectedExamTarget,
       intent,
@@ -265,7 +288,7 @@ export function SetupScreen({
           {/* Difficulty (exam-based) */}
           <section>
             <Label text="目標レベル" hint="英検 / TOEIC / TOEFL / IELTS" />
-            <ExamLevelPicker value={examTarget ?? DEFAULT_EXAM} onChange={setExamTarget} />
+            <ExamLevelPicker value={examTarget ?? DEFAULT_EXAM} onChange={selectExamTarget} />
             {!examTarget ? (
               <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginTop: 8 }}>
                 目標レベルを選ぶと生成できます。
@@ -274,7 +297,19 @@ export function SetupScreen({
           </section>
 
           <section>
-            <Label text="高度設定" hint="単語レベル / 文構造" />
+            <div style={advancedHeaderStyle}>
+              <Label text="高度設定" hint="目標レベルのカスタム" mb={0} />
+              <div style={advancedStatusWrapStyle}>
+                <span data-testid="advanced-level-mode" style={advancedStatusStyle(hasCustomLevel)}>
+                  {hasCustomLevel ? 'カスタム' : `目標連動 ${levelPreset.vocabularyLevel} / ${readabilityLabel(levelPreset.readabilityLevel)}`}
+                </span>
+                {hasCustomLevel ? (
+                  <button type="button" data-testid="reset-advanced-level" onClick={resetLevelPreset} style={advancedResetStyle}>
+                    目標レベルに戻す
+                  </button>
+                ) : null}
+              </div>
+            </div>
             <div style={advancedGridStyle}>
               <label style={advancedLabelStyle}>
                 <span style={advancedLabelTextStyle}>単語レベル</span>
@@ -282,10 +317,9 @@ export function SetupScreen({
                   aria-label="単語レベル"
                   data-testid="advanced-vocabulary-level"
                   value={vocabularyLevel}
-                  onChange={(e) => setVocabularyLevel(e.target.value as AutoCefr)}
+                  onChange={(e) => setVocabularyLevel(e.target.value as Cefr)}
                   style={selectStyle}
                 >
-                  <option value="auto">自動</option>
                   {CEFR_LEVELS.map((level) => (
                     <option key={level} value={level}>
                       {level}
@@ -299,10 +333,9 @@ export function SetupScreen({
                   aria-label="文構造の読みやすさ"
                   data-testid="advanced-readability-level"
                   value={readabilityLevel}
-                  onChange={(e) => setReadabilityLevel(e.target.value as AutoReadability)}
+                  onChange={(e) => setReadabilityLevel(e.target.value as ReadabilityLevel)}
                   style={selectStyle}
                 >
-                  <option value="auto">自動</option>
                   {READABILITY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
@@ -642,6 +675,46 @@ const homageInputStyle: CSSProperties = {
   padding: '9px 12px',
   width: '100%',
   boxSizing: 'border-box',
+};
+
+const advancedHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
+  gap: 12,
+  marginBottom: 12,
+};
+
+const advancedStatusWrapStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+  flex: 'none',
+};
+
+const advancedStatusStyle = (custom: boolean): CSSProperties => ({
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  fontWeight: 700,
+  color: custom ? colors.terracotta : colors.primaryDeep,
+  background: custom ? '#FBF3F0' : colors.surfaceBlue,
+  border: `1px solid ${custom ? colors.terracottaBorder : colors.primaryBorder}`,
+  borderRadius: radius.chip,
+  padding: '4px 8px',
+  whiteSpace: 'nowrap',
+});
+
+const advancedResetStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  fontWeight: 600,
+  color: colors.inkSoft,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.chip,
+  padding: '4px 8px',
+  cursor: 'pointer',
 };
 
 const advancedGridStyle: CSSProperties = {

@@ -15,12 +15,14 @@ import type {
   GenerationRequest,
   LearningIntent,
   PassageAnnotationRequest,
+  PassageIllustrationRequest,
   Sentence,
   StoryPlan,
   StoryPlanExtensionRequest,
 } from '../../src/types/domain';
 import { lengthSpec } from '../../src/domain/generation/lengthSpec';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
+import { readabilityForCefr } from '../../src/domain/difficulty/levelPreset';
 
 const CEFR = ['A2', 'B1', 'B2', 'C1', 'C2'] as const;
 const LEARNING_INTENTS = ['business', 'daily', 'toeic', 'eiken', 'academic', 'travel'] as const;
@@ -71,6 +73,7 @@ export const PASSAGE_JSON_SCHEMA = {
         newCount: { type: 'integer' },
         reviewCount: { type: 'integer' },
         approxWords: { type: 'integer' },
+        sceneIllustrationUrl: { type: 'string' },
       },
       required: ['title', 'intent', 'level', 'newCount', 'reviewCount', 'approxWords'],
     },
@@ -329,11 +332,12 @@ function passageUser(req: GenerationRequest): string {
     masteryDensity: t.masteryDensity,
     attributes: t.attributes ?? {},
   }));
+  const readabilityLevel = req.readabilityLevel ?? readabilityForCefr(req.level);
   const request = {
     level: req.level,
     intent: req.intent,
     contentType: req.contentType,
-    readabilityLevel: req.readabilityLevel ?? 'standard',
+    readabilityLevel,
     approxWords: req.wordTarget,
     newWordRatio: req.newWordRatio,
     targetWords: targets,
@@ -751,10 +755,10 @@ export function storyPlanExtensionMaxTokens(additionalChapters = 3): number {
   return Math.min(2200, 900 + Math.max(1, additionalChapters) * 260);
 }
 
-// ── Character illustration (Requirement 6.8) ─────────────────────────────────
+// ── Illustration prompts ─────────────────────────────────────────────────────
 
 /**
- * Build the English image prompt for one character portrait. The character's Japanese description is
+ * Build the English image prompt for one full-body character illustration. The character's Japanese description is
  * passed through verbatim (image models read Japanese; a machine translation would drift), wrapped in
  * a fixed style directive so the whole cast reads as one coherent illustrated set. `styleHint` (the
  * plan's homage note or genre) biases mood/palette without ever reproducing a source work.
@@ -768,13 +772,51 @@ export function buildCharacterIllustrationPrompt(req: {
 }): string {
   const style = req.styleHint?.trim() ? ` Overall style/mood: ${req.styleHint.trim()}.` : '';
   return [
-    `Character portrait illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
+    `Full-body character illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
     `Character description (Japanese): ${req.descriptionJa}`,
     'Highly stylized 2D storybook/anime-inspired character art; clearly illustrated, not photorealistic;',
     'memorable silhouette; expressive face; signature outfit, color accent, or prop from the description;',
-    'clean graphic shapes; rich but controlled colors; waist-up; single character centered;',
+    'head-to-toe full body with the entire figure visible; no cropping at head, hands, feet, or props;',
+    'clean graphic shapes; rich but controlled colors; single character centered with generous padding;',
     `soft even lighting; simple neutral background; no text, letters, watermark, or logo.${style}`,
   ].join(' ');
+}
+
+function renderSentence(sentence: Sentence): string {
+  return tokenizer.renderText({ tokens: sentence.tokens, translationJa: '' }).trim();
+}
+
+/** Build the English image prompt for one passage-level scene illustration. */
+export function buildPassageIllustrationPrompt(req: PassageIllustrationRequest): string {
+  const excerpt = req.sentences
+    .slice(0, 12)
+    .map((sentence, index) => `${index + 1}. ${renderSentence(sentence)}`)
+    .join('\n');
+  const story = req.story
+    ? [
+        `Story genre: ${req.story.genre}.`,
+        `Story title (Japanese): ${req.story.titleJa}.`,
+        `Story synopsis (Japanese): ${req.story.synopsisJa}.`,
+        req.story.chapterHeadingJa ? `Chapter heading (Japanese): ${req.story.chapterHeadingJa}.` : '',
+        req.story.chapterBeatJa ? `Chapter beat (Japanese): ${req.story.chapterBeatJa}.` : '',
+        req.story.characters.length
+          ? `Characters (Japanese descriptions): ${JSON.stringify(req.story.characters)}.`
+          : '',
+        req.story.styleHint?.trim() ? `Overall story style/mood: ${req.story.styleHint.trim()}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : 'Standalone article passage; use the concrete setting, people, objects, or action implied by the text.';
+  return [
+    `Create one polished scene illustration for a CEFR ${req.level} English reading passage.`,
+    `Passage title: ${req.title}. Learning intent: ${req.intent}.`,
+    story,
+    `Passage excerpt:\n${excerpt}`,
+    'Show the single most representative moment, setting, or action implied by the passage; no montage, no comic panels, no before/after layout.',
+    'If characters are listed, keep their appearance consistent with the descriptions and do not add unlisted main characters.',
+    'Stylized 2D storybook/anime-inspired editorial illustration; clear foreground focus, readable environment, rich but controlled colors.',
+    'Landscape composition for a reading screen header; no text, letters, captions, UI, watermark, or logo.',
+  ].join('\n');
 }
 
 const SUGGEST_SYSTEM = [

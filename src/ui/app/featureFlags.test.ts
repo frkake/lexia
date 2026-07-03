@@ -24,6 +24,10 @@ describe('featureFlags scaffold (7.4 / 9.2)', () => {
     expect(DEFAULT_FEATURE_FLAGS.characterIllustrations).toBe(true);
   });
 
+  it('enables passage illustrations by default (graceful when no image API)', () => {
+    expect(DEFAULT_FEATURE_FLAGS.passageIllustrations).toBe(true);
+  });
+
   it('resolves to the defaults when no overrides are given', () => {
     expect(resolveFeatureFlags()).toEqual(DEFAULT_FEATURE_FLAGS);
   });

@@ -17,6 +17,7 @@ import type {
   GenerationResponse,
   NoticeCue,
   PassageAnnotationRequest,
+  PassageIllustrationRequest,
   PassageOutput,
   Sentence,
   StopReason,
@@ -39,6 +40,7 @@ import {
   buildAnnotationMessages,
   buildCharacterIllustrationPrompt,
   buildPassageMessages,
+  buildPassageIllustrationPrompt,
   buildStoryPlanExtensionMessages,
   buildStoryPlanMessages,
   buildSuggestionMessages,
@@ -262,7 +264,7 @@ function normalizeSentence(raw: Raw): Sentence {
   return { tokens, translationJa, ...(translationSpans ? { translationSpans } : {}) };
 }
 
-/** Ensure arrays exist and meta is complete (backfilled from the request) for the validator/UI. */
+/** Ensure arrays exist and request-owned meta stays authoritative for the validator/UI. */
 function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
   const sentences = asArray<Raw>(core.sentences).map(normalizeSentence);
   const targetSpans = asArray<PassageOutput['targetSpans'][number]>(core.targetSpans);
@@ -276,8 +278,8 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
     : metaIn.storyRef;
   const meta: PassageOutput['meta'] = {
     title: metaIn.title || 'Reading',
-    intent: metaIn.intent || req.intent,
-    level: metaIn.level || req.level,
+    intent: req.intent,
+    level: req.level,
     newCount: typeof metaIn.newCount === 'number' ? metaIn.newCount : newCount,
     reviewCount: typeof metaIn.reviewCount === 'number' ? metaIn.reviewCount : distinct.size - newCount,
     approxWords:
@@ -646,13 +648,13 @@ export async function extendStoryPlan(
   };
 }
 
-// ── Character illustration (Requirement 6.8) ─────────────────────────────────
+// ── Image illustration (Requirement 6.8 + passage scene enrichment) ──────────
 //
 // Image generation is a SEPARATE provider axis from text: Anthropic has no image API, so
 // `IMAGE_PROVIDER` (default "openai"; "gemini"/"google" -> Imagen) is resolved independently of
-// LLM_PROVIDER. The portrait comes back as base64 and is returned as a `data:` URL the client stores
-// inline with the plan (there is no CDN). Failures raise ProviderError like the text path so the
-// caller can degrade to no portrait.
+// LLM_PROVIDER. Images come back as base64 and are returned as `data:` URLs the client stores inline
+// with the passage/story data (there is no CDN). Failures raise ProviderError like the text path so
+// the caller can degrade to no illustration.
 
 type ImageProvider = 'openai' | 'gemini';
 
@@ -682,21 +684,21 @@ function imageModelFor(env: Env, provider: ImageProvider): string {
   return provider === 'gemini' ? GEMINI_IMAGE_MODEL_DEFAULT : OPENAI_IMAGE_MODEL_DEFAULT;
 }
 
-/**
- * Generate one character's portrait, returning a `data:image/png;base64,...` URL (Requirement 6.8).
- * OpenAI hits the Images endpoint (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint
- * (`predictions[].bytesBase64Encoded`, key as query param per the REST contract). Small size + low
- * quality keep the data URL light since it lands in IndexedDB.
- */
-export async function illustrateCharacter(
+interface ImageGenerationOptions {
+  openAiSize: string;
+  geminiAspectRatio: string;
+  quality?: 'low' | 'medium' | 'high' | 'auto';
+}
+
+async function generateImageDataUrl(
   env: Env,
-  req: CharacterIllustrationRequest,
-  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+  prompt: string,
+  fetchImpl: typeof fetch,
+  options: ImageGenerationOptions,
 ): Promise<string> {
   const provider = resolveImageProvider(env);
   const apiKey = requireImageKey(env, provider);
   const model = imageModelFor(env, provider);
-  const prompt = buildCharacterIllustrationPrompt(req);
 
   let response: Response;
   try {
@@ -709,14 +711,20 @@ export async function illustrateCharacter(
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
                 instances: [{ prompt }],
-                parameters: { sampleCount: 1, aspectRatio: '1:1' },
+                parameters: { sampleCount: 1, aspectRatio: options.geminiAspectRatio },
               }),
             },
           )
         : await fetchImpl(OPENAI_IMAGE_URL, {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({ model, prompt, n: 1, size: '1024x1024', quality: 'low' }),
+            body: JSON.stringify({
+              model,
+              prompt,
+              n: 1,
+              size: options.openAiSize,
+              quality: options.quality ?? 'low',
+            }),
           });
   } catch (cause) {
     throw new ProviderError(503, `Image API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`);
@@ -731,6 +739,37 @@ export async function illustrateCharacter(
   const b64 = provider === 'gemini' ? parseGeminiImage(body) : parseOpenAiImage(body);
   if (!b64) throw new ProviderError(502, `${provider} image API returned no image.`);
   return `data:image/png;base64,${b64}`;
+}
+
+/**
+ * Generate one character's full-body illustration, returning a `data:image/png;base64,...` URL (Requirement 6.8).
+ * OpenAI hits the Images endpoint (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint
+ * (`predictions[].bytesBase64Encoded`, key as query param per the REST contract). Small size + low
+ * quality keep the data URL light since it lands in IndexedDB.
+ */
+export async function illustrateCharacter(
+  env: Env,
+  req: CharacterIllustrationRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  const prompt = buildCharacterIllustrationPrompt(req);
+  return generateImageDataUrl(env, prompt, fetchImpl, {
+    openAiSize: '1024x1536',
+    geminiAspectRatio: '3:4',
+  });
+}
+
+/** Generate one passage-level scene illustration as a `data:image/png;base64,...` URL. */
+export async function illustratePassage(
+  env: Env,
+  req: PassageIllustrationRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  const prompt = buildPassageIllustrationPrompt(req);
+  return generateImageDataUrl(env, prompt, fetchImpl, {
+    openAiSize: '1536x1024',
+    geminiAspectRatio: '16:9',
+  });
 }
 
 function parseOpenAiImage(body: unknown): string | undefined {

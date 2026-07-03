@@ -22,6 +22,7 @@ export interface SessionState {
   completedAt?: number;
 
   startPassage(passage: IndexedPassage, now: number): void;
+  replacePassage(passage: IndexedPassage): void;
   updateProgress(sentenceIndex: number): void;
   setActiveWord(wordId: string | null): void;
   markCompleted(now: number): void;
@@ -55,6 +56,12 @@ export function createSessionStore() {
         startedAt: now,
         completedAt: undefined,
       });
+    },
+
+    replacePassage(passage) {
+      const current = get().passage;
+      if (!current || current.passageId !== passage.passageId) return;
+      set({ passage });
     },
 
     updateProgress(sentenceIndex) {

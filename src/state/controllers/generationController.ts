@@ -15,6 +15,7 @@
 
 import { sessionPlanner, type SessionPlanner } from '../../domain/session/sessionPlanner';
 import type { GenerationOrchestrator, GenerationError } from '../../domain/generation/generationOrchestrator';
+import { tokenizer } from '../../domain/tokenizer/joinService';
 import { newSchedulingState } from './newState';
 import type { SessionStore } from '../stores/sessionStore';
 import type { PlayerStore } from '../stores/playerStore';
@@ -25,7 +26,15 @@ import type {
   TimingMapRepository,
   TtsSynthesisPort,
 } from '../../types/ports';
-import type { IndexedPassage, SetupConfig, StoryContext, UserId, WordData, WordSchedulingState } from '../../types/domain';
+import type {
+  IndexedPassage,
+  PassageIllustrationRequest,
+  SetupConfig,
+  StoryContext,
+  UserId,
+  WordData,
+  WordSchedulingState,
+} from '../../types/domain';
 
 export interface GenerationControllerDeps {
   /** Builds a fresh orchestrator bound to the given passageId. */
@@ -46,6 +55,8 @@ export interface GenerationControllerDeps {
   planner?: SessionPlanner;
   /** Optional supplied word attributes for level control + cue grounding. */
   wordData?: Record<string, WordData>;
+  /** Optional scene-illustration generator. Enrichment only; failures never block reading. */
+  illustratePassage?: (req: PassageIllustrationRequest) => Promise<string>;
 }
 
 export interface GenerationOutcome {
@@ -58,6 +69,8 @@ export interface GenerationOutcome {
    * TTS degraded. Present only when `ok` (text is already rendered by the time it settles).
    */
   audio?: Promise<boolean>;
+  /** Resolves once scene illustration enrichment settles. Present only when configured. */
+  illustration?: Promise<boolean>;
 }
 
 export interface GenerationPipelineOptions {
@@ -101,7 +114,8 @@ export async function runGenerationPipeline(
   const passage = attachStoryRef(result.value, options.storyContext);
 
   // Persist the passage, then render NOW (text viewable + lookup-able before audio).
-  await deps.passages.put({ passageId, userId, createdAt: now, passage: passage.source });
+  const record = { passageId, userId, createdAt: now, passage: passage.source };
+  await deps.passages.put(record);
   // Seed New states so the woven-in words appear in the wordbook / dashboard breakdown.
   for (const s of toSeed) await deps.scheduling.upsert(s);
 
@@ -111,8 +125,11 @@ export async function runGenerationPipeline(
 
   deps.player.getState().setStatus('loading');
   const audio = synthesizeAudio(deps, passage);
+  const illustration = deps.illustratePassage
+    ? enrichPassageIllustration(deps, record, passage, options.storyContext)
+    : undefined;
 
-  return { ok: true, passageId, passage, audio };
+  return { ok: true, passageId, passage, audio, illustration };
 }
 
 function attachStoryRef(passage: IndexedPassage, storyContext?: StoryContext): IndexedPassage {
@@ -144,4 +161,59 @@ async function synthesizeAudio(deps: GenerationControllerDeps, passage: IndexedP
     deps.player.getState().setStatus('unavailable');
     return false;
   }
+}
+
+async function enrichPassageIllustration(
+  deps: GenerationControllerDeps,
+  record: { passageId: string; userId: UserId; createdAt: number; passage: IndexedPassage['source'] },
+  passage: IndexedPassage,
+  storyContext?: StoryContext,
+): Promise<boolean> {
+  if (!deps.illustratePassage || passage.source.sentences.length === 0) return false;
+  try {
+    const illustrationUrl = await deps.illustratePassage(buildPassageIllustrationRequest(passage, storyContext));
+    const enrichedSource = {
+      ...passage.source,
+      meta: {
+        ...passage.source.meta,
+        sceneIllustrationUrl: illustrationUrl,
+      },
+    };
+    await deps.passages.put({ ...record, passage: enrichedSource });
+    deps.session.getState().replacePassage(tokenizer.index(record.passageId, enrichedSource));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildPassageIllustrationRequest(
+  passage: IndexedPassage,
+  storyContext?: StoryContext,
+): PassageIllustrationRequest {
+  const plan = storyContext?.plan;
+  const chapter = plan?.chapters.find((item) => item.index === storyContext?.chapterIndex);
+  return {
+    title: passage.source.meta.title,
+    intent: passage.source.meta.intent,
+    level: passage.source.meta.level,
+    sentences: passage.source.sentences,
+    ...(plan
+      ? {
+          story: {
+            genre: plan.genre,
+            titleJa: plan.titleJa,
+            synopsisJa: plan.synopsisJa,
+            ...(chapter?.headingJa ? { chapterHeadingJa: chapter.headingJa } : {}),
+            ...(chapter?.beatJa ? { chapterBeatJa: chapter.beatJa } : {}),
+            characters: plan.characters.map((character) => ({
+              name: character.name,
+              role: character.role,
+              descriptionJa: character.descriptionJa,
+            })),
+            styleHint: plan.homage?.styleNoteJa || plan.genre,
+          },
+        }
+      : {}),
+  };
 }

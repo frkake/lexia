@@ -54,6 +54,37 @@ describe('sessionStore', () => {
     expect(store.getState().activeWordId).toBeNull();
   });
 
+  it('replaces the active passage without resetting progress or active word', () => {
+    const store = createSessionStore();
+    const original = indexedPassage();
+    store.getState().startPassage(original, 1_000);
+    store.getState().updateProgress(2);
+    store.getState().setActiveWord('w1');
+
+    const enriched = {
+      ...original,
+      source: {
+        ...original.source,
+        meta: { ...original.source.meta, sceneIllustrationUrl: 'data:image/png;base64,SCENE' },
+      },
+    };
+    store.getState().replacePassage(enriched);
+
+    const s = store.getState();
+    expect(s.passage?.source.meta.sceneIllustrationUrl).toBe('data:image/png;base64,SCENE');
+    expect(s.sentenceIndex).toBe(2);
+    expect(s.percent).toBe(60);
+    expect(s.activeWordId).toBe('w1');
+  });
+
+  it('ignores a replacement for a different passage', () => {
+    const store = createSessionStore();
+    const original = indexedPassage();
+    store.getState().startPassage(original, 1_000);
+    store.getState().replacePassage({ ...original, passageId: 'p2' });
+    expect(store.getState().passage?.passageId).toBe('p1');
+  });
+
   it('marks completion at 100 percent', () => {
     const store = createSessionStore();
     store.getState().startPassage(indexedPassage(), 1_000);

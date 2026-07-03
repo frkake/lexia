@@ -145,19 +145,20 @@ function CharacterPortrait({ character, illustrating }: { character: StoryCharac
 }
 
 const PORTRAIT_SIZE = 56;
+const PORTRAIT_HEIGHT = 84;
 
 const portraitImageStyle: CSSProperties = {
   width: PORTRAIT_SIZE,
-  height: PORTRAIT_SIZE,
+  height: PORTRAIT_HEIGHT,
   borderRadius: radius.control,
-  objectFit: 'cover',
+  objectFit: 'contain',
   flexShrink: 0,
   background: colors.surfaceSubtle,
 };
 
 const portraitSkeletonStyle: CSSProperties = {
   width: PORTRAIT_SIZE,
-  height: PORTRAIT_SIZE,
+  height: PORTRAIT_HEIGHT,
   borderRadius: radius.control,
   flexShrink: 0,
   background: `linear-gradient(90deg, ${colors.surfaceSubtle}, ${colors.borderControl}, ${colors.surfaceSubtle})`,
@@ -165,7 +166,7 @@ const portraitSkeletonStyle: CSSProperties = {
 
 const portraitPlaceholderStyle: CSSProperties = {
   width: PORTRAIT_SIZE,
-  height: PORTRAIT_SIZE,
+  height: PORTRAIT_HEIGHT,
   borderRadius: radius.control,
   flexShrink: 0,
   background: colors.surfaceSubtle,

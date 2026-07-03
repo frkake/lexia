@@ -227,9 +227,13 @@ export function ReadingScreen({
 
             <figure style={{ margin: '0 0 30px' }}>
               <div className="reading-illustration" style={illustrationStyle}>
-                <span style={{ fontFamily: fonts.mono, fontSize: 11, letterSpacing: '.05em', color: colors.faint2 }}>
-                  物語のイラスト · story illustration
-                </span>
+                {meta.sceneIllustrationUrl ? (
+                  <img src={meta.sceneIllustrationUrl} alt={`${meta.title} の場面イラスト`} style={illustrationImageStyle} />
+                ) : (
+                  <span style={{ fontFamily: fonts.mono, fontSize: 11, letterSpacing: '.05em', color: colors.faint2 }}>
+                    本文のイラスト · story illustration
+                  </span>
+                )}
               </div>
               <figcaption style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, marginTop: 9, textAlign: 'center' }}>
                 場面を視覚化したイラストが、単語と文脈の記憶を結びつけます
@@ -491,6 +495,14 @@ const illustrationStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  overflow: 'hidden',
+};
+
+const illustrationImageStyle: React.CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  display: 'block',
 };
 
 const detailOverlayStyle: React.CSSProperties = {
@@ -595,16 +607,16 @@ const storyCharacterItemStyle: React.CSSProperties = {
 
 const storyCharacterImageStyle: React.CSSProperties = {
   width: 52,
-  height: 52,
+  height: 78,
   flex: '0 0 auto',
-  objectFit: 'cover',
+  objectFit: 'contain',
   borderRadius: radius.control,
   background: colors.avatarBg,
 };
 
 const storyCharacterInitialStyle: React.CSSProperties = {
   width: 52,
-  height: 52,
+  height: 78,
   flex: '0 0 auto',
   display: 'flex',
   alignItems: 'center',

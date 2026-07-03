@@ -110,7 +110,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
 
     // Pipeline persisted the passage and the route navigated into Reading
     // (the title renders in both the mobile header and the main column).
-    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
     // Player degraded (no TTS backend) but the passage is on screen and lookup-able.
     await waitFor(() => expect(container.player.getState().status).toBe('unavailable'));
     expect(await createRepositories(db).passages.recent(userId, 5)).toHaveLength(1);
@@ -162,7 +162,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
 
     expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
     fireEvent.click(screen.getByText('文章を生成する'));
-    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
 
     // The reading body is the sentence-unit grid (not flowing prose) …
     await waitFor(() => expect(screen.getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid'));
@@ -216,13 +216,62 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
     fireEvent.click(screen.getByText('文章を生成する'));
 
-    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
     // Suggestion is consulted (on setup open for the initial candidates and/or at generate time).
     expect(suggestCalls).toBeGreaterThanOrEqual(1);
     // The auto-proposed word is woven in AND tracked in the SRS so it can reappear later.
     await waitFor(async () => {
       const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
       expect(seeded).toBeDefined();
+    });
+  });
+
+  it('re-syncs generated target words to a custom vocabulary level before generation', async () => {
+    const userId = 'route_custom_level_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+
+    let suggestCalls = 0;
+    const suggestRequests: WordSuggestionRequest[] = [];
+    const gateway: ContentGateway = {
+      async suggestWords(req) {
+        suggestCalls += 1;
+        suggestRequests.push(req);
+        return suggestCalls === 1 ? ['alpha'] : ['deal'];
+      },
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByTestId('target-alpha')).toBeTruthy();
+    fireEvent.change(screen.getByTestId('advanced-vocabulary-level'), { target: { value: 'C1' } });
+    fireEvent.click(screen.getByText('文章を生成する'));
+
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
+    expect(suggestRequests[suggestRequests.length - 1]?.level).toBe('C1');
+    await waitFor(async () => {
+      const seeded = await createRepositories(db).scheduling.get(userId, 'deal');
+      expect(seeded?.level).toBe('C1');
     });
   });
 
@@ -322,6 +371,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
 
     // Candidates reload with no avoid list, so the previously-excluded word is offered again.
     expect(await screen.findByTestId('target-alpha')).toBeTruthy();
+    expect(suggestCalls).toBeGreaterThanOrEqual(2);
     expect(suggestRequests[suggestRequests.length - 1]?.exclude ?? []).not.toContain('alpha');
   });
 

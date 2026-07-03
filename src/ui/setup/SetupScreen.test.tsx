@@ -85,12 +85,48 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     const { getByTestId, getByText } = renderScreen({ candidates: [], onGenerate });
     fireEvent.click(getByTestId('exam-value-2'));
     fireEvent.change(getByTestId('advanced-vocabulary-level'), { target: { value: 'C1' } });
-    fireEvent.change(getByTestId('advanced-readability-level'), { target: { value: 'easy' } });
+    fireEvent.change(getByTestId('advanced-readability-level'), { target: { value: 'advanced' } });
     fireEvent.click(getByText('文章を生成する'));
     expect(onGenerate.mock.calls[0]![0].advancedDifficulty).toEqual({
       vocabularyLevel: 'C1',
-      readabilityLevel: 'easy',
+      readabilityLevel: 'advanced',
     });
+  });
+
+  it('syncs advanced level controls to the selected target level preset', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({ candidates: [], onGenerate });
+
+    fireEvent.click(getByTestId('exam-kind-toeic'));
+    fireEvent.click(getByTestId('exam-value-800'));
+    expect((getByTestId('advanced-vocabulary-level') as HTMLSelectElement).value).toBe('B2');
+    expect((getByTestId('advanced-readability-level') as HTMLSelectElement).value).toBe('standard');
+    expect(getByTestId('advanced-level-mode').textContent).toContain('B2');
+
+    fireEvent.click(getByTestId('exam-value-960'));
+    expect((getByTestId('advanced-vocabulary-level') as HTMLSelectElement).value).toBe('C1');
+    expect((getByTestId('advanced-readability-level') as HTMLSelectElement).value).toBe('advanced');
+
+    fireEvent.click(getByText('文章を生成する'));
+    expect(onGenerate.mock.calls[0]![0].advancedDifficulty).toBeUndefined();
+  });
+
+  it('treats advanced level values as a custom target-level preset that can be reset', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+    });
+
+    fireEvent.change(getByTestId('advanced-vocabulary-level'), { target: { value: 'C1' } });
+    expect(getByTestId('advanced-level-mode').textContent).toBe('カスタム');
+    fireEvent.click(getByTestId('reset-advanced-level'));
+    expect((getByTestId('advanced-vocabulary-level') as HTMLSelectElement).value).toBe('B1');
+    expect((getByTestId('advanced-readability-level') as HTMLSelectElement).value).toBe('easy');
+
+    fireEvent.click(getByText('文章を生成する'));
+    expect(onGenerate.mock.calls[0]![0].advancedDifficulty).toBeUndefined();
   });
 
   it('reveals genre + homage inputs only when a story content type is chosen (6.4)', () => {

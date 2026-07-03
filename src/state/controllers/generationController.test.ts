@@ -16,6 +16,7 @@ import type {
   PassageOutput,
   SetupConfig,
   StoryPlan,
+  PassageIllustrationRequest,
   TimingMap,
   UserId,
 } from '../../types/domain';
@@ -131,6 +132,44 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect(inProgress.map((p) => p.passageId)).toContain(PASSAGE_ID);
   });
 
+  it('enriches the persisted and active passage with a scene illustration after text is readable', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    const gate = deferred<string>();
+    const { deps, repos, session, userId } = await env(tts);
+    let captured: PassageIllustrationRequest | null = null;
+    deps.illustratePassage = (req) => {
+      captured = req;
+      return gate.promise;
+    };
+
+    const outcome = await runGenerationPipeline(deps, SETUP, userId);
+
+    expect(outcome.ok).toBe(true);
+    expect(session.getState().passage?.source.meta.sceneIllustrationUrl).toBeUndefined();
+    expect(captured).toMatchObject({ title: '取引成立', intent: 'business', level: 'B1' });
+
+    gate.resolve('data:image/png;base64,SCENE');
+    expect(await outcome.illustration).toBe(true);
+
+    expect(session.getState().passage?.source.meta.sceneIllustrationUrl).toBe('data:image/png;base64,SCENE');
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBe('data:image/png;base64,SCENE');
+  });
+
+  it('degrades when passage illustration generation fails', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    const { deps, repos, session, userId } = await env(tts);
+    deps.illustratePassage = async () => {
+      throw new Error('image down');
+    };
+
+    const outcome = await runGenerationPipeline(deps, SETUP, userId);
+
+    expect(outcome.ok).toBe(true);
+    expect(await outcome.illustration).toBe(false);
+    expect(session.getState().passage?.source.meta.sceneIllustrationUrl).toBeUndefined();
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBeUndefined();
+  });
+
   it('threads story context and persists the generated chapter with storyRef', async () => {
     const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
     const { deps, repos, userId } = await env(tts);
@@ -144,12 +183,17 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
       chapters: [{ index: 0, headingJa: '第一章', beatJa: '旅立ち' }],
     };
     let capturedReq: GenerationRequest | null = null;
+    const capturedIllustrationReqs: PassageIllustrationRequest[] = [];
     deps.createOrchestrator = (passageId) => ({
       generate: async (req) => {
         capturedReq = req;
         return ok(tokenizer.index(passageId, passageOutput()));
       },
     });
+    deps.illustratePassage = async (req) => {
+      capturedIllustrationReqs.push(req);
+      return 'data:image/png;base64,STORYSCENE';
+    };
 
     const outcome = await runGenerationPipeline(deps, { ...SETUP, contentType: 'long_story' }, userId, {
       passageId: 'story_1:0',
@@ -163,6 +207,13 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect(reqSeen.storyContext?.plan.titleJa).toBe('星の物語');
     const persisted = await repos.passages.get('story_1:0');
     expect(persisted?.passage.meta.storyRef).toEqual({ storyId: 'story_1', chapterIndex: 0 });
+    await outcome.illustration;
+    expect(capturedIllustrationReqs[0]?.story).toMatchObject({
+      genre: 'fantasy',
+      titleJa: '星の物語',
+      chapterHeadingJa: '第一章',
+    });
+    expect(capturedIllustrationReqs[0]?.story?.characters[0]?.name).toBe('Mia');
   });
 
   it('degrades on TTS failure — text continues, player marked unavailable', async () => {

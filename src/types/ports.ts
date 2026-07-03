@@ -24,6 +24,7 @@ import type {
   NoticeCue,
   PassageAnnotationRequest,
   CharacterIllustrationRequest,
+  PassageIllustrationRequest,
   StoryPlan,
   StoryPlanExtensionRequest,
   StoryPlanRequest,
@@ -59,6 +60,11 @@ export interface ContentGateway {
    * Optional so lightweight gateways/mocks need not implement it; enrichment is skipped when absent.
    */
   annotatePassage?(req: PassageAnnotationRequest): Promise<NoticeCue[]>;
+  /**
+   * Generate a scene illustration for an accepted passage, returning a base64 `data:` URL. Optional
+   * enrichment so lightweight gateways/mocks need not implement it; failure never blocks reading.
+   */
+  illustratePassage?(req: PassageIllustrationRequest): Promise<string>;
 }
 
 /**
