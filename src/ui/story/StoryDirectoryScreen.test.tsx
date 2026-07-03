@@ -20,6 +20,7 @@ const PLAN: StoryPlan = {
 describe('<StoryDirectoryScreen/>', () => {
   it('shows synopsis, characters, and opens a generated chapter', () => {
     const onOpenChapter = vi.fn();
+    const onRegenerateCharacter = vi.fn();
     render(
       <StoryDirectoryScreen
         plan={PLAN}
@@ -28,6 +29,7 @@ describe('<StoryDirectoryScreen/>', () => {
           { chapterIndex: 1, headingJa: '第二章 星の門', generated: false },
         ]}
         onOpenChapter={onOpenChapter}
+        onRegenerateCharacter={onRegenerateCharacter}
       />,
     );
     expect(screen.getByText('星の継承者')).toBeTruthy();
@@ -41,5 +43,25 @@ describe('<StoryDirectoryScreen/>', () => {
     expect(screen.getByText('未生成')).toBeTruthy();
     fireEvent.click(screen.getByText('第二章 星の門'));
     expect(onOpenChapter).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('regenerate-directory-character-0'));
+    expect(onRegenerateCharacter).toHaveBeenCalledWith(0);
+  });
+
+  it('shows character portrait regeneration busy and error states', () => {
+    render(
+      <StoryDirectoryScreen
+        plan={PLAN}
+        chapters={[]}
+        onRegenerateCharacter={() => {}}
+        regeneratingCharacterIndex={0}
+        characterIllustrationError="キャラクターイラストを再生成できませんでした。"
+      />,
+    );
+    const button = screen.getByTestId('regenerate-directory-character-0') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByText('生成中…')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('キャラクターイラストを再生成できませんでした。');
   });
 });

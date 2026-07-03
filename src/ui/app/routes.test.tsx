@@ -13,6 +13,7 @@ import { createRepositories } from '../../infra/persistence/repositories';
 import { createPlayerStore } from '../../state/stores/playerStore';
 import { createSessionStore } from '../../state/stores/sessionStore';
 import { createSettingsStore, settingsStore } from '../../state/stores/settingsStore';
+import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { ContentGateway } from '../../types/ports';
 import type { PassageOutput, UserId, WordData, WordSchedulingState, WordSuggestionRequest } from '../../types/domain';
 
@@ -46,6 +47,22 @@ function validPassage(): PassageOutput {
     targetSpans: [{ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [],
     noticeCues: [],
+  };
+}
+
+function validNoticePassage(): PassageOutput {
+  const passage = validPassage();
+  return {
+    ...passage,
+    noticeCues: [
+      {
+        index: 1,
+        span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 },
+        category: 'phrase',
+        anchorText: 'closed the deal',
+        explanationJa: 'deal 単体ではなく、取引を成立させる定型表現。',
+      },
+    ],
   };
 }
 
@@ -182,6 +199,104 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     expect(screen.getAllByText('この文章で気づきたいこと')).toHaveLength(1);
 
     act(() => settingsStore.getState().setTranslationMode(prevMode)); // restore for sibling tests
+  });
+
+  it('marks a non-word notice expression as unknown from the reading right rail', async () => {
+    const userId = 'route_unknown_notice_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    await repos.scheduling.upsert(sched(userId));
+
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validNoticePassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
+    fireEvent.click(screen.getByText('文章を生成する'));
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
+
+    fireEvent.click(await screen.findByLabelText('closed the deal を知らなかったとして記録'));
+
+    await waitFor(async () => {
+      const log = await repos.reviewLog.since(userId, 0);
+      expect(
+        log.some((entry) => entry.wordId === 'closed the deal' && entry.rating === 1 && entry.source === 'review'),
+      ).toBe(true);
+    });
+  });
+
+  it('regenerates the current passage illustration and persists the replacement', async () => {
+    const userId = 'route_illustration_regen_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    const passage = validPassage();
+    passage.meta.sceneIllustrationUrl = 'data:image/png;base64,OLD';
+    await repos.passages.put({ passageId: 'p1', userId, createdAt: 1_000, passage });
+
+    let capturedTitle = '';
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+      async illustratePassage(req) {
+        capturedTitle = req.title;
+        return 'data:image/png;base64,NEWSCENE';
+      },
+    };
+    const session = createSessionStore();
+    session.getState().startPassage(tokenizer.index('p1', passage), 1_000);
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts: degradingTts,
+      now: () => 2_000,
+      settings: createSettingsStore(),
+      session,
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/p/p1'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('regenerate-passage-illustration'));
+
+    await waitFor(async () => {
+      expect((await repos.passages.get('p1'))?.passage.meta.sceneIllustrationUrl).toBe('data:image/png;base64,NEWSCENE');
+      expect(container.session.getState().passage?.source.meta.sceneIllustrationUrl).toBe('data:image/png;base64,NEWSCENE');
+    });
+    expect(capturedTitle).toBe('取引の成立');
   });
 
   it('auto-proposes new words when none are selected, weaving + seeding them into the SRS', async () => {

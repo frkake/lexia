@@ -41,7 +41,7 @@ describe('<StudyWordsList/>', () => {
 
   it('shows the study-word count', () => {
     const { getByText } = render(<StudyWordsList words={words} />);
-    expect(getByText(/学習単語/)).toBeTruthy();
+    expect(getByText(/学習語句/)).toBeTruthy();
     expect(getByText('3')).toBeTruthy();
   });
 
@@ -64,5 +64,17 @@ describe('<StudyWordsList/>', () => {
     expect(onSelectWord).toHaveBeenCalledWith('mitigate');
     fireEvent.click(getByLabelText('mitigate の発音を再生'));
     expect(onPlayWord).toHaveBeenCalledWith('mitigate');
+  });
+
+  it('marks an expression unknown directly from the rail without opening details', () => {
+    const onSelectWord = vi.fn();
+    const onMarkUnknown = vi.fn();
+    const phrase: StudyWord[] = [{ wordId: 'deal', surface: 'close a deal', stage: 'Learning' }];
+    const { getByLabelText } = render(
+      <StudyWordsList words={phrase} onSelectWord={onSelectWord} onMarkUnknown={onMarkUnknown} />,
+    );
+    fireEvent.click(getByLabelText('close a deal を知らなかったとして記録'));
+    expect(onMarkUnknown).toHaveBeenCalledWith('deal');
+    expect(onSelectWord).not.toHaveBeenCalled();
   });
 });

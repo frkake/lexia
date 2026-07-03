@@ -5,6 +5,7 @@
  * builds the list from the passage targets + reactive scheduling (useScheduling).
  */
 
+import { useState } from 'react';
 import { MasteryDot } from '../shared/MasteryDot';
 import { colors, fonts, radius } from '../theme/tokens';
 import type { MasteryStage } from '../../types/domain';
@@ -29,6 +30,7 @@ export interface StudyWordsListProps {
   words: StudyWord[];
   onSelectWord?: (wordId: string) => void;
   onPlayWord?: (wordId: string) => void;
+  onMarkUnknown?: (wordId: string) => void | Promise<void>;
 }
 
 function frequencyText(value?: number): string | null {
@@ -36,12 +38,30 @@ function frequencyText(value?: number): string | null {
   return `頻度 ${Math.max(1, Math.min(5, value))}/5`;
 }
 
-export function StudyWordsList({ words, onSelectWord, onPlayWord }: StudyWordsListProps) {
+function studyWordGridColumns(hasAudio: boolean, hasUnknown: boolean): string {
+  const columns = [hasAudio ? '28px' : null, hasUnknown ? '88px' : null].filter(Boolean);
+  return columns.length > 0 ? `minmax(0, 1fr) ${columns.join(' ')}` : 'minmax(0, 1fr)';
+}
+
+export function StudyWordsList({ words, onSelectWord, onPlayWord, onMarkUnknown }: StudyWordsListProps) {
+  const [markingUnknownId, setMarkingUnknownId] = useState<string | null>(null);
   const reappearing = words.filter((w) => (w.reappearCount ?? 0) >= REAPPEAR_THRESHOLD);
+  const gridTemplateColumns = studyWordGridColumns(Boolean(onPlayWord), Boolean(onMarkUnknown));
+  const markUnknown = async (wordId: string): Promise<void> => {
+    if (!onMarkUnknown || markingUnknownId) return;
+    setMarkingUnknownId(wordId);
+    try {
+      await onMarkUnknown(wordId);
+    } catch {
+      // Keep the rail usable if persistence fails; this mirrors the word-detail card behavior.
+    } finally {
+      setMarkingUnknownId(null);
+    }
+  };
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ fontFamily: fonts.ui, fontSize: 12, fontWeight: 600, color: colors.muted, marginBottom: 10 }}>
-        学習単語 <span style={{ color: colors.fainter }}>{words.length}</span> · 習熟度に応じて再登場
+        学習語句 <span style={{ color: colors.fainter }}>{words.length}</span> · 習熟度に応じて再登場
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {words.map((w) => (
@@ -60,7 +80,7 @@ export function StudyWordsList({ words, onSelectWord, onPlayWord }: StudyWordsLi
             }}
             style={{
               display: 'grid',
-              gridTemplateColumns: onPlayWord ? 'minmax(0, 1fr) 28px' : 'minmax(0, 1fr)',
+              gridTemplateColumns,
               gap: 8,
               alignItems: 'start',
               fontFamily: fonts.bodyJp,
@@ -112,6 +132,22 @@ export function StudyWordsList({ words, onSelectWord, onPlayWord }: StudyWordsLi
                 ▶
               </button>
             ) : null}
+            {onMarkUnknown ? (
+              <button
+                type="button"
+                aria-label={`${w.surface} を知らなかったとして記録`}
+                data-testid={`mark-unknown-${w.wordId}`}
+                disabled={markingUnknownId !== null}
+                aria-busy={markingUnknownId === w.wordId}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void markUnknown(w.wordId);
+                }}
+                style={unknownButtonStyle(markingUnknownId !== null)}
+              >
+                {markingUnknownId === w.wordId ? '記録中…' : '知らなかった'}
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -161,3 +197,17 @@ const audioButtonStyle = {
   fontSize: 10,
   cursor: 'pointer',
 } as const;
+
+const unknownButtonStyle = (disabled: boolean) => ({
+  minWidth: 86,
+  height: 28,
+  borderRadius: radius.control,
+  border: `1px solid ${colors.terracottaBorder}`,
+  background: disabled ? colors.surfaceSubtle : colors.surfaceCard,
+  color: colors.terracottaDeep,
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  fontWeight: 600,
+  cursor: disabled ? 'wait' : 'pointer',
+  opacity: disabled ? 0.72 : 1,
+} as const);

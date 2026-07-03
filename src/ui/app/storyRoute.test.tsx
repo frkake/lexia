@@ -198,6 +198,52 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(router.state.location.pathname).toBe('/');
   });
 
+  it('regenerates one pending character portrait before the story plan is persisted', async () => {
+    const userId = 'story_route_regen_pending_portrait_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+
+    let portraitCalls = 0;
+    const regeneratingStoryGateway: StoryGateway = {
+      planStory: async () => PLAN,
+      illustrateCharacter: async () => {
+        portraitCalls += 1;
+        return portraitCalls === 1 ? 'data:image/png;base64,OLDPORTRAIT' : 'data:image/png;base64,NEWPORTRAIT';
+      },
+    };
+    const container = await createContainer(userId, {
+      db,
+      content: contentGateway,
+      story: regeneratingStoryGateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
+    fireEvent.click(screen.getByTestId('content-type-short_story'));
+    fireEvent.click(screen.getByText('文章を生成する'));
+    expect(((await screen.findByAltText('Mia')) as HTMLImageElement).src).toContain('OLDPORTRAIT');
+
+    fireEvent.click(screen.getByTestId('regenerate-character-portrait-0'));
+    await waitFor(() => expect((screen.getByAltText('Mia') as HTMLImageElement).src).toContain('NEWPORTRAIT'));
+
+    fireEvent.click(screen.getByText('この設定で執筆する'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'), { timeout: 5_000 });
+    await waitFor(async () => {
+      const stories = await createRepositories(db).stories.recent(userId, 5);
+      expect(stories[0]!.plan.characters[0]!.illustrationUrl).toBe('data:image/png;base64,NEWPORTRAIT');
+    });
+  });
+
   it('keeps the current plan illustrating when an older portrait request finishes after regenerate', async () => {
     const userId = 'story_route_race_user' as UserId;
     const db = new LexiaDb(userId);

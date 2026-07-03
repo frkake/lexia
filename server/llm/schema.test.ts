@@ -162,7 +162,7 @@ describe('buildWordMessages — memory tips', () => {
 });
 
 describe('buildCharacterIllustrationPrompt', () => {
-  it('biases character art toward stylized full-body illustration instead of photorealism', () => {
+  it('biases character art toward elegant anime-style full-body illustration instead of childish storybook art', () => {
     const prompt = buildCharacterIllustrationPrompt({
       name: 'Aria',
       role: '主人公',
@@ -171,11 +171,14 @@ describe('buildCharacterIllustrationPrompt', () => {
       styleHint: '幻想的な作風',
     });
     expect(prompt).toContain('Full-body');
-    expect(prompt).toContain('Highly stylized 2D');
+    expect(prompt).toContain('Elegant contemporary anime-inspired');
     expect(prompt).toContain('not photorealistic');
+    expect(prompt).toContain('adult learners');
     expect(prompt).toContain('memorable silhouette');
     expect(prompt).toContain('head-to-toe full body');
     expect(prompt).toContain('signature outfit, color accent, or prop');
+    expect(prompt).toContain('avoid storybook style');
+    expect(prompt).toContain('chibi proportions');
   });
 });
 
@@ -200,7 +203,11 @@ describe('buildPassageIllustrationPrompt', () => {
     expect(prompt).toContain('星の少女');
     expect(prompt).toContain('ミアが光る地図を見つける');
     expect(prompt).toContain('single most representative moment');
+    expect(prompt).toContain('Elegant contemporary anime-inspired editorial illustration');
+    expect(prompt).toContain('generous safe margins');
+    expect(prompt).toContain('cropped bodies');
     expect(prompt).toContain('no text, letters, captions');
+    expect(prompt).toContain('avoid storybook style');
   });
 });
 

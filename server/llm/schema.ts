@@ -773,10 +773,11 @@ export function buildCharacterIllustrationPrompt(req: {
   return [
     `Full-body character illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
     `Character description (Japanese): ${req.descriptionJa}`,
-    'Highly stylized 2D storybook/anime-inspired character art; clearly illustrated, not photorealistic;',
+    'Elegant contemporary anime-inspired character art for adult learners; polished, restrained, and not photorealistic;',
     'memorable silhouette; expressive face; signature outfit, color accent, or prop from the description;',
     'head-to-toe full body with the entire figure visible; no cropping at head, hands, feet, or props;',
     'clean graphic shapes; rich but controlled colors; single character centered with generous padding;',
+    'avoid storybook style, chibi proportions, childish cuteness, exaggerated moe styling, and noisy fantasy clutter;',
     `soft even lighting; simple neutral background; no text, letters, watermark, or logo.${style}`,
   ].join(' ');
 }
@@ -813,8 +814,9 @@ export function buildPassageIllustrationPrompt(req: PassageIllustrationRequest):
     `Passage excerpt:\n${excerpt}`,
     'Show the single most representative moment, setting, or action implied by the passage; no montage, no comic panels, no before/after layout.',
     'If characters are listed, keep their appearance consistent with the descriptions and do not add unlisted main characters.',
-    'Stylized 2D storybook/anime-inspired editorial illustration; clear foreground focus, readable environment, rich but controlled colors.',
-    'Landscape composition for a reading screen header; no text, letters, captions, UI, watermark, or logo.',
+    'Elegant contemporary anime-inspired editorial illustration for adult learners; clear foreground focus, readable environment, rich but controlled colors.',
+    'Compose with generous safe margins so the important subject, faces, hands, and key objects are fully visible; avoid extreme close-ups, cropped bodies, cropped props, or cut-off edges.',
+    'Landscape composition for a reading screen header; no text, letters, captions, UI, watermark, or logo; avoid storybook style, chibi proportions, and childish cuteness.',
   ].join('\n');
 }
 

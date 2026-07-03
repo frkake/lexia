@@ -158,6 +158,37 @@ describe('StoryPlanner.illustrateCharacters (6.8 — parallel, progressive, neve
     const result = await planner.illustrateCharacters(input);
     expect(result.characters.every((c) => c.illustrationUrl === undefined)).toBe(true);
   });
+
+  it('regenerates one character portrait on demand', async () => {
+    const seen: unknown[] = [];
+    const gw: StoryGateway = {
+      planStory: async () => plan(),
+      illustrateCharacter: async (req) => {
+        seen.push(req);
+        return `data:image/png;base64,${req.name}`;
+      },
+    };
+    const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
+
+    const result = await planner.illustrateCharacter(twoChars(), 1);
+
+    expect(result).toBe('data:image/png;base64,Draco');
+    expect(seen[0]).toMatchObject({ name: 'Draco', role: 'dragon', genre: 'fantasy', styleHint: 'fantasy' });
+  });
+
+  it('returns null for single-portrait regeneration when illustration is unavailable or fails', async () => {
+    const withoutIllustrator = createStoryPlanner({ gateway: gateway(plan()).gw, storyRepo: memRepo() });
+    await expect(withoutIllustrator.illustrateCharacter(twoChars(), 0)).resolves.toBeNull();
+
+    const failing = createStoryPlanner({
+      gateway: gatewayWithIllustrator(async () => {
+        throw new Error('image down');
+      }),
+      storyRepo: memRepo(),
+    });
+    await expect(failing.illustrateCharacter(twoChars(), 0)).resolves.toBeNull();
+    await expect(failing.illustrateCharacter(twoChars(), 9)).resolves.toBeNull();
+  });
 });
 
 describe('StoryPlanner.extendPlan (long-story plot continuation)', () => {

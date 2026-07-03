@@ -19,9 +19,19 @@ export interface StoryDirectoryScreenProps {
   plan: StoryPlan;
   chapters: StoryChapterRow[];
   onOpenChapter?: (chapterIndex: number) => void;
+  onRegenerateCharacter?: (characterIndex: number) => void;
+  regeneratingCharacterIndex?: number | null;
+  characterIllustrationError?: string | null;
 }
 
-export function StoryDirectoryScreen({ plan, chapters, onOpenChapter }: StoryDirectoryScreenProps) {
+export function StoryDirectoryScreen({
+  plan,
+  chapters,
+  onOpenChapter,
+  onRegenerateCharacter,
+  regeneratingCharacterIndex = null,
+  characterIllustrationError = null,
+}: StoryDirectoryScreenProps) {
   return (
     <div style={pageStyle} className="story-directory-page">
       <div style={{ width: '100%', maxWidth: 720 }}>
@@ -39,7 +49,7 @@ export function StoryDirectoryScreen({ plan, chapters, onOpenChapter }: StoryDir
           <section style={{ marginTop: 28 }}>
             <div style={sectionTitleStyle}>登場人物</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
-              {plan.characters.map((ch) => (
+              {plan.characters.map((ch, index) => (
                 <div key={ch.name} style={characterCardStyle}>
                   {ch.illustrationUrl ? (
                     <img src={ch.illustrationUrl} alt={ch.name} style={portraitStyle} />
@@ -49,10 +59,27 @@ export function StoryDirectoryScreen({ plan, chapters, onOpenChapter }: StoryDir
                   <div>
                     <div style={{ fontFamily: fonts.ui, fontSize: 14, fontWeight: 600, color: colors.ink }}>{ch.name}</div>
                     <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.muted }}>{ch.role}</div>
+                    {onRegenerateCharacter ? (
+                      <button
+                        type="button"
+                        data-testid={`regenerate-directory-character-${index}`}
+                        onClick={() => onRegenerateCharacter(index)}
+                        disabled={regeneratingCharacterIndex !== null}
+                        aria-busy={regeneratingCharacterIndex === index}
+                        style={characterRegenerateButtonStyle(regeneratingCharacterIndex === index)}
+                      >
+                        {regeneratingCharacterIndex === index ? '生成中…' : 'イラストを再生成'}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ))}
             </div>
+            {characterIllustrationError ? (
+              <div role="alert" style={errorStyle}>
+                {characterIllustrationError}
+              </div>
+            ) : null}
           </section>
         ) : null}
 
@@ -112,6 +139,31 @@ const portraitStyle: CSSProperties = {
   objectFit: 'contain',
   flex: 'none',
   background: colors.avatarBg,
+};
+
+const characterRegenerateButtonStyle = (busy: boolean): CSSProperties => ({
+  marginTop: 7,
+  fontFamily: fonts.ui,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '6px 9px',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.68 : 1,
+});
+
+const errorStyle: CSSProperties = {
+  marginTop: 10,
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.control,
+  padding: '8px 11px',
 };
 
 const chapterRowStyle = (generated: boolean): CSSProperties => ({

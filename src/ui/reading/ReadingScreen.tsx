@@ -45,14 +45,23 @@ export interface ReadingScreenProps {
   rail?: ReactNode;
   /** WordDetailCard renderer for the selected word (task 8.4). */
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
+  /** Direct right-rail recognition: mark a word or expression as unknown without opening details. */
+  onMarkUnknown?: (targetId: string) => void | Promise<void>;
   /** Reading-time recognition: learner finished the passage without looking up the rest. */
   onCompleteReading?: () => void;
   /** Long-story continuation: generate or open the next chapter from the current story plan. */
   onGenerateNextChapter?: () => void;
   generatingNextChapter?: boolean;
   nextChapterError?: string | null;
+  /** On-demand scene illustration refresh. Existing art stays visible if refresh fails. */
+  onRegenerateIllustration?: () => void;
+  regeneratingIllustration?: boolean;
+  illustrationError?: string | null;
   /** Story-only settings scaffold shown from the body page. */
   storyPlan?: StoryPlan;
+  onRegenerateStoryCharacter?: (characterIndex: number) => void;
+  regeneratingStoryCharacterIndex?: number | null;
+  storyCharacterError?: string | null;
   /**
    * Feature-flag switch (6.1 / 7.4): when true, render the 3-zone layout (sentence-unit grid,
    * right-cell translation, line-aligned rail). Default false preserves the legacy reading layout.
@@ -64,11 +73,18 @@ export function ReadingScreen({
   passage,
   rail,
   renderWordDetail,
+  onMarkUnknown,
   onCompleteReading,
   onGenerateNextChapter,
   generatingNextChapter = false,
   nextChapterError = null,
+  onRegenerateIllustration,
+  regeneratingIllustration = false,
+  illustrationError = null,
   storyPlan,
+  onRegenerateStoryCharacter,
+  regeneratingStoryCharacterIndex = null,
+  storyCharacterError = null,
   newLayout = false,
 }: ReadingScreenProps) {
   const navigate = useNavigate();
@@ -166,8 +182,8 @@ export function ReadingScreen({
   const railContent = (
     <>
       {/* Line-aligned only on the wide 3-zone layout; flat flow on narrow / legacy. */}
-      <NoticeRail passage={active} anchors={lineAligned ? anchors : undefined} />
-      {rail ?? <StudyWordsList words={studyWords} onSelectWord={selectWord} />}
+      <NoticeRail passage={active} anchors={lineAligned ? anchors : undefined} onMarkUnknown={onMarkUnknown} />
+      {rail ?? <StudyWordsList words={studyWords} onSelectWord={selectWord} onMarkUnknown={onMarkUnknown} />}
     </>
   );
 
@@ -238,6 +254,31 @@ export function ReadingScreen({
               <figcaption style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, marginTop: 9, textAlign: 'center' }}>
                 場面を視覚化したイラストが、単語と文脈の記憶を結びつけます
               </figcaption>
+              {onRegenerateIllustration || illustrationError ? (
+                <div style={illustrationActionsStyle}>
+                  {onRegenerateIllustration ? (
+                    <button
+                      type="button"
+                      data-testid="regenerate-passage-illustration"
+                      onClick={onRegenerateIllustration}
+                      disabled={regeneratingIllustration}
+                      aria-busy={regeneratingIllustration}
+                      style={secondaryActionButtonStyle(regeneratingIllustration)}
+                    >
+                      {regeneratingIllustration
+                        ? '生成しています…'
+                        : meta.sceneIllustrationUrl
+                          ? 'イラストを再生成'
+                          : 'イラストを生成'}
+                    </button>
+                  ) : null}
+                  {illustrationError ? (
+                    <div role="alert" style={inlineErrorStyle}>
+                      {illustrationError}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </figure>
 
             {/* The measurement container wraps the prose; useLineAnchors reads badge positions from it. */}
@@ -333,14 +374,32 @@ export function ReadingScreen({
             if (event.target === event.currentTarget) setStoryPlanOpen(false);
           }}
         >
-          <StoryPlanDialog plan={storyPlan} onClose={() => setStoryPlanOpen(false)} />
+          <StoryPlanDialog
+            plan={storyPlan}
+            onClose={() => setStoryPlanOpen(false)}
+            onRegenerateCharacter={onRegenerateStoryCharacter}
+            regeneratingCharacterIndex={regeneratingStoryCharacterIndex}
+            characterIllustrationError={storyCharacterError}
+          />
         </div>
       ) : null}
     </div>
   );
 }
 
-function StoryPlanDialog({ plan, onClose }: { plan: StoryPlan; onClose: () => void }) {
+function StoryPlanDialog({
+  plan,
+  onClose,
+  onRegenerateCharacter,
+  regeneratingCharacterIndex = null,
+  characterIllustrationError = null,
+}: {
+  plan: StoryPlan;
+  onClose: () => void;
+  onRegenerateCharacter?: (characterIndex: number) => void;
+  regeneratingCharacterIndex?: number | null;
+  characterIllustrationError?: string | null;
+}) {
   const contentType = plan.contentType === 'long_story' ? '長編物語' : '短編物語';
   return (
     <section style={storyDialogStyle}>
@@ -368,7 +427,7 @@ function StoryPlanDialog({ plan, onClose }: { plan: StoryPlan; onClose: () => vo
         <section>
           <h3 style={storySectionTitleStyle}>キャラクター設定</h3>
           <div style={storyCharacterListStyle}>
-            {plan.characters.map((character) => (
+            {plan.characters.map((character, index) => (
               <article key={`${character.name}:${character.role}`} style={storyCharacterItemStyle}>
                 {character.illustrationUrl ? (
                   <img src={character.illustrationUrl} alt={character.name} style={storyCharacterImageStyle} />
@@ -387,10 +446,27 @@ function StoryPlanDialog({ plan, onClose }: { plan: StoryPlan; onClose: () => vo
                   <div style={{ fontFamily: fonts.ui, fontSize: 12.5, color: colors.inkSoft, marginTop: 5, lineHeight: 1.55 }}>
                     {character.descriptionJa}
                   </div>
+                  {onRegenerateCharacter ? (
+                    <button
+                      type="button"
+                      data-testid={`regenerate-story-character-${index}`}
+                      onClick={() => onRegenerateCharacter(index)}
+                      disabled={regeneratingCharacterIndex !== null}
+                      aria-busy={regeneratingCharacterIndex === index}
+                      style={{ ...characterRegenerateButtonStyle(regeneratingCharacterIndex === index), marginTop: 8 }}
+                    >
+                      {regeneratingCharacterIndex === index ? '生成中…' : 'イラストを再生成'}
+                    </button>
+                  ) : null}
                 </div>
               </article>
             ))}
           </div>
+          {characterIllustrationError ? (
+            <div role="alert" style={{ ...inlineErrorStyle, marginTop: 9 }}>
+              {characterIllustrationError}
+            </div>
+          ) : null}
         </section>
 
         <section>
@@ -454,6 +530,38 @@ const nextChapterButtonStyle = (busy: boolean): React.CSSProperties => ({
   opacity: busy ? 0.72 : 1,
 });
 
+const secondaryActionButtonStyle = (busy: boolean): React.CSSProperties => ({
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '7px 11px',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.7 : 1,
+});
+
+const illustrationActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 10,
+  flexWrap: 'wrap',
+  marginTop: 10,
+};
+
+const inlineErrorStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.control,
+  padding: '7px 10px',
+};
+
 const storyErrorStyle: React.CSSProperties = {
   flexBasis: '100%',
   fontFamily: fonts.ui,
@@ -488,7 +596,8 @@ const sizeButtonStyle: React.CSSProperties = {
 
 const illustrationStyle: React.CSSProperties = {
   width: '100%',
-  height: 212,
+  aspectRatio: '3 / 2',
+  maxHeight: 420,
   borderRadius: radius.card,
   background: 'repeating-linear-gradient(135deg,#EAEFF4,#EAEFF4 11px,#F3F6F9 11px,#F3F6F9 22px)',
   border: `1px solid ${colors.borderControl}`,
@@ -501,8 +610,10 @@ const illustrationStyle: React.CSSProperties = {
 const illustrationImageStyle: React.CSSProperties = {
   width: '100%',
   height: '100%',
-  objectFit: 'cover',
+  objectFit: 'contain',
+  objectPosition: 'center',
   display: 'block',
+  background: colors.surfaceSubtle,
 };
 
 const detailOverlayStyle: React.CSSProperties = {
@@ -613,6 +724,19 @@ const storyCharacterImageStyle: React.CSSProperties = {
   borderRadius: radius.control,
   background: colors.avatarBg,
 };
+
+const characterRegenerateButtonStyle = (busy: boolean): React.CSSProperties => ({
+  fontFamily: fonts.ui,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '6px 9px',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.68 : 1,
+});
 
 const storyCharacterInitialStyle: React.CSSProperties = {
   width: 52,

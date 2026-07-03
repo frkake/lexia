@@ -75,7 +75,32 @@ describe('<ReadingScreen/>', () => {
     const { getByAltText, queryByText } = renderScreen({ passage });
     const image = getByAltText('The Restless Boardroom の場面イラスト') as HTMLImageElement;
     expect(image.src).toContain('data:image/png;base64,SCENE');
+    expect(image.style.objectFit).toBe('contain');
+    expect((image.parentElement as HTMLElement).style.aspectRatio).toBe('3 / 2');
     expect(queryByText(/story illustration/)).toBeNull();
+  });
+
+  it('offers an on-demand scene illustration regeneration action when wired', () => {
+    const passage = makePassage();
+    passage.source.meta.sceneIllustrationUrl = 'data:image/png;base64,SCENE';
+    const onRegenerateIllustration = vi.fn();
+    const { getByTestId } = renderScreen({ passage, onRegenerateIllustration });
+    fireEvent.click(getByTestId('regenerate-passage-illustration'));
+    expect(onRegenerateIllustration).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows scene illustration regeneration busy and error states', () => {
+    const { getByTestId, getByRole, getByText } = renderScreen({
+      passage: makePassage(),
+      onRegenerateIllustration: vi.fn(),
+      regeneratingIllustration: true,
+      illustrationError: '本文イラストを再生成できませんでした。',
+    });
+    const button = getByTestId('regenerate-passage-illustration') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(getByText('生成しています…')).toBeTruthy();
+    expect(getByRole('alert').textContent).toContain('本文イラストを再生成できませんでした。');
   });
 
   it('renders the annotated prose', () => {
@@ -172,9 +197,11 @@ describe('<ReadingScreen/>', () => {
   });
 
   it('opens story settings from the body page when a story plan is supplied', () => {
+    const onRegenerateStoryCharacter = vi.fn();
     const { getByTestId, getByRole, getByText, queryByRole } = renderScreen({
       passage: makePassage(),
       storyPlan: makeStoryPlan(),
+      onRegenerateStoryCharacter,
     });
     fireEvent.click(getByTestId('story-settings'));
     expect(getByRole('dialog', { name: '物語設定' })).toBeTruthy();
@@ -182,6 +209,8 @@ describe('<ReadingScreen/>', () => {
     expect(getByText('Mia')).toBeTruthy();
     expect(getByText('プロット')).toBeTruthy();
     expect(getByText(/星の門を開く/)).toBeTruthy();
+    fireEvent.click(getByTestId('regenerate-story-character-0'));
+    expect(onRegenerateStoryCharacter).toHaveBeenCalledWith(0);
     fireEvent.click(getByText('キャラクター設定'));
     expect(getByRole('dialog', { name: '物語設定' })).toBeTruthy();
     fireEvent.click(getByRole('dialog', { name: '物語設定' }));

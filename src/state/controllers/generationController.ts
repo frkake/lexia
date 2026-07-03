@@ -187,7 +187,7 @@ async function enrichPassageIllustration(
   }
 }
 
-function buildPassageIllustrationRequest(
+export function buildPassageIllustrationRequest(
   passage: IndexedPassage,
   storyContext?: StoryContext,
 ): PassageIllustrationRequest {

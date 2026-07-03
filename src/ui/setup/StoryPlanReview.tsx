@@ -20,6 +20,10 @@ export interface StoryPlanReviewProps {
   confirming?: boolean;
   /** Body-generation error shown on the confirmation gate. */
   confirmError?: string | null;
+  /** Optional on-demand portrait refresh for a single character. */
+  onRegenerateCharacter?: (characterIndex: number) => void;
+  regeneratingCharacterIndex?: number | null;
+  characterIllustrationError?: string | null;
   /**
    * True while character portraits are still being generated (6.8). Characters without an
    * illustrationUrl show a loading skeleton; once illustration settles they fall back to a monogram
@@ -34,6 +38,9 @@ export function StoryPlanReview({
   onCancel,
   confirming = false,
   confirmError = null,
+  onRegenerateCharacter,
+  regeneratingCharacterIndex = null,
+  characterIllustrationError = null,
   illustrating = false,
 }: StoryPlanReviewProps) {
   const [titleJa, setTitleJa] = useState(plan.titleJa);
@@ -74,17 +81,34 @@ export function StoryPlanReview({
       <div style={{ padding: '8px 34px' }}>
         <div style={sectionLabelStyle}>キャラクター設定</div>
         <div style={characterGridStyle}>
-          {plan.characters.map((ch) => (
+          {plan.characters.map((ch, index) => (
             <div key={ch.name} style={characterCardStyle}>
               <CharacterPortrait character={ch} illustrating={illustrating} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                 <span style={{ fontFamily: fonts.serif, fontWeight: 600, color: colors.ink }}>{ch.name}</span>
                 <span style={{ fontFamily: fonts.ui, fontSize: 11, color: colors.faint }}>{ch.role}</span>
                 <span style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.muted }}>{ch.descriptionJa}</span>
+                {onRegenerateCharacter ? (
+                  <button
+                    type="button"
+                    data-testid={`regenerate-character-portrait-${index}`}
+                    onClick={() => onRegenerateCharacter(index)}
+                    disabled={illustrating || regeneratingCharacterIndex !== null}
+                    aria-busy={regeneratingCharacterIndex === index}
+                    style={portraitRegenerateButtonStyle(regeneratingCharacterIndex === index)}
+                  >
+                    {regeneratingCharacterIndex === index ? '生成中…' : 'イラストを再生成'}
+                  </button>
+                ) : null}
               </div>
             </div>
           ))}
         </div>
+        {characterIllustrationError ? (
+          <div role="alert" style={{ ...errorStyle, marginTop: 9 }}>
+            {characterIllustrationError}
+          </div>
+        ) : null}
       </div>
 
       <div style={{ padding: '8px 34px 20px' }}>
@@ -179,6 +203,21 @@ const portraitPlaceholderStyle: CSSProperties = {
   fontWeight: 600,
   color: colors.muted,
 };
+
+const portraitRegenerateButtonStyle = (busy: boolean): CSSProperties => ({
+  alignSelf: 'flex-start',
+  marginTop: 7,
+  fontFamily: fonts.ui,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '6px 9px',
+  cursor: busy ? 'wait' : 'pointer',
+  opacity: busy ? 0.68 : 1,
+});
 
 const characterGridStyle: CSSProperties = {
   display: 'grid',

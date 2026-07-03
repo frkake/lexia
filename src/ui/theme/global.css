@@ -200,7 +200,7 @@ body {
   }
 
   .reading-illustration {
-    height: 170px !important;
+    max-height: none !important;
   }
 
   .reading-rail {

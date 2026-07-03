@@ -29,7 +29,7 @@ import { useContainer } from './AppContext';
 import type { Container } from './container';
 import { useWordData } from '../../state/queries/contentQueries';
 import { loadDashboardSnapshot } from '../../state/controllers/dashboardController';
-import { runGenerationPipeline } from '../../state/controllers/generationController';
+import { buildPassageIllustrationRequest, runGenerationPipeline } from '../../state/controllers/generationController';
 import { applyRecallSignal } from '../../state/controllers/recallController';
 import { applyReviewRating } from '../../state/controllers/reviewController';
 import { openPassage, restoreReadingSession } from '../../state/controllers/sessionBootstrap';
@@ -378,6 +378,8 @@ export function HomeRoute() {
   const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
   // True while character portraits stream in on the confirmation gate (6.8); enrichment only.
   const [illustrating, setIllustrating] = useState(false);
+  const [regeneratingPendingCharacterIndex, setRegeneratingPendingCharacterIndex] = useState<number | null>(null);
+  const [pendingCharacterError, setPendingCharacterError] = useState<string | null>(null);
   const activeIllustrationRequest = useRef(0);
 
   /** Run the standard article generate → validate → persist → render pipeline. */
@@ -432,6 +434,8 @@ export function HomeRoute() {
         // is enrichment: it never blocks confirmation, so failures are swallowed and just leave placeholders.
         setPendingSetup(effectiveSetup);
         setPendingPlan(planned.value);
+        setPendingCharacterError(null);
+        setRegeneratingPendingCharacterIndex(null);
         activeIllustrationRequest.current += 1;
         setIllustrating(false);
         if (characterIllustrations) {
@@ -459,6 +463,27 @@ export function HomeRoute() {
       setGenerationError(generationErrorMessage(error));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const regeneratePendingCharacter = async (characterIndex: number): Promise<void> => {
+    const plan = pendingPlan;
+    if (!plan || illustrating || regeneratingPendingCharacterIndex !== null) return;
+    setRegeneratingPendingCharacterIndex(characterIndex);
+    setPendingCharacterError(null);
+    try {
+      const illustrationUrl = await c.storyPlanner.illustrateCharacter(plan, characterIndex);
+      if (!illustrationUrl) {
+        setPendingCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
+        return;
+      }
+      setPendingPlan((prev) => {
+        if (!prev || prev.storyId !== plan.storyId) return prev;
+        const characters = prev.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+        return { ...prev, characters };
+      });
+    } finally {
+      setRegeneratingPendingCharacterIndex(null);
     }
   };
 
@@ -539,12 +564,17 @@ export function HomeRoute() {
         illustrating={illustrating}
         confirming={generating}
         confirmError={generationError}
+        onRegenerateCharacter={characterIllustrations ? (index) => void regeneratePendingCharacter(index) : undefined}
+        regeneratingCharacterIndex={regeneratingPendingCharacterIndex}
+        characterIllustrationError={pendingCharacterError}
         onConfirm={(p) => void onConfirmPlan(p)}
         onCancel={() => {
           activeIllustrationRequest.current += 1;
           setPendingPlan(null);
           setPendingSetup(null);
           setIllustrating(false);
+          setPendingCharacterError(null);
+          setRegeneratingPendingCharacterIndex(null);
         }}
       />
     );
@@ -610,7 +640,11 @@ export function ReadingRoute() {
   const lastSetup = useStore(c.settings, (s) => s.lastSetup);
   const [generatingNextChapter, setGeneratingNextChapter] = useState(false);
   const [nextChapterError, setNextChapterError] = useState<string | null>(null);
-  const { newReadingLayout, passageIllustrations } = resolveFeatureFlags();
+  const [regeneratingPassageIllustration, setRegeneratingPassageIllustration] = useState(false);
+  const [passageIllustrationError, setPassageIllustrationError] = useState<string | null>(null);
+  const [regeneratingStoryCharacterIndex, setRegeneratingStoryCharacterIndex] = useState<number | null>(null);
+  const [storyCharacterError, setStoryCharacterError] = useState<string | null>(null);
+  const { newReadingLayout, passageIllustrations, characterIllustrations } = resolveFeatureFlags();
 
   const storyDetails = useLiveQuery<
     { story: StoryRecord; chapters: PassageRecord[] } | null | undefined
@@ -636,6 +670,16 @@ export function ReadingRoute() {
         // Pronunciation is enrichment; keep the reading rail usable when TTS is unavailable.
       }
     })();
+  };
+
+  const markStudyTargetUnknown = async (targetId: string): Promise<void> => {
+    await applyReviewRating(
+      { scheduling: c.repos.scheduling, reviewLog: c.repos.reviewLog },
+      c.userId,
+      targetId,
+      1,
+      c.now(),
+    );
   };
 
   const studyWords = useLiveQuery<StudyWord[] | undefined>(async () => {
@@ -669,6 +713,7 @@ export function ReadingRoute() {
       words={studyWords ?? uniqueStudyWords(passage)}
       onSelectWord={selectStudyWord}
       onPlayWord={playStudyWord}
+      onMarkUnknown={markStudyTargetUnknown}
     />
   ) : undefined;
 
@@ -771,6 +816,66 @@ export function ReadingRoute() {
     }
   };
 
+  const regeneratePassageIllustration = async (): Promise<void> => {
+    if (!c.content.illustratePassage || regeneratingPassageIllustration) return;
+    const active = c.session.getState().passage;
+    if (!active) return;
+    if (active.source.meta.storyRef && storyDetails === undefined) {
+      setPassageIllustrationError('物語情報を読み込み中です。少し待って再試行してください。');
+      return;
+    }
+
+    setRegeneratingPassageIllustration(true);
+    setPassageIllustrationError(null);
+    try {
+      const record = await c.repos.passages.get(active.passageId);
+      if (!record || record.userId !== c.userId) {
+        setPassageIllustrationError('本文データを確認できませんでした。文章を開き直してください。');
+        return;
+      }
+      const indexed = tokenizer.index(record.passageId, record.passage);
+      const ref = indexed.source.meta.storyRef;
+      const storyContext =
+        ref && storyDetails?.story
+          ? { storyId: ref.storyId, chapterIndex: ref.chapterIndex, plan: storyDetails.story.plan }
+          : undefined;
+      const illustrationUrl = await c.content.illustratePassage(buildPassageIllustrationRequest(indexed, storyContext));
+      const enrichedSource = {
+        ...record.passage,
+        meta: {
+          ...record.passage.meta,
+          sceneIllustrationUrl: illustrationUrl,
+        },
+      };
+      await c.repos.passages.put({ ...record, passage: enrichedSource });
+      c.session.getState().replacePassage(tokenizer.index(record.passageId, enrichedSource));
+    } catch {
+      setPassageIllustrationError('本文イラストを再生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setRegeneratingPassageIllustration(false);
+    }
+  };
+
+  const regenerateStoredStoryCharacter = async (characterIndex: number): Promise<void> => {
+    const story = storyDetails?.story;
+    if (!story || regeneratingStoryCharacterIndex !== null) return;
+    setRegeneratingStoryCharacterIndex(characterIndex);
+    setStoryCharacterError(null);
+    try {
+      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex);
+      if (!illustrationUrl) {
+        setStoryCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
+        return;
+      }
+      const characters = story.plan.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+      await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
+    } catch {
+      setStoryCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setRegeneratingStoryCharacterIndex(null);
+    }
+  };
+
   if (notFound) {
     return (
       <div style={notFoundStyle}>
@@ -789,8 +894,19 @@ export function ReadingRoute() {
       passage={passage ?? undefined}
       rail={rail}
       newLayout={newReadingLayout}
+      onMarkUnknown={markStudyTargetUnknown}
       onCompleteReading={() => void completeReading()}
       storyPlan={storyDetails?.story.plan}
+      onRegenerateIllustration={
+        passageIllustrations && c.content.illustratePassage ? () => void regeneratePassageIllustration() : undefined
+      }
+      regeneratingIllustration={regeneratingPassageIllustration}
+      illustrationError={passageIllustrationError}
+      onRegenerateStoryCharacter={
+        characterIllustrations && storyDetails?.story ? (index) => void regenerateStoredStoryCharacter(index) : undefined
+      }
+      regeneratingStoryCharacterIndex={regeneratingStoryCharacterIndex}
+      storyCharacterError={storyCharacterError}
       onGenerateNextChapter={
         storyDetails?.story.plan.contentType === 'long_story' ? () => void generateNextStoryChapter() : undefined
       }
@@ -927,6 +1043,9 @@ export function StoryDirectoryRoute() {
   const navigate = useNavigate();
   const params = useParams();
   const storyId = params.storyId ?? '';
+  const [regeneratingCharacterIndex, setRegeneratingCharacterIndex] = useState<number | null>(null);
+  const [characterIllustrationError, setCharacterIllustrationError] = useState<string | null>(null);
+  const { characterIllustrations } = resolveFeatureFlags();
 
   const data = useLiveQuery(async () => {
     const story = await c.repos.stories.get(storyId);
@@ -938,8 +1057,28 @@ export function StoryDirectoryRoute() {
       headingJa: ch.headingJa,
       generated: generated.has(ch.index),
     }));
-    return { plan: story.plan, rows };
+    return { story, plan: story.plan, rows };
   }, [c, storyId]);
+
+  const regenerateCharacter = async (characterIndex: number): Promise<void> => {
+    if (!data || !('story' in data) || regeneratingCharacterIndex !== null) return;
+    const story = data.story;
+    setRegeneratingCharacterIndex(characterIndex);
+    setCharacterIllustrationError(null);
+    try {
+      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex);
+      if (!illustrationUrl) {
+        setCharacterIllustrationError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
+        return;
+      }
+      const characters = story.plan.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+      await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
+    } catch {
+      setCharacterIllustrationError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setRegeneratingCharacterIndex(null);
+    }
+  };
 
   if (data === undefined) return <ScreenSkeleton />;
   if (data === null) {
@@ -958,6 +1097,9 @@ export function StoryDirectoryRoute() {
       plan={data.plan}
       chapters={data.rows}
       onOpenChapter={(chapterIndex) => navigate(`/s/${storyId}/${chapterIndex}`)}
+      onRegenerateCharacter={characterIllustrations ? (index) => void regenerateCharacter(index) : undefined}
+      regeneratingCharacterIndex={regeneratingCharacterIndex}
+      characterIllustrationError={characterIllustrationError}
     />
   );
 }

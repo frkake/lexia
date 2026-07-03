@@ -106,6 +106,41 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(onConfirm.mock.calls[0]![0].characters[0]!.illustrationUrl).toBe('data:image/png;base64,QUJD');
   });
 
+  it('offers per-character portrait regeneration when wired', () => {
+    const onRegenerateCharacter = vi.fn();
+    const { getByTestId } = render(
+      <StoryPlanReview plan={plan()} onConfirm={() => {}} onRegenerateCharacter={onRegenerateCharacter} />,
+    );
+    fireEvent.click(getByTestId('regenerate-character-portrait-1'));
+    expect(onRegenerateCharacter).toHaveBeenCalledWith(1);
+  });
+
+  it('shows portrait regeneration busy and error states', () => {
+    const { getByTestId, getByRole, getByText } = render(
+      <StoryPlanReview
+        plan={plan()}
+        onConfirm={() => {}}
+        onRegenerateCharacter={() => {}}
+        regeneratingCharacterIndex={0}
+        characterIllustrationError="キャラクターイラストを再生成できませんでした。"
+      />,
+    );
+    const active = getByTestId('regenerate-character-portrait-0') as HTMLButtonElement;
+    const other = getByTestId('regenerate-character-portrait-1') as HTMLButtonElement;
+    expect(active.disabled).toBe(true);
+    expect(active.getAttribute('aria-busy')).toBe('true');
+    expect(other.disabled).toBe(true);
+    expect(getByText('生成中…')).toBeTruthy();
+    expect(getByRole('alert').textContent).toContain('キャラクターイラストを再生成できませんでした。');
+  });
+
+  it('disables portrait regeneration while initial illustration is still in progress', () => {
+    const { getByTestId } = render(
+      <StoryPlanReview plan={plan()} onConfirm={() => {}} onRegenerateCharacter={() => {}} illustrating />,
+    );
+    expect((getByTestId('regenerate-character-portrait-0') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('shows body-generation progress and errors on the confirmation gate', () => {
     const onConfirm = vi.fn<(p: StoryPlan) => void>();
     const { getByRole, getByText } = render(

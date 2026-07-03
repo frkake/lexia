@@ -15,6 +15,7 @@ import { err, ok, type Result } from '../../types/result';
 import type { GenerationOrchestrator, GenerationError } from '../generation/generationOrchestrator';
 import type { StoryGateway, StoryRepository } from '../../types/ports';
 import type {
+  CharacterIllustrationRequest,
   GenerationRequest,
   IndexedPassage,
   StoryContext,
@@ -37,6 +38,11 @@ export interface StoryPlanner {
     plan: StoryPlan,
     onEach?: (index: number, illustrationUrl: string) => void,
   ): Promise<StoryPlan>;
+  /**
+   * Regenerate one character portrait on demand. Returns null when illustration is unavailable,
+   * the index is invalid, or the image provider fails; existing stored art should be kept then.
+   */
+  illustrateCharacter(plan: StoryPlan, characterIndex: number): Promise<string | null>;
   /** Extend a long-story plan with more future chapter beats when the plot outline is exhausted. */
   extendPlan(
     plan: StoryPlan,
@@ -81,23 +87,25 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
   ): Promise<StoryPlan> {
     const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
     if (!illustrate) return plan; // enrichment unavailable — return the plan untouched
-    // Shared style hint keeps the cast visually coherent (homage note if present, else genre).
-    const styleHint = plan.homage?.styleNoteJa || plan.genre;
     const characters = plan.characters.map((c) => ({ ...c }));
     await Promise.allSettled(
       characters.map(async (character, index) => {
-        const url = await illustrate({
-          name: character.name,
-          role: character.role,
-          descriptionJa: character.descriptionJa,
-          genre: plan.genre,
-          styleHint,
-        });
+        const url = await illustrate(characterIllustrationRequest(plan, index));
         character.illustrationUrl = url;
         onEach?.(index, url);
       }),
     );
     return { ...plan, characters };
+  }
+
+  async function illustrateCharacter(plan: StoryPlan, characterIndex: number): Promise<string | null> {
+    const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
+    if (!illustrate || !plan.characters[characterIndex]) return null;
+    try {
+      return await illustrate(characterIllustrationRequest(plan, characterIndex));
+    } catch {
+      return null;
+    }
   }
 
   async function confirmPlan(userId: UserId, plan: StoryPlan): Promise<void> {
@@ -151,7 +159,18 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
     return ok(attachStoryRef(result.value, storyContext));
   }
 
-  return { planStory, illustrateCharacters, extendPlan, confirmPlan, generateChapter };
+  return { planStory, illustrateCharacters, illustrateCharacter, extendPlan, confirmPlan, generateChapter };
+}
+
+function characterIllustrationRequest(plan: StoryPlan, characterIndex: number): CharacterIllustrationRequest {
+  const character = plan.characters[characterIndex]!;
+  return {
+    name: character.name,
+    role: character.role,
+    descriptionJa: character.descriptionJa,
+    genre: plan.genre,
+    styleHint: plan.homage?.styleNoteJa || plan.genre,
+  };
 }
 
 function attachStoryRef(passage: IndexedPassage, storyContext: StoryContext): IndexedPassage {

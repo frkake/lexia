@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { NoticeRail, placeRailItems } from './NoticeRail';
 import { tokenizer } from '../../domain/tokenizer/joinService';
@@ -77,6 +77,43 @@ describe('<NoticeRail/>', () => {
     const { getByText, queryByText } = render(<NoticeRail passage={tokenizer.index('p', source)} />);
     expect(getByText("doesn't")).toBeTruthy();
     expect(queryByText('does n\'t')).toBeNull();
+  });
+
+  it('marks a notice expression unknown directly, including non-word cues', () => {
+    readingUiStore.getState().reset();
+    const onMarkUnknown = vi.fn();
+    const source: PassageOutput = {
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 6 },
+      sentences: [{ tokens: ['They', 'bit', 'the', 'bullet', 'today', '.'], translationJa: '' }],
+      targetSpans: [],
+      collocationSpans: [],
+      noticeCues: [
+        {
+          index: 1,
+          span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 },
+          category: 'idiom',
+          anchorText: 'bit the bullet',
+          explanationJa: '単語単体ではなく慣用表現として気づく。',
+        },
+      ],
+    };
+    const { getByLabelText } = render(
+      <NoticeRail passage={tokenizer.index('idiom-p', source)} onMarkUnknown={onMarkUnknown} />,
+    );
+
+    fireEvent.click(getByLabelText('bit the bullet を知らなかったとして記録'));
+
+    expect(onMarkUnknown).toHaveBeenCalledWith('bit the bullet');
+    expect(readingUiStore.getState().pinnedCueIndex).toBeNull();
+  });
+
+  it('uses cue.wordId for unknown marking when the notice is grounded to a target word', () => {
+    const onMarkUnknown = vi.fn();
+    const { getByLabelText } = render(<NoticeRail passage={makePassage()} onMarkUnknown={onMarkUnknown} />);
+
+    fireEvent.click(getByLabelText('leverage our reputation を知らなかったとして記録'));
+
+    expect(onMarkUnknown).toHaveBeenCalledWith('leverage');
   });
 });
 
