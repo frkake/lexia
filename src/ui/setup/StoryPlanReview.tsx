@@ -154,8 +154,9 @@ export function StoryPlanReview({
  * the flow.
  */
 function CharacterPortrait({ character, illustrating }: { character: StoryCharacter; illustrating: boolean }) {
-  if (character.illustrationUrl) {
-    return <img src={character.illustrationUrl} alt={character.name} style={portraitImageStyle} />;
+  const portraitUrl = character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl;
+  if (portraitUrl) {
+    return <img src={portraitUrl} alt={character.name} style={portraitImageStyle} />;
   }
   if (illustrating) {
     return <div data-testid="character-portrait-loading" style={portraitSkeletonStyle} aria-hidden="true" />;

@@ -495,6 +495,20 @@ describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portr
     expect(JSON.parse(String(captured!.init?.body)).model).toBe('gpt-image-1-mini');
   });
 
+  it('uses a square image request for character portraits', async () => {
+    let captured: { init?: RequestInit } | null = null;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured = { init };
+      return openAiImage('QUJD');
+    });
+    const env: Env = { IMAGE_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-real-key' };
+    await illustrateCharacter(env, { ...charReq, variant: 'portrait' }, fetchImpl as unknown as typeof fetch);
+
+    const sent = JSON.parse(String(captured!.init?.body));
+    expect(sent.size).toBe('1024x1024');
+    expect(sent.prompt).toContain('Portrait bust composition');
+  });
+
   it('switches to Gemini (Imagen) when IMAGE_PROVIDER=gemini, reading the inline base64 image', async () => {
     let captured: { url: string; init?: RequestInit } | null = null;
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

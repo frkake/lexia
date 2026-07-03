@@ -18,12 +18,15 @@ import type {
   CharacterIllustrationRequest,
   GenerationRequest,
   IndexedPassage,
+  StoryCharacter,
   StoryContext,
   StoryPlan,
   StoryPlanExtensionRequest,
   StoryPlanRequest,
   UserId,
 } from '../../types/domain';
+
+type CharacterIllustrationVariant = NonNullable<CharacterIllustrationRequest['variant']>;
 
 export interface StoryPlanner {
   /** Generate a story plan (does NOT persist it — persistence is gated on confirmPlan). */
@@ -39,10 +42,15 @@ export interface StoryPlanner {
     onEach?: (index: number, illustrationUrl: string) => void,
   ): Promise<StoryPlan>;
   /**
-   * Regenerate one character portrait on demand. Returns null when illustration is unavailable,
-   * the index is invalid, or the image provider fails; existing stored art should be kept then.
+   * Regenerate one character illustration on demand. Defaults to the overview portrait; pass
+   * `full_body` for the individual character detail page. Returns null when illustration is
+   * unavailable, the index is invalid, or the image provider fails; existing stored art should be kept.
    */
-  illustrateCharacter(plan: StoryPlan, characterIndex: number): Promise<string | null>;
+  illustrateCharacter(
+    plan: StoryPlan,
+    characterIndex: number,
+    variant?: CharacterIllustrationVariant,
+  ): Promise<string | null>;
   /** Extend a long-story plan with more future chapter beats when the plot outline is exhausted. */
   extendPlan(
     plan: StoryPlan,
@@ -90,19 +98,24 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
     const characters = plan.characters.map((c) => ({ ...c }));
     await Promise.allSettled(
       characters.map(async (character, index) => {
-        const url = await illustrate(characterIllustrationRequest(plan, index));
+        const url = await illustrate(characterIllustrationRequest(plan, index, 'portrait'));
         character.illustrationUrl = url;
+        character.portraitIllustrationUrl = url;
         onEach?.(index, url);
       }),
     );
     return { ...plan, characters };
   }
 
-  async function illustrateCharacter(plan: StoryPlan, characterIndex: number): Promise<string | null> {
+  async function illustrateCharacter(
+    plan: StoryPlan,
+    characterIndex: number,
+    variant: CharacterIllustrationVariant = 'portrait',
+  ): Promise<string | null> {
     const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
     if (!illustrate || !plan.characters[characterIndex]) return null;
     try {
-      return await illustrate(characterIllustrationRequest(plan, characterIndex));
+      return await illustrate(characterIllustrationRequest(plan, characterIndex, variant));
     } catch {
       return null;
     }
@@ -162,15 +175,29 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
   return { planStory, illustrateCharacters, illustrateCharacter, extendPlan, confirmPlan, generateChapter };
 }
 
-function characterIllustrationRequest(plan: StoryPlan, characterIndex: number): CharacterIllustrationRequest {
+function characterIllustrationRequest(
+  plan: StoryPlan,
+  characterIndex: number,
+  variant: CharacterIllustrationVariant,
+): CharacterIllustrationRequest {
   const character = plan.characters[characterIndex]!;
   return {
     name: character.name,
     role: character.role,
     descriptionJa: character.descriptionJa,
     genre: plan.genre,
+    variant,
+    storyTitleJa: plan.titleJa,
+    storySynopsisJa: plan.synopsisJa,
+    castStyleGuide: castStyleGuide(plan.characters),
     styleHint: plan.homage?.styleNoteJa || plan.genre,
   };
+}
+
+function castStyleGuide(characters: StoryCharacter[]): string {
+  return characters
+    .map((character, index) => `${index + 1}. ${character.name} (${character.role}): ${character.descriptionJa}`)
+    .join('\n');
 }
 
 function attachStoryRef(passage: IndexedPassage, storyContext: StoryContext): IndexedPassage {

@@ -77,4 +77,22 @@ describe('<StudyWordsList/>', () => {
     expect(onMarkUnknown).toHaveBeenCalledWith('deal');
     expect(onSelectWord).not.toHaveBeenCalled();
   });
+
+  it('shows the base form instead of an inflected surface in the right rail', () => {
+    const plural: StudyWord[] = [{ wordId: 'dog', surface: 'dogs', stage: 'Learning' }];
+    const { getByTestId } = render(<StudyWordsList words={plural} />);
+    const row = getByTestId('study-word-dog');
+
+    expect(within(row).getByText('dog')).toBeTruthy();
+    expect(within(row).queryByText('dogs')).toBeNull();
+  });
+
+  it('keeps a supplied headword label when the word id is opaque', () => {
+    const opaque: StudyWord[] = [{ wordId: 'w1', surface: 'resilient', stage: 'Learning' }];
+    const { getByTestId } = render(<StudyWordsList words={opaque} />);
+    const row = getByTestId('study-word-w1');
+
+    expect(within(row).getByText('resilient')).toBeTruthy();
+    expect(within(row).queryByText('w1')).toBeNull();
+  });
 });

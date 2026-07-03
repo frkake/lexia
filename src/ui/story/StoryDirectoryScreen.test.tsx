@@ -10,7 +10,15 @@ const PLAN: StoryPlan = {
   genre: 'fantasy',
   titleJa: '星の継承者',
   synopsisJa: '少女が星を継ぐ物語。',
-  characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+  characters: [
+    {
+      name: 'Mia',
+      role: '主人公',
+      descriptionJa: '好奇心旺盛な少女',
+      portraitIllustrationUrl: 'data:image/png;base64,PORTRAIT',
+      fullBodyIllustrationUrl: 'data:image/png;base64,FULLBODY',
+    },
+  ],
   chapters: [
     { index: 0, headingJa: '第一章 旅立ち', beatJa: '' },
     { index: 1, headingJa: '第二章 星の門', beatJa: '' },
@@ -20,6 +28,7 @@ const PLAN: StoryPlan = {
 describe('<StoryDirectoryScreen/>', () => {
   it('shows synopsis, characters, and opens a generated chapter', () => {
     const onOpenChapter = vi.fn();
+    const onOpenCharacter = vi.fn();
     const onRegenerateCharacter = vi.fn();
     render(
       <StoryDirectoryScreen
@@ -29,12 +38,17 @@ describe('<StoryDirectoryScreen/>', () => {
           { chapterIndex: 1, headingJa: '第二章 星の門', generated: false },
         ]}
         onOpenChapter={onOpenChapter}
+        onOpenCharacter={onOpenCharacter}
         onRegenerateCharacter={onRegenerateCharacter}
       />,
     );
     expect(screen.getByText('星の継承者')).toBeTruthy();
     expect(screen.getByText('少女が星を継ぐ物語。')).toBeTruthy();
     expect(screen.getByText('Mia')).toBeTruthy();
+    expect((screen.getByAltText('Mia') as HTMLImageElement).src).toContain('PORTRAIT');
+
+    fireEvent.click(screen.getByTestId('open-directory-character-0'));
+    expect(onOpenCharacter).toHaveBeenCalledWith(0);
 
     fireEvent.click(screen.getByText('第一章 旅立ち'));
     expect(onOpenChapter).toHaveBeenCalledWith(0);

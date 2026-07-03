@@ -228,11 +228,14 @@ export interface StoryCharacter {
   role: string;
   descriptionJa: string;
   /**
-   * Generated portrait as a base64 `data:` URL (Requirement 6.8). Optional enrichment: absent when
-   * illustration is disabled, unconfigured, or the image call failed. Stored inline with the plan
-   * (the sole deliberate exception to lexiaDb's "blobs are never stored" convention — there is no CDN).
+   * Generated portrait as a base64 `data:` URL (Requirement 6.8). Kept as the primary/back-compat
+   * field for existing stored plans and overview pages.
    */
   illustrationUrl?: string;
+  /** Explicit portrait image for character overviews. Falls back to `illustrationUrl` for old plans. */
+  portraitIllustrationUrl?: string;
+  /** Full-body character image for the individual character detail page. */
+  fullBodyIllustrationUrl?: string;
 }
 
 /** One chapter's heading + beat in the story plan (short stories have a single element). */
@@ -295,6 +298,13 @@ export interface CharacterIllustrationRequest {
   role: string;
   descriptionJa: string;
   genre: StoryGenre;
+  /** `portrait` for story overviews; `full_body` for the character detail page. */
+  variant?: 'portrait' | 'full_body';
+  /** Story-level identity context, used to keep portrait and full-body variants consistent. */
+  storyTitleJa?: string;
+  storySynopsisJa?: string;
+  /** Stable cast style/identity guide shared by all character image requests for the story. */
+  castStyleGuide?: string;
   /** Style/motif hint (from the plan's homage note or genre) to keep the cast visually coherent. */
   styleHint?: string;
 }

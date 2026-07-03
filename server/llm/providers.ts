@@ -742,7 +742,7 @@ async function generateImageDataUrl(
 }
 
 /**
- * Generate one character's full-body illustration, returning a `data:image/png;base64,...` URL (Requirement 6.8).
+ * Generate one character illustration, returning a `data:image/png;base64,...` URL (Requirement 6.8).
  * OpenAI hits the Images endpoint (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint
  * (`predictions[].bytesBase64Encoded`, key as query param per the REST contract). Small size + low
  * quality keep the data URL light since it lands in IndexedDB.
@@ -753,9 +753,10 @@ export async function illustrateCharacter(
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Promise<string> {
   const prompt = buildCharacterIllustrationPrompt(req);
+  const variant = req.variant ?? 'full_body';
   return generateImageDataUrl(env, prompt, fetchImpl, {
-    openAiSize: '1024x1536',
-    geminiAspectRatio: '3:4',
+    openAiSize: variant === 'portrait' ? '1024x1024' : '1024x1536',
+    geminiAspectRatio: variant === 'portrait' ? '1:1' : '3:4',
   });
 }
 

@@ -244,6 +244,61 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     });
   });
 
+  it('opens an individual character detail page and generates the full-body illustration', async () => {
+    const userId = 'story_route_character_detail_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    await repos.stories.put({
+      storyId: PLAN.storyId,
+      userId,
+      createdAt: 1_000,
+      plan: {
+        ...PLAN,
+        characters: [
+          {
+            ...PLAN.characters[0]!,
+            illustrationUrl: 'data:image/png;base64,UE9SVFJBSVQ=',
+            portraitIllustrationUrl: 'data:image/png;base64,UE9SVFJBSVQ=',
+          },
+        ],
+      },
+    });
+
+    const variants: Array<string | undefined> = [];
+    const detailStoryGateway: StoryGateway = {
+      planStory: async () => PLAN,
+      illustrateCharacter: async (req) => {
+        variants.push(req.variant);
+        return 'data:image/png;base64,RlVMTEJPRFk=';
+      },
+    };
+    const container = await createContainer(userId, {
+      db,
+      content: contentGateway,
+      story: detailStoryGateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/s/story_1/characters/0'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Mia' })).toBeTruthy();
+    await waitFor(() => expect((screen.getByAltText('Mia の全身') as HTMLImageElement).src).toContain('RlVMTEJPRFk='));
+    expect(variants).toContain('full_body');
+    await waitFor(async () => {
+      const story = await repos.stories.get('story_1');
+      expect(story?.plan.characters[0]!.fullBodyIllustrationUrl).toBe('data:image/png;base64,RlVMTEJPRFk=');
+    });
+  });
+
   it('keeps the current plan illustrating when an older portrait request finishes after regenerate', async () => {
     const userId = 'story_route_race_user' as UserId;
     const db = new LexiaDb(userId);

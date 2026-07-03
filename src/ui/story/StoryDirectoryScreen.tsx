@@ -7,7 +7,7 @@
 
 import type { CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
-import type { StoryPlan } from '../../types/domain';
+import type { StoryCharacter, StoryPlan } from '../../types/domain';
 
 export interface StoryChapterRow {
   chapterIndex: number;
@@ -19,6 +19,7 @@ export interface StoryDirectoryScreenProps {
   plan: StoryPlan;
   chapters: StoryChapterRow[];
   onOpenChapter?: (chapterIndex: number) => void;
+  onOpenCharacter?: (characterIndex: number) => void;
   onRegenerateCharacter?: (characterIndex: number) => void;
   regeneratingCharacterIndex?: number | null;
   characterIllustrationError?: string | null;
@@ -28,6 +29,7 @@ export function StoryDirectoryScreen({
   plan,
   chapters,
   onOpenChapter,
+  onOpenCharacter,
   onRegenerateCharacter,
   regeneratingCharacterIndex = null,
   characterIllustrationError = null,
@@ -50,29 +52,35 @@ export function StoryDirectoryScreen({
             <div style={sectionTitleStyle}>登場人物</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
               {plan.characters.map((ch, index) => (
-                <div key={ch.name} style={characterCardStyle}>
-                  {ch.illustrationUrl ? (
-                    <img src={ch.illustrationUrl} alt={ch.name} style={portraitStyle} />
+                <article key={ch.name} style={characterCardStyle}>
+                  {onOpenCharacter ? (
+                    <button
+                      type="button"
+                      data-testid={`open-directory-character-${index}`}
+                      aria-label={`${ch.name} の詳細`}
+                      onClick={() => onOpenCharacter(index)}
+                      style={characterOpenButtonStyle}
+                    >
+                      <CharacterPortrait character={ch} />
+                    </button>
                   ) : (
-                    <div aria-hidden style={{ ...portraitStyle, background: colors.avatarBg }} />
+                    <div style={characterOpenStaticStyle}>
+                      <CharacterPortrait character={ch} />
+                    </div>
                   )}
-                  <div>
-                    <div style={{ fontFamily: fonts.ui, fontSize: 14, fontWeight: 600, color: colors.ink }}>{ch.name}</div>
-                    <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.muted }}>{ch.role}</div>
-                    {onRegenerateCharacter ? (
-                      <button
-                        type="button"
-                        data-testid={`regenerate-directory-character-${index}`}
-                        onClick={() => onRegenerateCharacter(index)}
-                        disabled={regeneratingCharacterIndex !== null}
-                        aria-busy={regeneratingCharacterIndex === index}
-                        style={characterRegenerateButtonStyle(regeneratingCharacterIndex === index)}
-                      >
-                        {regeneratingCharacterIndex === index ? '生成中…' : 'イラストを再生成'}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+                  {onRegenerateCharacter ? (
+                    <button
+                      type="button"
+                      data-testid={`regenerate-directory-character-${index}`}
+                      onClick={() => onRegenerateCharacter(index)}
+                      disabled={regeneratingCharacterIndex !== null}
+                      aria-busy={regeneratingCharacterIndex === index}
+                      style={characterRegenerateButtonStyle(regeneratingCharacterIndex === index)}
+                    >
+                      {regeneratingCharacterIndex === index ? '生成中…' : 'イラストを再生成'}
+                    </button>
+                  ) : null}
+                </article>
               ))}
             </div>
             {characterIllustrationError ? (
@@ -111,6 +119,27 @@ export function StoryDirectoryScreen({
   );
 }
 
+function CharacterPortrait({ character }: { character: StoryCharacter }) {
+  const url = portraitImageUrl(character);
+  return (
+    <>
+      {url ? (
+        <img src={url} alt={character.name} style={portraitStyle} />
+      ) : (
+        <div aria-hidden style={{ ...portraitStyle, background: colors.avatarBg }} />
+      )}
+      <span style={characterTextStyle}>
+        <span style={{ fontFamily: fonts.ui, fontSize: 14, fontWeight: 600, color: colors.ink }}>{character.name}</span>
+        <span style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.muted }}>{character.role}</span>
+      </span>
+    </>
+  );
+}
+
+function portraitImageUrl(character: StoryCharacter): string | undefined {
+  return character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl;
+}
+
 const pageStyle: CSSProperties = {
   display: 'flex',
   justifyContent: 'center',
@@ -123,20 +152,46 @@ const sectionTitleStyle: CSSProperties = { fontFamily: fonts.ui, fontSize: 14, f
 
 const characterCardStyle: CSSProperties = {
   display: 'flex',
-  alignItems: 'center',
-  gap: 12,
+  flexDirection: 'column',
+  alignItems: 'stretch',
+  gap: 8,
   background: colors.surfaceCard,
   border: `1px solid ${colors.borderCard}`,
   borderRadius: radius.card,
-  padding: '12px 16px',
-  minWidth: 200,
+  padding: 12,
+  minWidth: 220,
+};
+
+const characterOpenButtonStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  width: '100%',
+  padding: 0,
+  textAlign: 'left',
+  background: 'transparent',
+  border: 0,
+  cursor: 'pointer',
+};
+
+const characterOpenStaticStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+};
+
+const characterTextStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
 };
 
 const portraitStyle: CSSProperties = {
-  width: 44,
-  height: 66,
+  width: 54,
+  height: 54,
   borderRadius: radius.control,
-  objectFit: 'contain',
+  objectFit: 'cover',
+  objectPosition: 'center top',
   flex: 'none',
   background: colors.avatarBg,
 };

@@ -159,7 +159,7 @@ export function ReadingScreen({
       const key = t.wordId.trim().toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      words.push({ wordId: t.wordId, surface: t.surface, reappearCount: t.reappearInfo?.count });
+      words.push({ wordId: t.wordId, surface: t.wordId.trim() || t.surface, reappearCount: t.reappearInfo?.count });
     }
     return words;
   }, [active]);
@@ -455,8 +455,12 @@ function StoryPlanDialog({
           <div style={storyCharacterListStyle}>
             {plan.characters.map((character, index) => (
               <article key={`${character.name}:${character.role}`} style={storyCharacterItemStyle}>
-                {character.illustrationUrl ? (
-                  <img src={character.illustrationUrl} alt={character.name} style={storyCharacterImageStyle} />
+                {character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl ? (
+                  <img
+                    src={(character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl)!}
+                    alt={character.name}
+                    style={storyCharacterImageStyle}
+                  />
                 ) : (
                   <div aria-hidden="true" style={storyCharacterInitialStyle}>
                     {[...character.name][0] ?? '?'}

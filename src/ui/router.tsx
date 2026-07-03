@@ -13,6 +13,7 @@ import {
   LibraryRoute,
   ReadingRoute,
   ReviewRoute,
+  StoryCharacterDetailRoute,
   StoryDirectoryRoute,
   WordbookRoute,
 } from './app/routes';
@@ -26,6 +27,7 @@ export const appRoutes: RouteObject[] = [
       { path: 'library', element: <LibraryRoute /> },
       { path: 'p/:passageId', element: <ReadingRoute /> },
       { path: 's/:storyId', element: <StoryDirectoryRoute /> },
+      { path: 's/:storyId/characters/:characterIndex', element: <StoryCharacterDetailRoute /> },
       { path: 's/:storyId/:chapterIndex', element: <ReadingRoute /> },
       { path: 'review', element: <ReviewRoute /> },
       { path: 'wordbook', element: <WordbookRoute /> },

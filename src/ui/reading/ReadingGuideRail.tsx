@@ -10,6 +10,7 @@ import type { CSSProperties, MouseEvent } from 'react';
 import { colors, fonts, noticeStyle, radius } from '../theme/tokens';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
+import { studyWordLabel } from './StudyWordsList';
 import type { LineAnchor } from './useLineAnchors';
 import type { StudyWord } from './StudyWordsList';
 import type { IndexedPassage, NoticeCue, SpanRef, TargetSpan } from '../../types/domain';
@@ -113,7 +114,7 @@ function firstTargetsByWord(passage: IndexedPassage): TargetSpan[] {
 function fallbackStudyWord(span: TargetSpan): StudyWord {
   return {
     wordId: span.wordId,
-    surface: span.surface || span.wordId,
+    surface: span.wordId.trim() || span.surface,
     reappearCount: span.reappearInfo?.count,
   };
 }
@@ -284,6 +285,7 @@ function StudyGuideCard({
   markingUnknownId: string | null;
 }) {
   const word = item.word;
+  const label = studyWordLabel(word);
   const firstCue = item.notices[0]?.cue.index ?? null;
   const isUnknownPending = markingUnknownId !== null;
   const isMarkingUnknown = markingUnknownId === word.wordId;
@@ -319,7 +321,7 @@ function StudyGuideCard({
         <span style={{ ...guideNumberStyle, background: colors.primary }}>{item.guideIndex}</span>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: fonts.serif, fontSize: 17, color: colors.ink }}>{word.surface}</span>
+            <span style={{ fontFamily: fonts.serif, fontSize: 17, color: colors.ink }}>{label}</span>
             <span style={studyBadgeStyle}>学習語句</span>
             {frequencyText(word.frequency) ? <span style={subtleMetaStyle}>{frequencyText(word.frequency)}</span> : null}
           </div>
@@ -329,7 +331,7 @@ function StudyGuideCard({
           {onPlayWord ? (
             <button
               type="button"
-              aria-label={`${word.surface} の発音を再生`}
+              aria-label={`${label} の発音を再生`}
               onClick={(event) => stopAndRun(event, () => onPlayWord(word.wordId))}
               style={iconButtonStyle}
             >
@@ -339,7 +341,7 @@ function StudyGuideCard({
           {onMarkUnknown ? (
             <button
               type="button"
-              aria-label={`${word.surface} を知らなかったとして記録`}
+              aria-label={`${label} を知らなかったとして記録`}
               data-testid={`guide-mark-unknown-${word.wordId}`}
               disabled={isUnknownPending}
               aria-busy={isMarkingUnknown}
@@ -389,7 +391,7 @@ function StudyGuideCard({
 
       {(word.reappearCount ?? 0) >= REAPPEAR_THRESHOLD ? (
         <div style={reappearNoteStyle}>
-          <b style={{ color: colors.ink }}>{word.surface}</b> は今回が{word.reappearCount}回目。
+          <b style={{ color: colors.ink }}>{label}</b> は今回が{word.reappearCount}回目。
           違う文脈で再登場させ、定着へ近づけます。
         </div>
       ) : null}

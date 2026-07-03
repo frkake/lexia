@@ -5,6 +5,7 @@ import type { StoryGateway, StoryRepository } from '../../types/ports';
 import type {
   GenerationRequest,
   IndexedPassage,
+  CharacterIllustrationRequest,
   StoryPlan,
   StoryPlanRequest,
   StoryRecord,
@@ -120,24 +121,31 @@ describe('StoryPlanner.illustrateCharacters (6.8 — parallel, progressive, neve
       ],
     });
 
-  function gatewayWithIllustrator(
-    illustrate: (req: { name: string }) => Promise<string>,
-  ): StoryGateway {
+  function gatewayWithIllustrator(illustrate: (req: CharacterIllustrationRequest) => Promise<string>): StoryGateway {
     return { planStory: async () => plan(), illustrateCharacter: (req) => illustrate(req) };
   }
 
   it('fills each character illustrationUrl and fires onEach per character', async () => {
-    const gw = gatewayWithIllustrator(async (req) => `data:image/png;base64,${req.name}`);
+    const seenReqs: CharacterIllustrationRequest[] = [];
+    const gw = gatewayWithIllustrator(async (req) => {
+      seenReqs.push(req);
+      return `data:image/png;base64,${req.name}`;
+    });
     const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
     const seen: Array<[number, string]> = [];
     const result = await planner.illustrateCharacters(twoChars(), (i, url) => seen.push([i, url]));
 
     expect(result.characters[0]!.illustrationUrl).toBe('data:image/png;base64,Aria');
+    expect(result.characters[0]!.portraitIllustrationUrl).toBe('data:image/png;base64,Aria');
     expect(result.characters[1]!.illustrationUrl).toBe('data:image/png;base64,Draco');
+    expect(result.characters[1]!.portraitIllustrationUrl).toBe('data:image/png;base64,Draco');
     expect(seen.sort()).toEqual([
       [0, 'data:image/png;base64,Aria'],
       [1, 'data:image/png;base64,Draco'],
     ]);
+    expect(seenReqs.every((req) => req.variant === 'portrait')).toBe(true);
+    expect(seenReqs[0]!.castStyleGuide).toContain('Aria');
+    expect(seenReqs[0]!.castStyleGuide).toContain('Draco');
   });
 
   it('does not reject when one character fails — others keep their portraits', async () => {
@@ -156,11 +164,13 @@ describe('StoryPlanner.illustrateCharacters (6.8 — parallel, progressive, neve
     const planner = createStoryPlanner({ gateway: gateway(plan()).gw, storyRepo: memRepo() });
     const input = twoChars();
     const result = await planner.illustrateCharacters(input);
-    expect(result.characters.every((c) => c.illustrationUrl === undefined)).toBe(true);
+    expect(result.characters.every((c) => c.illustrationUrl === undefined && c.portraitIllustrationUrl === undefined)).toBe(
+      true,
+    );
   });
 
-  it('regenerates one character portrait on demand', async () => {
-    const seen: unknown[] = [];
+  it('regenerates one character portrait or full-body image on demand', async () => {
+    const seen: CharacterIllustrationRequest[] = [];
     const gw: StoryGateway = {
       planStory: async () => plan(),
       illustrateCharacter: async (req) => {
@@ -171,9 +181,20 @@ describe('StoryPlanner.illustrateCharacters (6.8 — parallel, progressive, neve
     const planner = createStoryPlanner({ gateway: gw, storyRepo: memRepo() });
 
     const result = await planner.illustrateCharacter(twoChars(), 1);
+    const fullBody = await planner.illustrateCharacter(twoChars(), 1, 'full_body');
 
     expect(result).toBe('data:image/png;base64,Draco');
-    expect(seen[0]).toMatchObject({ name: 'Draco', role: 'dragon', genre: 'fantasy', styleHint: 'fantasy' });
+    expect(fullBody).toBe('data:image/png;base64,Draco');
+    expect(seen[0]).toMatchObject({
+      name: 'Draco',
+      role: 'dragon',
+      genre: 'fantasy',
+      variant: 'portrait',
+      storyTitleJa: '竜の物語',
+      styleHint: 'fantasy',
+    });
+    expect(seen[0]!.castStyleGuide).toContain('Aria');
+    expect(seen[1]).toMatchObject({ name: 'Draco', variant: 'full_body' });
   });
 
   it('returns null for single-portrait regeneration when illustration is unavailable or fails', async () => {

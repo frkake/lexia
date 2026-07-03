@@ -177,8 +177,30 @@ describe('buildCharacterIllustrationPrompt', () => {
     expect(prompt).toContain('memorable silhouette');
     expect(prompt).toContain('head-to-toe full body');
     expect(prompt).toContain('signature outfit, color accent, or prop');
+    expect(prompt).toContain('same face shape');
     expect(prompt).toContain('avoid storybook style');
     expect(prompt).toContain('chibi proportions');
+  });
+
+  it('builds portrait prompts for story overview thumbnails with shared cast consistency context', () => {
+    const prompt = buildCharacterIllustrationPrompt({
+      name: 'Aria',
+      role: '主人公',
+      descriptionJa: '赤い羽根つき帽子をかぶった勇敢な少女',
+      genre: 'fantasy',
+      variant: 'portrait',
+      storyTitleJa: '星の継承者',
+      storySynopsisJa: '星を継ぐ旅。',
+      castStyleGuide: '1. Aria: 赤い羽根つき帽子\n2. Draco: 銀色の角',
+      styleHint: '幻想的な作風',
+    });
+    expect(prompt).toContain('Portrait character illustration');
+    expect(prompt).toContain('Portrait bust composition');
+    expect(prompt).toContain('head and upper torso visible');
+    expect(prompt).toContain('square-friendly');
+    expect(prompt).toContain('Story title (Japanese): 星の継承者');
+    expect(prompt).toContain('Cast consistency guide');
+    expect(prompt).toContain('Draco');
   });
 });
 
@@ -229,6 +251,8 @@ describe('buildStoryPlanExtensionMessages', () => {
             role: '主人公',
             descriptionJa: '好奇心旺盛な少女',
             illustrationUrl: 'data:image/png;base64,TOO_BIG',
+            portraitIllustrationUrl: 'data:image/png;base64,PORTRAIT_TOO_BIG',
+            fullBodyIllustrationUrl: 'data:image/png;base64,FULL_TOO_BIG',
           },
         ],
         chapters: [
@@ -242,6 +266,8 @@ describe('buildStoryPlanExtensionMessages', () => {
     expect(user).toContain('"nextChapterIndex": 2');
     expect(user).toContain('主人公は星の門を開いた。');
     expect(user).not.toContain('TOO_BIG');
+    expect(user).not.toContain('PORTRAIT_TOO_BIG');
+    expect(user).not.toContain('FULL_TOO_BIG');
   });
 });
 

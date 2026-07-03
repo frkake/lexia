@@ -12,6 +12,7 @@ import type { MasteryStage } from '../../types/domain';
 
 export interface StudyWord {
   wordId: string;
+  /** Preferred right-rail display label. Callers should keep this as the base-form lemma. */
   surface: string;
   stage?: MasteryStage;
   meaningJa?: string;
@@ -25,6 +26,20 @@ export interface StudyWord {
 }
 
 const REAPPEAR_THRESHOLD = 2;
+
+function isSimpleInflectionOf(surface: string, lemma: string): boolean {
+  const s = surface.toLowerCase();
+  const l = lemma.toLowerCase();
+  return s === l || s === `${l}s` || s === `${l}es` || (l.endsWith('y') && s === `${l.slice(0, -1)}ies`);
+}
+
+export function studyWordLabel(word: Pick<StudyWord, 'wordId' | 'surface'>): string {
+  const surface = word.surface.trim();
+  const lemma = word.wordId.trim();
+  if (!surface) return lemma;
+  if (lemma && isSimpleInflectionOf(surface, lemma)) return lemma;
+  return surface;
+}
 
 export interface StudyWordsListProps {
   words: StudyWord[];
@@ -64,113 +79,119 @@ export function StudyWordsList({ words, onSelectWord, onPlayWord, onMarkUnknown 
         学習語句 <span style={{ color: colors.fainter }}>{words.length}</span> · 習熟度に応じて再登場
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {words.map((w) => (
-          <div
-            key={w.wordId}
-            data-testid={`study-word-${w.wordId}`}
-            role={onSelectWord ? 'button' : undefined}
-            tabIndex={onSelectWord ? 0 : undefined}
-            onClick={() => onSelectWord?.(w.wordId)}
-            onKeyDown={(event) => {
-              if (!onSelectWord) return;
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onSelectWord(w.wordId);
-              }
-            }}
-            style={{
-              display: 'grid',
-              gridTemplateColumns,
-              gap: 8,
-              alignItems: 'start',
-              fontFamily: fonts.bodyJp,
-              fontSize: 12.5,
-              color: colors.ink,
-              background: colors.surfaceCard,
-              border: `1px solid ${colors.borderCard}`,
-              borderRadius: radius.card,
-              padding: '10px 11px',
-              cursor: onSelectWord ? 'pointer' : 'default',
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-                <MasteryDot stage={w.stage} />
-                <span style={{ fontFamily: fonts.serif, fontSize: 15, color: colors.ink }}>{w.surface}</span>
-                {frequencyText(w.frequency) ? (
-                  <span style={{ fontFamily: fonts.ui, fontSize: 10.5, color: colors.faint }}>
-                    {frequencyText(w.frequency)}
-                  </span>
+        {words.map((w) => {
+          const label = studyWordLabel(w);
+          return (
+            <div
+              key={w.wordId}
+              data-testid={`study-word-${w.wordId}`}
+              role={onSelectWord ? 'button' : undefined}
+              tabIndex={onSelectWord ? 0 : undefined}
+              onClick={() => onSelectWord?.(w.wordId)}
+              onKeyDown={(event) => {
+                if (!onSelectWord) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelectWord(w.wordId);
+                }
+              }}
+              style={{
+                display: 'grid',
+                gridTemplateColumns,
+                gap: 8,
+                alignItems: 'start',
+                fontFamily: fonts.bodyJp,
+                fontSize: 12.5,
+                color: colors.ink,
+                background: colors.surfaceCard,
+                border: `1px solid ${colors.borderCard}`,
+                borderRadius: radius.card,
+                padding: '10px 11px',
+                cursor: onSelectWord ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                  <MasteryDot stage={w.stage} />
+                  <span style={{ fontFamily: fonts.serif, fontSize: 15, color: colors.ink }}>{label}</span>
+                  {frequencyText(w.frequency) ? (
+                    <span style={{ fontFamily: fonts.ui, fontSize: 10.5, color: colors.faint }}>
+                      {frequencyText(w.frequency)}
+                    </span>
+                  ) : null}
+                </div>
+                {w.meaningJa ? (
+                  <div style={{ marginTop: 5, lineHeight: 1.55, color: colors.inkSoft }}>{w.meaningJa}</div>
+                ) : null}
+                {w.collocation || w.register || w.connotation ? (
+                  <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {w.collocation ? <span style={miniChipStyle}>{w.collocation}</span> : null}
+                    {w.register ? <span style={miniChipStyle}>{w.register}</span> : null}
+                    {w.connotation ? <span style={miniChipStyle}>{w.connotation}</span> : null}
+                  </div>
+                ) : null}
+                {w.memoryTipJa ? (
+                  <div style={{ marginTop: 7, lineHeight: 1.55, color: colors.greenDeep }}>
+                    {w.memoryTipJa}
+                  </div>
                 ) : null}
               </div>
-              {w.meaningJa ? (
-                <div style={{ marginTop: 5, lineHeight: 1.55, color: colors.inkSoft }}>{w.meaningJa}</div>
+              {onPlayWord ? (
+                <button
+                  type="button"
+                  aria-label={`${label} の発音を再生`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPlayWord(w.wordId);
+                  }}
+                  style={audioButtonStyle}
+                >
+                  ▶
+                </button>
               ) : null}
-              {w.collocation || w.register || w.connotation ? (
-                <div style={{ marginTop: 7, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                  {w.collocation ? <span style={miniChipStyle}>{w.collocation}</span> : null}
-                  {w.register ? <span style={miniChipStyle}>{w.register}</span> : null}
-                  {w.connotation ? <span style={miniChipStyle}>{w.connotation}</span> : null}
-                </div>
-              ) : null}
-              {w.memoryTipJa ? (
-                <div style={{ marginTop: 7, lineHeight: 1.55, color: colors.greenDeep }}>
-                  {w.memoryTipJa}
-                </div>
+              {onMarkUnknown ? (
+                <button
+                  type="button"
+                  aria-label={`${label} を知らなかったとして記録`}
+                  data-testid={`mark-unknown-${w.wordId}`}
+                  disabled={markingUnknownId !== null}
+                  aria-busy={markingUnknownId === w.wordId}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void markUnknown(w.wordId);
+                  }}
+                  style={unknownButtonStyle(markingUnknownId !== null)}
+                >
+                  {markingUnknownId === w.wordId ? '記録中…' : '知らなかった'}
+                </button>
               ) : null}
             </div>
-            {onPlayWord ? (
-              <button
-                type="button"
-                aria-label={`${w.surface} の発音を再生`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onPlayWord(w.wordId);
-                }}
-                style={audioButtonStyle}
-              >
-                ▶
-              </button>
-            ) : null}
-            {onMarkUnknown ? (
-              <button
-                type="button"
-                aria-label={`${w.surface} を知らなかったとして記録`}
-                data-testid={`mark-unknown-${w.wordId}`}
-                disabled={markingUnknownId !== null}
-                aria-busy={markingUnknownId === w.wordId}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void markUnknown(w.wordId);
-                }}
-                style={unknownButtonStyle(markingUnknownId !== null)}
-              >
-                {markingUnknownId === w.wordId ? '記録中…' : '知らなかった'}
-              </button>
-            ) : null}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {reappearing.map((w) => (
-        <div
-          key={`note-${w.wordId}`}
-          style={{
-            marginTop: 20,
-            background: colors.surfaceSubtle,
-            borderRadius: radius.card,
-            padding: '15px 16px',
-            border: `1px solid ${colors.borderCard}`,
-            fontFamily: fonts.bodyJp,
-            fontSize: 12.5,
-            lineHeight: 1.7,
-            color: colors.inkSoft,
-          }}
-        >
-          <b style={{ color: colors.ink }}>{w.surface}</b> は今回が{w.reappearCount}回目。
-          違う文脈で再登場させ、次第に注釈を減らして定着させます。
-        </div>
-      ))}
+      {reappearing.map((w) => {
+        const label = studyWordLabel(w);
+        return (
+          <div
+            key={`note-${w.wordId}`}
+            style={{
+              marginTop: 20,
+              background: colors.surfaceSubtle,
+              borderRadius: radius.card,
+              padding: '15px 16px',
+              border: `1px solid ${colors.borderCard}`,
+              fontFamily: fonts.bodyJp,
+              fontSize: 12.5,
+              lineHeight: 1.7,
+              color: colors.inkSoft,
+            }}
+          >
+            <b style={{ color: colors.ink }}>{label}</b> は今回が{w.reappearCount}回目。
+            違う文脈で再登場させ、次第に注釈を減らして定着させます。
+          </div>
+        );
+      })}
     </div>
   );
 }

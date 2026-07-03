@@ -6,7 +6,7 @@
  *   - ReadingRoute → opens a passage by URL (openPassage) + read-through recall on completion.
  *   - WordDetailRoute → explicit「知らなかった」marks use the review rating path (Again).
  *   - ReviewRoute → applyReviewRating on a rating (Flow 2: reschedule→log→reproject).
- *   - LibraryRoute / StoryDirectoryRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
+ *   - LibraryRoute / StoryDirectoryRoute / StoryCharacterDetailRoute / WordbookRoute → live snapshots via useLiveQuery (reactive reads).
  * Reads are reactive (`useLiveQuery`) so any repository write re-renders immediately.
  */
 
@@ -18,6 +18,7 @@ import { type CandidateWord } from '../setup/SetupScreen';
 import { HomeScreen } from '../home/HomeScreen';
 import { LibraryScreen } from '../library/LibraryScreen';
 import { StoryDirectoryScreen, type StoryChapterRow } from '../story/StoryDirectoryScreen';
+import { StoryCharacterDetailScreen } from '../story/StoryCharacterDetailScreen';
 import { StoryPlanReview } from '../setup/StoryPlanReview';
 import { ReadingScreen } from '../reading/ReadingScreen';
 import type { StudyWord } from '../reading/StudyWordsList';
@@ -190,7 +191,7 @@ function uniqueStudyWords(passage: IndexedPassage): StudyWord[] {
   for (const span of passage.source.targetSpans) {
     if (seen.has(span.wordId)) continue;
     seen.add(span.wordId);
-    words.push({ wordId: span.wordId, surface: span.surface || span.wordId, reappearCount: span.reappearInfo?.count });
+    words.push({ wordId: span.wordId, surface: span.wordId.trim() || span.surface, reappearCount: span.reappearInfo?.count });
   }
   return words;
 }
@@ -446,7 +447,9 @@ export function HomeRoute() {
               if (activeIllustrationRequest.current !== illustrationRequest) return;
               setPendingPlan((prev) => {
                 if (!prev || prev.storyId !== planned.value.storyId) return prev;
-                const characters = prev.characters.map((ch, i) => (i === index ? { ...ch, illustrationUrl } : ch));
+                const characters = prev.characters.map((ch, i) =>
+                  i === index ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+                );
                 return { ...prev, characters };
               });
             })
@@ -479,7 +482,9 @@ export function HomeRoute() {
       }
       setPendingPlan((prev) => {
         if (!prev || prev.storyId !== plan.storyId) return prev;
-        const characters = prev.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+        const characters = prev.characters.map((ch, i) =>
+          i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+        );
         return { ...prev, characters };
       });
     } finally {
@@ -689,6 +694,7 @@ export function ReadingRoute() {
         ]);
         return {
           ...word,
+          surface: data?.headword ?? word.surface,
           stage: state ? masteryProjector.deriveMastery(state, { kind: 'none' }) : undefined,
           reappearCount: state?.reappearCount ?? word.reappearCount,
           meaningJa: data?.core.meaningsJa[0],
@@ -852,7 +858,9 @@ export function ReadingRoute() {
         setStoryCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
         return;
       }
-      const characters = story.plan.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+      const characters = story.plan.characters.map((ch, i) =>
+        i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+      );
       await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
     } catch {
       setStoryCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
@@ -1057,7 +1065,9 @@ export function StoryDirectoryRoute() {
         setCharacterIllustrationError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
         return;
       }
-      const characters = story.plan.characters.map((ch, i) => (i === characterIndex ? { ...ch, illustrationUrl } : ch));
+      const characters = story.plan.characters.map((ch, i) =>
+        i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+      );
       await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
     } catch {
       setCharacterIllustrationError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
@@ -1083,9 +1093,85 @@ export function StoryDirectoryRoute() {
       plan={data.plan}
       chapters={data.rows}
       onOpenChapter={(chapterIndex) => navigate(`/s/${storyId}/${chapterIndex}`)}
+      onOpenCharacter={(characterIndex) => navigate(`/s/${storyId}/characters/${characterIndex}`)}
       onRegenerateCharacter={characterIllustrations ? (index) => void regenerateCharacter(index) : undefined}
       regeneratingCharacterIndex={regeneratingCharacterIndex}
       characterIllustrationError={characterIllustrationError}
+    />
+  );
+}
+
+export function StoryCharacterDetailRoute() {
+  const c = useContainer();
+  const navigate = useNavigate();
+  const params = useParams();
+  const storyId = params.storyId ?? '';
+  const characterIndex = Number(params.characterIndex);
+  const [regeneratingFullBody, setRegeneratingFullBody] = useState(false);
+  const [illustrationError, setIllustrationError] = useState<string | null>(null);
+  const [autoRequestedKey, setAutoRequestedKey] = useState<string | null>(null);
+  const { characterIllustrations } = resolveFeatureFlags();
+
+  const data = useLiveQuery(async () => {
+    if (!Number.isInteger(characterIndex) || characterIndex < 0) return null;
+    const story = await c.repos.stories.get(storyId);
+    if (!story || story.userId !== c.userId) return null;
+    if (!story.plan.characters[characterIndex]) return null;
+    return { story, plan: story.plan };
+  }, [c, storyId, characterIndex]);
+
+  const regenerateFullBody = useCallback(async (): Promise<void> => {
+    if (!data || regeneratingFullBody) return;
+    const story = data.story;
+    setRegeneratingFullBody(true);
+    setIllustrationError(null);
+    try {
+      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex, 'full_body');
+      if (!illustrationUrl) {
+        setIllustrationError('全身イラストを生成できませんでした。時間をおいて再試行してください。');
+        return;
+      }
+      const characters = story.plan.characters.map((ch, i) =>
+        i === characterIndex ? { ...ch, fullBodyIllustrationUrl: illustrationUrl } : ch,
+      );
+      await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
+    } catch {
+      setIllustrationError('全身イラストを生成できませんでした。時間をおいて再試行してください。');
+    } finally {
+      setRegeneratingFullBody(false);
+    }
+  }, [c, characterIndex, data, regeneratingFullBody]);
+
+  useEffect(() => {
+    if (!characterIllustrations || !data || regeneratingFullBody) return;
+    const character = data.plan.characters[characterIndex];
+    if (!character || character.fullBodyIllustrationUrl) return;
+    const key = `${data.plan.storyId}:${characterIndex}:full_body`;
+    if (autoRequestedKey === key) return;
+    setAutoRequestedKey(key);
+    void regenerateFullBody();
+  }, [autoRequestedKey, characterIllustrations, characterIndex, data, regenerateFullBody, regeneratingFullBody]);
+
+  if (data === undefined) return <ScreenSkeleton />;
+  if (data === null) {
+    return (
+      <div style={notFoundStyle}>
+        <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink }}>人物が見つかりません</div>
+        <button type="button" onClick={() => navigate(`/s/${storyId}`)} style={notFoundButtonStyle}>
+          物語へ戻る
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <StoryCharacterDetailScreen
+      plan={data.plan}
+      characterIndex={characterIndex}
+      onBack={() => navigate(`/s/${storyId}`)}
+      onRegenerateFullBody={characterIllustrations ? () => void regenerateFullBody() : undefined}
+      regeneratingFullBody={regeneratingFullBody}
+      illustrationError={illustrationError}
     />
   );
 }

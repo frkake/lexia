@@ -147,6 +147,24 @@ describe('<ReadingGuideRail/>', () => {
     expectTextOrder(getByTestId('guide-absorbed-notice-4'), 'deal', 'コノテーション');
   });
 
+  it('shows study words by base form even when the passage uses a plural surface', () => {
+    const source: PassageOutput = {
+      meta: { title: 't', intent: 'daily', level: 'A2', newCount: 1, reviewCount: 0, approxWords: 4 },
+      sentences: [{ tokens: ['Many', 'dogs', 'wait', '.'], translationJa: '多くの犬が待っている。' }],
+      targetSpans: [
+        { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2, wordId: 'dog', surface: 'dogs', masteryDensity: 'new' },
+      ],
+      collocationSpans: [],
+      noticeCues: [],
+    };
+    const passage = tokenizer.index('plural-p', source);
+    const { getByTestId } = render(<ReadingGuideRail passage={passage} words={[{ wordId: 'dog', surface: 'dogs' }]} />);
+    const study = getByTestId('guide-item-word:dog');
+
+    expect(within(study).getByText('dog')).toBeTruthy();
+    expect(within(study).queryByText('dogs')).toBeNull();
+  });
+
   it('opens word details from a study-word card and records unknown from a standalone notice', () => {
     const onSelectWord = vi.fn();
     const onMarkUnknown = vi.fn();

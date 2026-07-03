@@ -16,7 +16,15 @@ describe('appRoutes', () => {
     const paths = children.flatMap((c) => ('path' in c && c.path ? [c.path] : []));
     expect(hasIndex).toBe(true);
     expect(paths).toEqual(
-      expect.arrayContaining(['library', 'p/:passageId', 's/:storyId', 's/:storyId/:chapterIndex', 'review', 'wordbook']),
+      expect.arrayContaining([
+        'library',
+        'p/:passageId',
+        's/:storyId',
+        's/:storyId/characters/:characterIndex',
+        's/:storyId/:chapterIndex',
+        'review',
+        'wordbook',
+      ]),
     );
     // The retired tabs are gone.
     expect(paths).not.toContain('read');

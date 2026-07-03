@@ -6,8 +6,8 @@
  * the latest declared version is APP_SCHEMA_VERSION and is mirrored into the settings
  * store. Audio/illustration blobs are normally never stored — only external URL references. The
  * deliberate image exceptions have no CDN, so they are stored inline as base64 `data:` URLs:
- * story character illustrations in `StoryRecord.plan.characters[].illustrationUrl` and passage
- * scene illustrations in `PassageOutput.meta.sceneIllustrationUrl`.
+ * story character illustrations in `StoryRecord.plan.characters[]` and passage scene illustrations
+ * in `PassageOutput.meta.sceneIllustrationUrl`.
  */
 
 import Dexie, { type Table, type Transaction } from 'dexie';

@@ -12,6 +12,7 @@
  */
 
 import type {
+  CharacterIllustrationRequest,
   GenerationRequest,
   LearningIntent,
   PassageAnnotationRequest,
@@ -757,29 +758,50 @@ export function storyPlanExtensionMaxTokens(additionalChapters = 3): number {
 // ── Illustration prompts ─────────────────────────────────────────────────────
 
 /**
- * Build the English image prompt for one full-body character illustration. The character's Japanese description is
- * passed through verbatim (image models read Japanese; a machine translation would drift), wrapped in
- * a fixed style directive so the whole cast reads as one coherent illustrated set. `styleHint` (the
- * plan's homage note or genre) biases mood/palette without ever reproducing a source work.
+ * Build the English image prompt for one character illustration. The character's Japanese
+ * description is passed through verbatim (image models read Japanese; a machine translation would
+ * drift), wrapped in a fixed style directive so the whole cast reads as one coherent illustrated
+ * set. `styleHint` (the plan's homage note or genre) biases mood/palette without ever reproducing
+ * a source work.
  */
-export function buildCharacterIllustrationPrompt(req: {
-  name: string;
-  role: string;
-  descriptionJa: string;
-  genre: string;
-  styleHint?: string;
-}): string {
+export function buildCharacterIllustrationPrompt(req: CharacterIllustrationRequest): string {
+  const variant = req.variant ?? 'full_body';
   const style = req.styleHint?.trim() ? ` Overall style/mood: ${req.styleHint.trim()}.` : '';
+  const story = [
+    req.storyTitleJa ? `Story title (Japanese): ${req.storyTitleJa}.` : '',
+    req.storySynopsisJa ? `Story synopsis (Japanese): ${req.storySynopsisJa}.` : '',
+    req.castStyleGuide?.trim() ? `Cast consistency guide (Japanese):\n${req.castStyleGuide.trim()}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const composition =
+    variant === 'portrait'
+      ? [
+          'Portrait bust composition for a character overview page;',
+          'head and upper torso visible, face clearly readable, signature hair/hat/color/prop cue included;',
+          'crop intentionally as a portrait while never cutting through the face or key identity motif;',
+          'simple neutral background; square-friendly centered composition;',
+        ]
+      : [
+          'Full-body character detail illustration;',
+          'head-to-toe full body with the entire figure visible; no cropping at head, hands, feet, or props;',
+          'show posture, outfit, footwear, silhouette, and signature prop clearly;',
+          'single character centered with generous padding; vertical 3:4 composition;',
+        ];
   return [
-    `Full-body character illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
+    `${variant === 'portrait' ? 'Portrait' : 'Full-body'} character illustration of "${req.name}", the ${req.role} of a ${req.genre} story.`,
     `Character description (Japanese): ${req.descriptionJa}`,
+    story,
+    'Maintain the exact same identity across this character\'s portrait and full-body variants: same face shape, hairstyle, eye impression, outfit palette, signature motif, and prop. Keep all cast members visually distinct from each other.',
     'Elegant contemporary anime-inspired character art for adult learners; polished, restrained, and not photorealistic;',
     'memorable silhouette; expressive face; signature outfit, color accent, or prop from the description;',
-    'head-to-toe full body with the entire figure visible; no cropping at head, hands, feet, or props;',
-    'clean graphic shapes; rich but controlled colors; single character centered with generous padding;',
+    ...composition,
+    'clean graphic shapes; rich but controlled colors;',
     'avoid storybook style, chibi proportions, childish cuteness, exaggerated moe styling, and noisy fantasy clutter;',
     `soft even lighting; simple neutral background; no text, letters, watermark, or logo.${style}`,
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 function renderSentence(sentence: Sentence): string {
