@@ -39,10 +39,35 @@ import { tokenizer } from '../../domain/tokenizer/joinService';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
 import { masteryProjector } from '../../domain/srs/masteryProjector';
 import { colors, fonts, radius } from '../theme/tokens';
-import type { IndexedPassage, MasteryStage, Rating, SetupConfig, StoryPlan, StoryRecord, WordData, WordSchedulingState } from '../../types/domain';
+import type {
+  CharacterIllustrationRequest,
+  IndexedPassage,
+  MasteryStage,
+  Rating,
+  SetupConfig,
+  StoryCharacter,
+  StoryPlan,
+  StoryRecord,
+  WordData,
+  WordSchedulingState,
+} from '../../types/domain';
 import type { PassageRecord } from '../../types/ports';
 
 const CANDIDATE_LIMIT = 12;
+type CharacterIllustrationVariant = NonNullable<CharacterIllustrationRequest['variant']>;
+type CharacterIllustrationFields = Pick<
+  StoryCharacter,
+  'illustrationUrl' | 'portraitIllustrationUrl' | 'fullBodyIllustrationUrl'
+>;
+
+function characterWithIllustrations(character: StoryCharacter, illustrations: CharacterIllustrationFields): StoryCharacter {
+  return {
+    ...character,
+    illustrationUrl: illustrations.illustrationUrl,
+    portraitIllustrationUrl: illustrations.portraitIllustrationUrl,
+    fullBodyIllustrationUrl: illustrations.fullBodyIllustrationUrl,
+  };
+}
 
 function suggestionKeyFor(setup: SetupConfig): string {
   return JSON.stringify({
@@ -377,7 +402,7 @@ export function HomeRoute() {
   const { storyMode, characterIllustrations, passageIllustrations } = resolveFeatureFlags();
   const [pendingPlan, setPendingPlan] = useState<StoryPlan | null>(null);
   const [pendingSetup, setPendingSetup] = useState<SetupConfig | null>(null);
-  // True while character portraits stream in on the confirmation gate (6.8); enrichment only.
+  // True while character illustration pairs stream in on the confirmation gate (6.8); enrichment only.
   const [illustrating, setIllustrating] = useState(false);
   const [regeneratingPendingCharacterIndex, setRegeneratingPendingCharacterIndex] = useState<number | null>(null);
   const [pendingCharacterError, setPendingCharacterError] = useState<string | null>(null);
@@ -431,8 +456,9 @@ export function HomeRoute() {
           setGenerationError(generationErrorMessage(planned.error));
           return;
         }
-        // Show the plan immediately (gate is up), then stream in character portraits (6.8). Illustration
-        // is enrichment: it never blocks confirmation, so failures are swallowed and just leave placeholders.
+        // Show the plan immediately (gate is up), then stream in generated full-body + portrait pairs
+        // (6.8). Full-body is generated first; overview pages use the separately generated portrait.
+        // Illustration is enrichment: it never blocks confirmation, so failures are swallowed.
         setPendingSetup(effectiveSetup);
         setPendingPlan(planned.value);
         setPendingCharacterError(null);
@@ -443,12 +469,12 @@ export function HomeRoute() {
           const illustrationRequest = activeIllustrationRequest.current;
           setIllustrating(true);
           void c.storyPlanner
-            .illustrateCharacters(planned.value, (index, illustrationUrl) => {
+            .illustrateCharacters(planned.value, (index, illustrations) => {
               if (activeIllustrationRequest.current !== illustrationRequest) return;
               setPendingPlan((prev) => {
                 if (!prev || prev.storyId !== planned.value.storyId) return prev;
                 const characters = prev.characters.map((ch, i) =>
-                  i === index ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+                  i === index ? characterWithIllustrations(ch, illustrations) : ch,
                 );
                 return { ...prev, characters };
               });
@@ -469,24 +495,42 @@ export function HomeRoute() {
     }
   };
 
-  const regeneratePendingCharacter = async (characterIndex: number): Promise<void> => {
-    const plan = pendingPlan;
+  const regeneratePendingCharacter = async (
+    characterIndex: number,
+    planOverride?: StoryPlan,
+    variant: CharacterIllustrationVariant = 'full_body',
+  ): Promise<void> => {
+    const plan = planOverride ?? pendingPlan;
     if (!plan || illustrating || regeneratingPendingCharacterIndex !== null) return;
+    setPendingPlan(plan);
     setRegeneratingPendingCharacterIndex(characterIndex);
     setPendingCharacterError(null);
     try {
-      const illustrationUrl = await c.storyPlanner.illustrateCharacter(plan, characterIndex);
-      if (!illustrationUrl) {
+      const illustrations =
+        variant === 'full_body'
+          ? await c.storyPlanner.illustrateCharacterPair(plan, characterIndex)
+          : await c.storyPlanner.illustrateCharacter(plan, characterIndex, variant).then((portraitIllustrationUrl) =>
+              portraitIllustrationUrl
+                ? {
+                    illustrationUrl: portraitIllustrationUrl,
+                    portraitIllustrationUrl,
+                    fullBodyIllustrationUrl: plan.characters[characterIndex]?.fullBodyIllustrationUrl,
+                  }
+                : null,
+            );
+      if (!illustrations) {
         setPendingCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
         return;
       }
       setPendingPlan((prev) => {
         if (!prev || prev.storyId !== plan.storyId) return prev;
         const characters = prev.characters.map((ch, i) =>
-          i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+          i === characterIndex ? characterWithIllustrations(ch, illustrations) : ch,
         );
         return { ...prev, characters };
       });
+    } catch {
+      setPendingCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
     } finally {
       setRegeneratingPendingCharacterIndex(null);
     }
@@ -569,8 +613,16 @@ export function HomeRoute() {
         illustrating={illustrating}
         confirming={generating}
         confirmError={generationError}
-        onRegenerateCharacter={characterIllustrations ? (index) => void regeneratePendingCharacter(index) : undefined}
+        onRegenerateCharacter={
+          characterIllustrations ? (index, plan) => void regeneratePendingCharacter(index, plan, 'full_body') : undefined
+        }
+        onRegenerateCharacterFullBody={
+          characterIllustrations
+            ? (index, plan) => void regeneratePendingCharacter(index, plan, 'full_body')
+            : undefined
+        }
         regeneratingCharacterIndex={regeneratingPendingCharacterIndex}
+        regeneratingFullBodyCharacterIndex={regeneratingPendingCharacterIndex}
         characterIllustrationError={pendingCharacterError}
         onConfirm={(p) => void onConfirmPlan(p)}
         onCancel={() => {
@@ -853,13 +905,13 @@ export function ReadingRoute() {
     setRegeneratingStoryCharacterIndex(characterIndex);
     setStoryCharacterError(null);
     try {
-      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex);
-      if (!illustrationUrl) {
+      const illustrations = await c.storyPlanner.illustrateCharacterPair(story.plan, characterIndex);
+      if (!illustrations) {
         setStoryCharacterError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
         return;
       }
       const characters = story.plan.characters.map((ch, i) =>
-        i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+        i === characterIndex ? characterWithIllustrations(ch, illustrations) : ch,
       );
       await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
     } catch {
@@ -1060,13 +1112,13 @@ export function StoryDirectoryRoute() {
     setRegeneratingCharacterIndex(characterIndex);
     setCharacterIllustrationError(null);
     try {
-      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex);
-      if (!illustrationUrl) {
+      const illustrations = await c.storyPlanner.illustrateCharacterPair(story.plan, characterIndex);
+      if (!illustrations) {
         setCharacterIllustrationError('キャラクターイラストを再生成できませんでした。時間をおいて再試行してください。');
         return;
       }
       const characters = story.plan.characters.map((ch, i) =>
-        i === characterIndex ? { ...ch, illustrationUrl, portraitIllustrationUrl: illustrationUrl } : ch,
+        i === characterIndex ? characterWithIllustrations(ch, illustrations) : ch,
       );
       await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
     } catch {
@@ -1126,13 +1178,13 @@ export function StoryCharacterDetailRoute() {
     setRegeneratingFullBody(true);
     setIllustrationError(null);
     try {
-      const illustrationUrl = await c.storyPlanner.illustrateCharacter(story.plan, characterIndex, 'full_body');
-      if (!illustrationUrl) {
+      const illustrations = await c.storyPlanner.illustrateCharacterPair(story.plan, characterIndex);
+      if (!illustrations) {
         setIllustrationError('全身イラストを生成できませんでした。時間をおいて再試行してください。');
         return;
       }
       const characters = story.plan.characters.map((ch, i) =>
-        i === characterIndex ? { ...ch, fullBodyIllustrationUrl: illustrationUrl } : ch,
+        i === characterIndex ? characterWithIllustrations(ch, illustrations) : ch,
       );
       await c.repos.stories.put({ ...story, plan: { ...story.plan, characters } });
     } catch {
@@ -1145,7 +1197,9 @@ export function StoryCharacterDetailRoute() {
   useEffect(() => {
     if (!characterIllustrations || !data || regeneratingFullBody) return;
     const character = data.plan.characters[characterIndex];
-    if (!character || character.fullBodyIllustrationUrl) return;
+    const portraitUrl = character?.portraitIllustrationUrl ?? character?.illustrationUrl;
+    const hasDedicatedPortrait = !!portraitUrl && portraitUrl !== character?.fullBodyIllustrationUrl;
+    if (!character || (character.fullBodyIllustrationUrl && hasDedicatedPortrait)) return;
     const key = `${data.plan.storyId}:${characterIndex}:full_body`;
     if (autoRequestedKey === key) return;
     setAutoRequestedKey(key);

@@ -76,7 +76,7 @@ function chapterPassage(chapterIndex = 0, title = '星の少女 第一章'): Pas
 
 const storyGateway: StoryGateway = {
   planStory: async () => PLAN,
-  illustrateCharacter: async (req) => `data:image/png;base64,${Buffer.from(req.name).toString('base64')}`,
+  illustrateCharacter: async (req) => `data:image/png;base64,${Buffer.from(`${req.name}-${req.variant}`).toString('base64')}`,
 };
 const contentGateway: ContentGateway = {
   generatePassage: async () => ({ passage: chapterPassage(), stopReason: 'end_turn' }),
@@ -132,9 +132,9 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     // The plan is not persisted until confirmation either.
     expect(await createRepositories(db).stories.recent(userId, 5)).toHaveLength(0);
 
-    // The character portrait streams in and is displayed on the confirmation gate (6.8).
-    const portrait = (await screen.findByAltText('Mia')) as HTMLImageElement;
-    expect(portrait.src).toContain('data:image/png;base64,');
+    // The generated portrait streams in and is displayed on the confirmation gate (6.8).
+    const characterImage = (await screen.findByAltText('Mia')) as HTMLImageElement;
+    expect(characterImage.src).toContain('data:image/png;base64,');
 
     // Confirm → chapter is generated, persisted with the story link, and we land on Reading.
     fireEvent.click(screen.getByText('この設定で執筆する'));
@@ -142,8 +142,13 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     await waitFor(async () => {
       const stories = await createRepositories(db).stories.recent(userId, 5);
       expect(stories).toHaveLength(1);
-      // The generated illustration persists with the confirmed plan (6.8).
+      // The generated portrait and full-body images persist separately with the confirmed plan (6.8).
       expect(stories[0]!.plan.characters[0]!.illustrationUrl).toContain('data:image/png;base64,');
+      expect(stories[0]!.plan.characters[0]!.portraitIllustrationUrl).toContain('data:image/png;base64,');
+      expect(stories[0]!.plan.characters[0]!.fullBodyIllustrationUrl).toContain('data:image/png;base64,');
+      expect(stories[0]!.plan.characters[0]!.portraitIllustrationUrl).not.toBe(
+        stories[0]!.plan.characters[0]!.fullBodyIllustrationUrl,
+      );
       const passages = await createRepositories(db).passages.recent(userId, 5);
       expect(passages).toHaveLength(1);
       expect(passages[0]!.passage.meta.storyRef?.storyId).toBe('story_1');
@@ -198,17 +203,24 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(router.state.location.pathname).toBe('/');
   });
 
-  it('regenerates one pending character portrait before the story plan is persisted', async () => {
-    const userId = 'story_route_regen_pending_portrait_user' as UserId;
+  it('regenerates one pending character as full-body first, then a dedicated portrait before persistence', async () => {
+    const userId = 'story_route_regen_pending_pair_user' as UserId;
     const db = new LexiaDb(userId);
     await db.open();
 
-    let portraitCalls = 0;
+    let illustrationCalls = 0;
+    let regeneratedDescription = '';
+    const variants: Array<string | undefined> = [];
     const regeneratingStoryGateway: StoryGateway = {
       planStory: async () => PLAN,
-      illustrateCharacter: async () => {
-        portraitCalls += 1;
-        return portraitCalls === 1 ? 'data:image/png;base64,OLDPORTRAIT' : 'data:image/png;base64,NEWPORTRAIT';
+      illustrateCharacter: async (req) => {
+        illustrationCalls += 1;
+        variants.push(req.variant);
+        if (illustrationCalls >= 3) regeneratedDescription = req.descriptionJa;
+        if (illustrationCalls === 1) return 'data:image/png;base64,OLDFULL';
+        if (illustrationCalls === 2) return 'data:image/png;base64,OLDPORTRAIT';
+        if (illustrationCalls === 3) return 'data:image/png;base64,NEWFULL';
+        return 'data:image/png;base64,NEWPORTRAIT';
       },
     };
     const container = await createContainer(userId, {
@@ -233,14 +245,20 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     fireEvent.click(screen.getByText('文章を生成する'));
     expect(((await screen.findByAltText('Mia')) as HTMLImageElement).src).toContain('OLDPORTRAIT');
 
+    fireEvent.click(screen.getByTestId('character-description-display-0'));
+    fireEvent.change(screen.getByLabelText('Miaの説明'), { target: { value: '青い外套と星形の杖を持つ少女' } });
     fireEvent.click(screen.getByTestId('regenerate-character-portrait-0'));
     await waitFor(() => expect((screen.getByAltText('Mia') as HTMLImageElement).src).toContain('NEWPORTRAIT'));
+    expect(regeneratedDescription).toBe('青い外套と星形の杖を持つ少女');
+    expect(variants).toEqual(['full_body', 'portrait', 'full_body', 'portrait']);
 
     fireEvent.click(screen.getByText('この設定で執筆する'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'), { timeout: 5_000 });
     await waitFor(async () => {
       const stories = await createRepositories(db).stories.recent(userId, 5);
       expect(stories[0]!.plan.characters[0]!.illustrationUrl).toBe('data:image/png;base64,NEWPORTRAIT');
+      expect(stories[0]!.plan.characters[0]!.portraitIllustrationUrl).toBe('data:image/png;base64,NEWPORTRAIT');
+      expect(stories[0]!.plan.characters[0]!.fullBodyIllustrationUrl).toBe('data:image/png;base64,NEWFULL');
     });
   });
 
@@ -270,7 +288,9 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       planStory: async () => PLAN,
       illustrateCharacter: async (req) => {
         variants.push(req.variant);
-        return 'data:image/png;base64,RlVMTEJPRFk=';
+        return req.variant === 'full_body'
+          ? 'data:image/png;base64,RlVMTEJPRFk='
+          : 'data:image/png;base64,UE9SVFJBSVQy';
       },
     };
     const container = await createContainer(userId, {
@@ -292,14 +312,15 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
 
     expect(await screen.findByRole('heading', { name: 'Mia' })).toBeTruthy();
     await waitFor(() => expect((screen.getByAltText('Mia の全身') as HTMLImageElement).src).toContain('RlVMTEJPRFk='));
-    expect(variants).toContain('full_body');
+    expect(variants).toEqual(['full_body', 'portrait']);
     await waitFor(async () => {
       const story = await repos.stories.get('story_1');
       expect(story?.plan.characters[0]!.fullBodyIllustrationUrl).toBe('data:image/png;base64,RlVMTEJPRFk=');
+      expect(story?.plan.characters[0]!.portraitIllustrationUrl).toBe('data:image/png;base64,UE9SVFJBSVQy');
     });
   });
 
-  it('keeps the current plan illustrating when an older portrait request finishes after regenerate', async () => {
+  it('keeps the current plan illustrating when an older character image request finishes after regenerate', async () => {
     const userId = 'story_route_race_user' as UserId;
     const db = new LexiaDb(userId);
     await db.open();

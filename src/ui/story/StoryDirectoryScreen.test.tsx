@@ -45,7 +45,9 @@ describe('<StoryDirectoryScreen/>', () => {
     expect(screen.getByText('星の継承者')).toBeTruthy();
     expect(screen.getByText('少女が星を継ぐ物語。')).toBeTruthy();
     expect(screen.getByText('Mia')).toBeTruthy();
-    expect((screen.getByAltText('Mia') as HTMLImageElement).src).toContain('PORTRAIT');
+    const image = screen.getByAltText('Mia') as HTMLImageElement;
+    expect(image.src).toContain('PORTRAIT');
+    expect(image.style.objectFit).toBe('contain');
 
     fireEvent.click(screen.getByTestId('open-directory-character-0'));
     expect(onOpenCharacter).toHaveBeenCalledWith(0);

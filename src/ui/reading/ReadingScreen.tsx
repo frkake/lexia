@@ -22,7 +22,7 @@ import { useSessionStore, sessionStore } from '../../state/stores/sessionStore';
 import { useSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import { usePlayerStore } from '../../state/stores/playerStore';
 import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
-import type { IndexedPassage, StoryPlan } from '../../types/domain';
+import type { IndexedPassage, StoryCharacter, StoryPlan } from '../../types/domain';
 
 const FONT_STEPS = [0.85, 1, 1.15, 1.3, 1.45];
 
@@ -455,12 +455,8 @@ function StoryPlanDialog({
           <div style={storyCharacterListStyle}>
             {plan.characters.map((character, index) => (
               <article key={`${character.name}:${character.role}`} style={storyCharacterItemStyle}>
-                {character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl ? (
-                  <img
-                    src={(character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl)!}
-                    alt={character.name}
-                    style={storyCharacterImageStyle}
-                  />
+                {storyCharacterPortraitUrl(character) ? (
+                  <img src={storyCharacterPortraitUrl(character)} alt={character.name} style={storyCharacterImageStyle} />
                 ) : (
                   <div aria-hidden="true" style={storyCharacterInitialStyle}>
                     {[...character.name][0] ?? '?'}
@@ -513,6 +509,13 @@ function StoryPlanDialog({
       </div>
     </section>
   );
+}
+
+function storyCharacterPortraitUrl(character: StoryCharacter): string | undefined {
+  const portraitUrl = character.portraitIllustrationUrl ?? character.illustrationUrl;
+  if (!portraitUrl) return undefined;
+  if (character.fullBodyIllustrationUrl && portraitUrl === character.fullBodyIllustrationUrl) return undefined;
+  return portraitUrl;
 }
 
 const mobileHeaderStyle: React.CSSProperties = {
@@ -748,9 +751,10 @@ const storyCharacterItemStyle: React.CSSProperties = {
 
 const storyCharacterImageStyle: React.CSSProperties = {
   width: 52,
-  height: 78,
+  height: 52,
   flex: '0 0 auto',
   objectFit: 'contain',
+  objectPosition: 'center top',
   borderRadius: radius.control,
   background: colors.avatarBg,
 };

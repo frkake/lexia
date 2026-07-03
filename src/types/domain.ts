@@ -292,7 +292,7 @@ export interface StoryPlanExtensionRequest {
   additionalChapters?: number;
 }
 
-/** Request for a single character's portrait illustration (Requirement 6.8). */
+/** Request for a single character illustration variant (Requirement 6.8). */
 export interface CharacterIllustrationRequest {
   name: string;
   role: string;

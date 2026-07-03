@@ -196,6 +196,8 @@ describe('buildCharacterIllustrationPrompt', () => {
     });
     expect(prompt).toContain('Portrait character illustration');
     expect(prompt).toContain('Portrait bust composition');
+    expect(prompt).toContain('dedicated portrait illustration');
+    expect(prompt).toContain('not a crop');
     expect(prompt).toContain('head and upper torso visible');
     expect(prompt).toContain('square-friendly');
     expect(prompt).toContain('Story title (Japanese): 星の継承者');

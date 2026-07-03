@@ -27,30 +27,45 @@ import type {
 } from '../../types/domain';
 
 type CharacterIllustrationVariant = NonNullable<CharacterIllustrationRequest['variant']>;
+type CharacterIllustrationPair = Pick<
+  StoryCharacter,
+  'illustrationUrl' | 'portraitIllustrationUrl' | 'fullBodyIllustrationUrl'
+>;
 
 export interface StoryPlanner {
   /** Generate a story plan (does NOT persist it — persistence is gated on confirmPlan). */
   planStory(req: StoryPlanRequest): Promise<Result<StoryPlan, GenerationError>>;
   /**
-   * Enrich a plan with a generated portrait per character (6.8). Runs all characters in PARALLEL and
-   * NEVER throws: a character whose portrait fails (or when the gateway can't illustrate) is left
-   * without an illustrationUrl. `onEach` fires as each portrait lands so the UI can reveal
-   * progressively. Returns a NEW plan (the input is not mutated).
+   * Enrich a plan with generated full-body and portrait images per character (6.8). Each character
+   * is generated full-body first, then portrait, so the overview uses a real portrait instead of a
+   * crop. Characters still run in PARALLEL and NEVER throw: a character whose image pair fails (or
+   * when the gateway can't illustrate) is left without illustration fields. `onEach` fires as each
+   * complete pair lands so the UI can reveal progressively. Returns a NEW plan (the input is not
+   * mutated).
    */
   illustrateCharacters(
     plan: StoryPlan,
-    onEach?: (index: number, illustrationUrl: string) => void,
+    onEach?: (index: number, illustrations: CharacterIllustrationPair) => void,
   ): Promise<StoryPlan>;
   /**
-   * Regenerate one character illustration on demand. Defaults to the overview portrait; pass
-   * `full_body` for the individual character detail page. Returns null when illustration is
-   * unavailable, the index is invalid, or the image provider fails; existing stored art should be kept.
+   * Regenerate one character illustration variant on demand. Defaults to the full-body variant; pass
+   * `portrait` for a dedicated overview portrait. Returns null
+   * when illustration is unavailable, the index is invalid, or the image provider fails; existing
+   * stored art should be kept.
    */
   illustrateCharacter(
     plan: StoryPlan,
     characterIndex: number,
     variant?: CharacterIllustrationVariant,
   ): Promise<string | null>;
+  /**
+   * Regenerate both variants for one character. The full-body image is generated first; the portrait
+   * is generated second and stored separately for overview pages.
+   */
+  illustrateCharacterPair(
+    plan: StoryPlan,
+    characterIndex: number,
+  ): Promise<CharacterIllustrationPair | null>;
   /** Extend a long-story plan with more future chapter beats when the plot outline is exhausted. */
   extendPlan(
     plan: StoryPlan,
@@ -91,17 +106,17 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
 
   async function illustrateCharacters(
     plan: StoryPlan,
-    onEach?: (index: number, illustrationUrl: string) => void,
+    onEach?: (index: number, illustrations: CharacterIllustrationPair) => void,
   ): Promise<StoryPlan> {
     const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
     if (!illustrate) return plan; // enrichment unavailable — return the plan untouched
     const characters = plan.characters.map((c) => ({ ...c }));
     await Promise.allSettled(
-      characters.map(async (character, index) => {
-        const url = await illustrate(characterIllustrationRequest(plan, index, 'portrait'));
-        character.illustrationUrl = url;
-        character.portraitIllustrationUrl = url;
-        onEach?.(index, url);
+      characters.map(async (_character, index) => {
+        const illustrations = await illustrateCharacterPairInternal({ ...plan, characters }, index, illustrate);
+        if (!illustrations) return;
+        characters[index] = { ...characters[index]!, ...illustrations };
+        onEach?.(index, illustrations);
       }),
     );
     return { ...plan, characters };
@@ -110,7 +125,7 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
   async function illustrateCharacter(
     plan: StoryPlan,
     characterIndex: number,
-    variant: CharacterIllustrationVariant = 'portrait',
+    variant: CharacterIllustrationVariant = 'full_body',
   ): Promise<string | null> {
     const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
     if (!illustrate || !plan.characters[characterIndex]) return null;
@@ -119,6 +134,15 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
     } catch {
       return null;
     }
+  }
+
+  async function illustrateCharacterPair(
+    plan: StoryPlan,
+    characterIndex: number,
+  ): Promise<CharacterIllustrationPair | null> {
+    const illustrate = deps.gateway.illustrateCharacter?.bind(deps.gateway);
+    if (!illustrate || !plan.characters[characterIndex]) return null;
+    return illustrateCharacterPairInternal(plan, characterIndex, illustrate);
   }
 
   async function confirmPlan(userId: UserId, plan: StoryPlan): Promise<void> {
@@ -172,7 +196,41 @@ export function createStoryPlanner(deps: StoryPlannerDeps): StoryPlanner {
     return ok(attachStoryRef(result.value, storyContext));
   }
 
-  return { planStory, illustrateCharacters, illustrateCharacter, extendPlan, confirmPlan, generateChapter };
+  return {
+    planStory,
+    illustrateCharacters,
+    illustrateCharacter,
+    illustrateCharacterPair,
+    extendPlan,
+    confirmPlan,
+    generateChapter,
+  };
+}
+
+async function illustrateCharacterPairInternal(
+  plan: StoryPlan,
+  characterIndex: number,
+  illustrate: (req: CharacterIllustrationRequest) => Promise<string>,
+): Promise<CharacterIllustrationPair | null> {
+  try {
+    const fullBodyIllustrationUrl = await illustrate(characterIllustrationRequest(plan, characterIndex, 'full_body'));
+    const planWithFullBody: StoryPlan = {
+      ...plan,
+      characters: plan.characters.map((character, index) =>
+        index === characterIndex ? { ...character, fullBodyIllustrationUrl } : character,
+      ),
+    };
+    const portraitIllustrationUrl = await illustrate(
+      characterIllustrationRequest(planWithFullBody, characterIndex, 'portrait'),
+    );
+    return {
+      illustrationUrl: portraitIllustrationUrl,
+      portraitIllustrationUrl,
+      fullBodyIllustrationUrl,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function characterIllustrationRequest(

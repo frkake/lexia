@@ -37,7 +37,15 @@ function makeStoryPlan(): StoryPlan {
     genre: 'fantasy',
     titleJa: '星の少女',
     synopsisJa: '少女が星を探す長い旅。',
-    characters: [{ name: 'Mia', role: '主人公', descriptionJa: '好奇心旺盛な少女' }],
+    characters: [
+      {
+        name: 'Mia',
+        role: '主人公',
+        descriptionJa: '好奇心旺盛な少女',
+        portraitIllustrationUrl: 'data:image/png;base64,PORTRAIT',
+        fullBodyIllustrationUrl: 'data:image/png;base64,FULLBODY',
+      },
+    ],
     chapters: [
       { index: 0, headingJa: '第一章', beatJa: '旅立ち' },
       { index: 1, headingJa: '第二章', beatJa: '星の門を開く' },
@@ -199,7 +207,7 @@ describe('<ReadingScreen/>', () => {
 
   it('opens story settings from the body page when a story plan is supplied', () => {
     const onRegenerateStoryCharacter = vi.fn();
-    const { getByTestId, getByRole, getByText, queryByRole } = renderScreen({
+    const { getByAltText, getByTestId, getByRole, getByText, queryByRole } = renderScreen({
       passage: makePassage(),
       storyPlan: makeStoryPlan(),
       onRegenerateStoryCharacter,
@@ -208,6 +216,10 @@ describe('<ReadingScreen/>', () => {
     expect(getByRole('dialog', { name: '物語設定' })).toBeTruthy();
     expect(getByText('キャラクター設定')).toBeTruthy();
     expect(getByText('Mia')).toBeTruthy();
+    const image = getByAltText('Mia') as HTMLImageElement;
+    expect(image.src).toContain('PORTRAIT');
+    expect(image.style.objectFit).toBe('contain');
+    expect(image.style.objectPosition).toBe('center top');
     expect(getByText('プロット')).toBeTruthy();
     expect(getByText(/星の門を開く/)).toBeTruthy();
     fireEvent.click(getByTestId('regenerate-story-character-0'));

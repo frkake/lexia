@@ -778,8 +778,9 @@ export function buildCharacterIllustrationPrompt(req: CharacterIllustrationReque
     variant === 'portrait'
       ? [
           'Portrait bust composition for a character overview page;',
+          'generate a dedicated portrait illustration, not a crop, resize, or reuse of a full-body image;',
           'head and upper torso visible, face clearly readable, signature hair/hat/color/prop cue included;',
-          'crop intentionally as a portrait while never cutting through the face or key identity motif;',
+          'frame the portrait composition cleanly while never cutting through the face or key identity motif;',
           'simple neutral background; square-friendly centered composition;',
         ]
       : [

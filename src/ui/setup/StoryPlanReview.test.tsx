@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, waitFor } from '@testing-library/react';
 import { StoryPlanReview } from './StoryPlanReview';
 import type { StoryPlan } from '../../types/domain';
 
@@ -52,6 +52,22 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(onConfirm.mock.calls[0]![0].synopsisJa).toBe('新しいあらすじ');
   });
 
+  it('lets the learner edit character descriptions before confirming', () => {
+    const onConfirm = vi.fn<(p: StoryPlan) => void>();
+    const { getByLabelText, getByTestId, getByText, queryByLabelText } = render(
+      <StoryPlanReview plan={plan()} onConfirm={onConfirm} />,
+    );
+    expect(queryByLabelText('Ariaの説明')).toBeNull();
+    fireEvent.click(getByTestId('character-description-display-0'));
+    const editor = getByLabelText('Ariaの説明') as HTMLTextAreaElement;
+    expect(editor.rows).toBe(1);
+    expect(editor.style.width).toBe('100%');
+    expect(editor.style.overflow).toBe('hidden');
+    fireEvent.change(editor, { target: { value: '銀色の外套を着た慎重な少女' } });
+    fireEvent.click(getByText('この設定で執筆する'));
+    expect(onConfirm.mock.calls[0]![0].characters[0]!.descriptionJa).toBe('銀色の外套を着た慎重な少女');
+  });
+
   it('does not confirm on mount (no body generation until the gate is passed)', () => {
     const onConfirm = vi.fn();
     render(<StoryPlanReview plan={plan()} onConfirm={onConfirm} />);
@@ -67,12 +83,25 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
 
   it('renders a character portrait when the plan carries an illustrationUrl (6.8)', () => {
     const withArt = plan({
-      characters: [{ name: 'Aria', role: '主人公', descriptionJa: '勇敢な少女', illustrationUrl: 'data:image/png;base64,QUJD' }],
+      characters: [
+        {
+          name: 'Aria',
+          role: '主人公',
+          descriptionJa: '勇敢な少女',
+          illustrationUrl: 'data:image/png;base64,PORTRAIT',
+          portraitIllustrationUrl: 'data:image/png;base64,PORTRAIT',
+          fullBodyIllustrationUrl: 'data:image/png;base64,FULLBODY',
+        },
+      ],
     });
     const { getByAltText } = render(<StoryPlanReview plan={withArt} onConfirm={() => {}} />);
     const img = getByAltText('Aria') as HTMLImageElement;
     expect(img.tagName).toBe('IMG');
-    expect(img.src).toContain('data:image/png;base64,QUJD');
+    expect(img.src).toContain('PORTRAIT');
+    expect(img.style.objectFit).toBe('contain');
+    expect(img.style.objectPosition).toBe('center top');
+    expect(img.style.width).toBe('56px');
+    expect(img.style.height).toBe('56px');
   });
 
   it('shows a loading skeleton for a character still being illustrated', () => {
@@ -81,7 +110,7 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(getAllByTestId('character-portrait-loading')).toHaveLength(2);
   });
 
-  it('allows confirmation while character portraits are still loading', () => {
+  it('allows confirmation while character illustration pairs are still loading', () => {
     const onConfirm = vi.fn<(p: StoryPlan) => void>();
     const { getByText } = render(<StoryPlanReview plan={plan()} onConfirm={onConfirm} illustrating />);
     fireEvent.click(getByText('この設定で執筆する'));
@@ -94,7 +123,7 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(queryByRole('img')).toBeNull();
   });
 
-  it('still confirms via the explicit button when portraits are shown', () => {
+  it('still confirms via the explicit button when character images are shown', () => {
     const onConfirm = vi.fn<(p: StoryPlan) => void>();
     const withArt = plan({
       characters: [{ name: 'Aria', role: '主人公', descriptionJa: '勇敢な少女', illustrationUrl: 'data:image/png;base64,QUJD' }],
@@ -106,16 +135,37 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(onConfirm.mock.calls[0]![0].characters[0]!.illustrationUrl).toBe('data:image/png;base64,QUJD');
   });
 
-  it('offers per-character portrait regeneration when wired', () => {
+  it('offers per-character illustration regeneration when wired', () => {
     const onRegenerateCharacter = vi.fn();
-    const { getByTestId } = render(
+    const { getByLabelText, getByTestId } = render(
       <StoryPlanReview plan={plan()} onConfirm={() => {}} onRegenerateCharacter={onRegenerateCharacter} />,
     );
+    fireEvent.click(getByTestId('character-description-display-1'));
+    fireEvent.change(getByLabelText('Dracoの説明'), { target: { value: '青い角と琥珀色の目を持つ竜' } });
     fireEvent.click(getByTestId('regenerate-character-portrait-1'));
-    expect(onRegenerateCharacter).toHaveBeenCalledWith(1);
+    expect(onRegenerateCharacter.mock.calls[0]![0]).toBe(1);
+    expect(onRegenerateCharacter.mock.calls[0]![1].characters[1]!.descriptionJa).toBe('青い角と琥珀色の目を持つ竜');
   });
 
-  it('shows portrait regeneration busy and error states', () => {
+  it('opens a character detail page from the confirmation gate and regenerates full-body art from edits', async () => {
+    const onRegenerateFullBody = vi.fn();
+    const { getByLabelText, getByRole, getByTestId } = render(
+      <StoryPlanReview
+        plan={plan()}
+        onConfirm={() => {}}
+        onRegenerateCharacterFullBody={onRegenerateFullBody}
+      />,
+    );
+    fireEvent.click(getByTestId('character-description-display-0'));
+    fireEvent.change(getByLabelText('Ariaの説明'), { target: { value: '赤いマントと星形の杖を持つ少女' } });
+    fireEvent.click(getByTestId('open-character-detail-0'));
+
+    expect(getByRole('heading', { name: 'Aria' })).toBeTruthy();
+    await waitFor(() => expect(onRegenerateFullBody).toHaveBeenCalledWith(0, expect.any(Object)));
+    expect(onRegenerateFullBody.mock.calls[0]![1].characters[0]!.descriptionJa).toBe('赤いマントと星形の杖を持つ少女');
+  });
+
+  it('shows illustration regeneration busy and error states', () => {
     const { getByTestId, getByRole, getByText } = render(
       <StoryPlanReview
         plan={plan()}
@@ -134,7 +184,7 @@ describe('<StoryPlanReview/> (Requirement 6.3 confirmation gate)', () => {
     expect(getByRole('alert').textContent).toContain('キャラクターイラストを再生成できませんでした。');
   });
 
-  it('disables portrait regeneration while initial illustration is still in progress', () => {
+  it('disables illustration regeneration while initial illustration is still in progress', () => {
     const { getByTestId } = render(
       <StoryPlanReview plan={plan()} onConfirm={() => {}} onRegenerateCharacter={() => {}} illustrating />,
     );

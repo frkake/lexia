@@ -448,7 +448,7 @@ describe('extendStoryPlan (long-story continuation)', () => {
   });
 });
 
-describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portrait)', () => {
+describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched character image)', () => {
   const charReq: CharacterIllustrationRequest = {
     name: 'Aria',
     role: '主人公',
@@ -478,7 +478,7 @@ describe('illustrateCharacter (Requirement 6.8 — IMAGE_PROVIDER-switched portr
     expect(sent.n).toBe(1);
     expect(sent.size).toBe('1024x1536');
     expect(typeof sent.prompt).toBe('string');
-    // The character's role/description feed the prompt so portraits match the plan.
+    // The character's role/description feed the prompt so illustrations match the plan.
     expect(sent.prompt).toContain('Aria');
     expect(sent.prompt).toContain('Full-body');
     expect(dataUrl).toBe('data:image/png;base64,QUJD');

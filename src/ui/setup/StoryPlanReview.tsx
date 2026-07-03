@@ -6,8 +6,9 @@
  * generation and (post-confirm) persistence.
  */
 
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
+import { StoryCharacterDetailScreen } from '../story/StoryCharacterDetailScreen';
 import type { StoryCharacter, StoryPlan } from '../../types/domain';
 
 export interface StoryPlanReviewProps {
@@ -20,12 +21,14 @@ export interface StoryPlanReviewProps {
   confirming?: boolean;
   /** Body-generation error shown on the confirmation gate. */
   confirmError?: string | null;
-  /** Optional on-demand portrait refresh for a single character. */
-  onRegenerateCharacter?: (characterIndex: number) => void;
+  /** Optional on-demand illustration refresh for a single character. */
+  onRegenerateCharacter?: (characterIndex: number, plan: StoryPlan) => void;
+  onRegenerateCharacterFullBody?: (characterIndex: number, plan: StoryPlan) => void;
   regeneratingCharacterIndex?: number | null;
+  regeneratingFullBodyCharacterIndex?: number | null;
   characterIllustrationError?: string | null;
   /**
-   * True while character portraits are still being generated (6.8). Characters without an
+   * True while character illustration pairs are still being generated (6.8). Characters without an
    * illustrationUrl show a loading skeleton; once illustration settles they fall back to a monogram
    * placeholder. Illustration is enrichment — it never blocks the confirm button.
    */
@@ -39,17 +42,97 @@ export function StoryPlanReview({
   confirming = false,
   confirmError = null,
   onRegenerateCharacter,
+  onRegenerateCharacterFullBody,
   regeneratingCharacterIndex = null,
+  regeneratingFullBodyCharacterIndex = null,
   characterIllustrationError = null,
   illustrating = false,
 }: StoryPlanReviewProps) {
   const [titleJa, setTitleJa] = useState(plan.titleJa);
   const [synopsisJa, setSynopsisJa] = useState(plan.synopsisJa);
+  const [characterDescriptions, setCharacterDescriptions] = useState<string[]>(() =>
+    plan.characters.map((character) => character.descriptionJa),
+  );
+  const [editingCharacterIndex, setEditingCharacterIndex] = useState<number | null>(null);
+  const [selectedCharacterIndex, setSelectedCharacterIndex] = useState<number | null>(null);
+  const [autoFullBodyKey, setAutoFullBodyKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTitleJa(plan.titleJa);
+    setSynopsisJa(plan.synopsisJa);
+    setCharacterDescriptions(plan.characters.map((character) => character.descriptionJa));
+    setEditingCharacterIndex(null);
+    setSelectedCharacterIndex(null);
+    setAutoFullBodyKey(null);
+  }, [plan.storyId]);
+
+  const editedPlan = useMemo<StoryPlan>(
+    () => ({
+      ...plan,
+      titleJa,
+      synopsisJa,
+      characters: plan.characters.map((character, index) => ({
+        ...character,
+        descriptionJa: characterDescriptions[index] ?? character.descriptionJa,
+      })),
+    }),
+    [characterDescriptions, plan, synopsisJa, titleJa],
+  );
+
+  useEffect(() => {
+    if (selectedCharacterIndex === null || !onRegenerateCharacterFullBody) return;
+    if (illustrating) return;
+    if (regeneratingCharacterIndex !== null || regeneratingFullBodyCharacterIndex !== null) return;
+    const character = editedPlan.characters[selectedCharacterIndex];
+    if (!character || (character.fullBodyIllustrationUrl && portraitImageUrl(character))) return;
+    const key = `${editedPlan.storyId}:${selectedCharacterIndex}:${character.descriptionJa}`;
+    if (autoFullBodyKey === key) return;
+    setAutoFullBodyKey(key);
+    onRegenerateCharacterFullBody(selectedCharacterIndex, editedPlan);
+  }, [
+    autoFullBodyKey,
+    editedPlan,
+    illustrating,
+    onRegenerateCharacterFullBody,
+    regeneratingCharacterIndex,
+    regeneratingFullBodyCharacterIndex,
+    selectedCharacterIndex,
+  ]);
 
   const confirm = (): void => {
     if (confirming) return;
-    onConfirm({ ...plan, titleJa, synopsisJa });
+    onConfirm(editedPlan);
   };
+
+  const setCharacterDescription = (characterIndex: number, descriptionJa: string): void => {
+    setCharacterDescriptions((prev) => {
+      const next = [...prev];
+      next[characterIndex] = descriptionJa;
+      return next;
+    });
+  };
+
+  if (selectedCharacterIndex !== null && editedPlan.characters[selectedCharacterIndex]) {
+    return (
+      <StoryCharacterDetailScreen
+        plan={editedPlan}
+        characterIndex={selectedCharacterIndex}
+        onBack={() => setSelectedCharacterIndex(null)}
+        onDescriptionChange={(descriptionJa) => setCharacterDescription(selectedCharacterIndex, descriptionJa)}
+        onRegenerateFullBody={
+          onRegenerateCharacterFullBody
+            ? () => onRegenerateCharacterFullBody(selectedCharacterIndex, editedPlan)
+            : undefined
+        }
+        regeneratingFullBody={
+          illustrating ||
+          regeneratingCharacterIndex === selectedCharacterIndex ||
+          regeneratingFullBodyCharacterIndex === selectedCharacterIndex
+        }
+        illustrationError={characterIllustrationError}
+      />
+    );
+  }
 
   return (
     <div style={cardStyle}>
@@ -81,18 +164,43 @@ export function StoryPlanReview({
       <div style={{ padding: '8px 34px' }}>
         <div style={sectionLabelStyle}>キャラクター設定</div>
         <div style={characterGridStyle}>
-          {plan.characters.map((ch, index) => (
+          {editedPlan.characters.map((ch, index) => (
             <div key={ch.name} style={characterCardStyle}>
               <CharacterPortrait character={ch} illustrating={illustrating} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <div style={characterBodyStyle}>
                 <span style={{ fontFamily: fonts.serif, fontWeight: 600, color: colors.ink }}>{ch.name}</span>
                 <span style={{ fontFamily: fonts.ui, fontSize: 11, color: colors.faint }}>{ch.role}</span>
-                <span style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.muted }}>{ch.descriptionJa}</span>
+                {editingCharacterIndex === index ? (
+                  <AutoSizeCharacterDescriptionTextarea
+                    name={ch.name}
+                    value={ch.descriptionJa}
+                    onChange={(descriptionJa) => setCharacterDescription(index, descriptionJa)}
+                    onBlur={() => setEditingCharacterIndex(null)}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    data-testid={`character-description-display-${index}`}
+                    aria-label={`${ch.name}の説明を編集`}
+                    onClick={() => setEditingCharacterIndex(index)}
+                    style={characterDescriptionButtonStyle}
+                  >
+                    {ch.descriptionJa}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid={`open-character-detail-${index}`}
+                  onClick={() => setSelectedCharacterIndex(index)}
+                  style={characterDetailButtonStyle}
+                >
+                  詳細を見る
+                </button>
                 {onRegenerateCharacter ? (
                   <button
                     type="button"
                     data-testid={`regenerate-character-portrait-${index}`}
-                    onClick={() => onRegenerateCharacter(index)}
+                    onClick={() => onRegenerateCharacter(index, editedPlan)}
                     disabled={illustrating || regeneratingCharacterIndex !== null}
                     aria-busy={regeneratingCharacterIndex === index}
                     style={portraitRegenerateButtonStyle(regeneratingCharacterIndex === index)}
@@ -148,13 +256,47 @@ export function StoryPlanReview({
   );
 }
 
+function AutoSizeCharacterDescriptionTextarea({
+  name,
+  value,
+  onChange,
+  onBlur,
+}: {
+  name: string;
+  value: string;
+  onChange: (descriptionJa: string) => void;
+  onBlur: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(textarea.scrollHeight, CHARACTER_DESCRIPTION_MIN_HEIGHT)}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      aria-label={`${name}の説明`}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onBlur={onBlur}
+      rows={1}
+      autoFocus
+      style={characterDescriptionTextareaStyle}
+    />
+  );
+}
+
 /**
  * A character's portrait (6.8): the generated illustration when present; a loading skeleton while
  * illustration is still in progress; otherwise a monogram placeholder. Enrichment only — never gates
  * the flow.
  */
 function CharacterPortrait({ character, illustrating }: { character: StoryCharacter; illustrating: boolean }) {
-  const portraitUrl = character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl;
+  const portraitUrl = portraitImageUrl(character);
   if (portraitUrl) {
     return <img src={portraitUrl} alt={character.name} style={portraitImageStyle} />;
   }
@@ -169,14 +311,23 @@ function CharacterPortrait({ character, illustrating }: { character: StoryCharac
   );
 }
 
+function portraitImageUrl(character: StoryCharacter): string | undefined {
+  const portraitUrl = character.portraitIllustrationUrl ?? character.illustrationUrl;
+  if (!portraitUrl) return undefined;
+  if (character.fullBodyIllustrationUrl && portraitUrl === character.fullBodyIllustrationUrl) return undefined;
+  return portraitUrl;
+}
+
 const PORTRAIT_SIZE = 56;
-const PORTRAIT_HEIGHT = 84;
+const PORTRAIT_HEIGHT = 56;
+const CHARACTER_DESCRIPTION_MIN_HEIGHT = 44;
 
 const portraitImageStyle: CSSProperties = {
   width: PORTRAIT_SIZE,
   height: PORTRAIT_HEIGHT,
   borderRadius: radius.control,
   objectFit: 'contain',
+  objectPosition: 'center top',
   flexShrink: 0,
   background: colors.surfaceSubtle,
 };
@@ -220,20 +371,76 @@ const portraitRegenerateButtonStyle = (busy: boolean): CSSProperties => ({
   opacity: busy ? 0.68 : 1,
 });
 
+const characterDescriptionTextareaStyle: CSSProperties = {
+  marginTop: 5,
+  width: '100%',
+  minHeight: CHARACTER_DESCRIPTION_MIN_HEIGHT,
+  boxSizing: 'border-box',
+  fontFamily: fonts.bodyJp,
+  fontSize: 12,
+  lineHeight: 1.55,
+  color: colors.body,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  padding: '7px 8px',
+  resize: 'none',
+  overflow: 'hidden',
+};
+
+const characterDescriptionButtonStyle: CSSProperties = {
+  marginTop: 5,
+  width: '100%',
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  textAlign: 'left',
+  fontFamily: fonts.bodyJp,
+  fontSize: 12,
+  lineHeight: 1.55,
+  color: colors.muted,
+  cursor: 'text',
+  whiteSpace: 'pre-wrap',
+};
+
+const characterDetailButtonStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  marginTop: 7,
+  fontFamily: fonts.ui,
+  fontSize: 11.5,
+  fontWeight: 600,
+  color: colors.inkSoft,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  padding: '6px 9px',
+  cursor: 'pointer',
+};
+
 const characterGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+  display: 'flex',
+  flexDirection: 'column',
   gap: 8,
 };
 
 const characterCardStyle: CSSProperties = {
   display: 'flex',
+  width: '100%',
+  boxSizing: 'border-box',
   gap: 12,
-  alignItems: 'center',
+  alignItems: 'flex-start',
   background: colors.surfaceSubtle,
   border: `1px solid ${colors.borderControl}`,
   borderRadius: radius.control,
   padding: '10px 12px',
+};
+
+const characterBodyStyle: CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  gap: 2,
+  minWidth: 0,
 };
 
 const cardStyle: CSSProperties = {

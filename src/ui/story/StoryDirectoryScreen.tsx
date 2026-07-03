@@ -137,7 +137,10 @@ function CharacterPortrait({ character }: { character: StoryCharacter }) {
 }
 
 function portraitImageUrl(character: StoryCharacter): string | undefined {
-  return character.portraitIllustrationUrl ?? character.illustrationUrl ?? character.fullBodyIllustrationUrl;
+  const portraitUrl = character.portraitIllustrationUrl ?? character.illustrationUrl;
+  if (!portraitUrl) return undefined;
+  if (character.fullBodyIllustrationUrl && portraitUrl === character.fullBodyIllustrationUrl) return undefined;
+  return portraitUrl;
 }
 
 const pageStyle: CSSProperties = {
@@ -190,7 +193,7 @@ const portraitStyle: CSSProperties = {
   width: 54,
   height: 54,
   borderRadius: radius.control,
-  objectFit: 'cover',
+  objectFit: 'contain',
   objectPosition: 'center top',
   flex: 'none',
   background: colors.avatarBg,
