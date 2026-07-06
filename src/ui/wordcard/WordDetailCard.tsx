@@ -334,6 +334,64 @@ export function WordDetailCard({ word: rawWord, stage, scheduling, now = Date.no
               {word.register ? <span style={chipStyle(true)}>レジスター: {word.register}</span> : null}
               {word.connotation ? <span style={chipStyle()}>コノテーション: {word.connotation}</span> : null}
             </div>
+            {/* Actions sit under the headword/chips (left column) so they fill the space beside the
+                right meta column instead of leaving a blank band — and wrap onto one row rather than
+                stacking into a tall column. */}
+            {onWeave || suspended || onMarkUnknown || onMarkKnown ? (
+              <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                {onWeave ? (
+                  <button type="button" data-testid="weave-word" onClick={() => onWeave(word.wordId)} style={weaveButtonStyle}>
+                    次の文章に織り込む
+                  </button>
+                ) : null}
+                {suspended ? (
+                  <>
+                    <span data-testid="suspended-indicator" style={suspendedTagStyle}>
+                      復習から除外中
+                    </span>
+                    {onRestore ? (
+                      <button
+                        type="button"
+                        data-testid="restore-word"
+                        onClick={() => void toggleSuspended()}
+                        disabled={suspending}
+                        aria-busy={suspending}
+                        style={knownButtonStyle(suspending)}
+                      >
+                        {suspending ? '戻しています…' : '復習に戻す'}
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {onMarkUnknown ? (
+                      <button
+                        type="button"
+                        data-testid="mark-unknown"
+                        onClick={() => void markUnknown()}
+                        disabled={markingUnknown}
+                        aria-busy={markingUnknown}
+                        style={unknownButtonStyle(markingUnknown)}
+                      >
+                        {markingUnknown ? '記録中…' : '知らなかった'}
+                      </button>
+                    ) : null}
+                    {onMarkKnown ? (
+                      <button
+                        type="button"
+                        data-testid="mark-known"
+                        onClick={() => void toggleSuspended()}
+                        disabled={suspending}
+                        aria-busy={suspending}
+                        style={knownButtonStyle(suspending)}
+                      >
+                        {suspending ? '記録中…' : 'もう覚えた（復習から外す）'}
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
           <div style={{ textAlign: 'right', flex: 'none' }}>
             {onClose ? (
@@ -382,59 +440,6 @@ export function WordDetailCard({ word: rawWord, stage, scheduling, now = Date.no
                 )}
               </div>
             ) : null}
-            {onWeave ? (
-              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
-                <button type="button" data-testid="weave-word" onClick={() => onWeave(word.wordId)} style={weaveButtonStyle}>
-                  次の文章に織り込む
-                </button>
-              </div>
-            ) : null}
-            {suspended ? (
-              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                <span data-testid="suspended-indicator" style={suspendedTagStyle}>
-                  復習から除外中
-                </span>
-                {onRestore ? (
-                  <button
-                    type="button"
-                    data-testid="restore-word"
-                    onClick={() => void toggleSuspended()}
-                    disabled={suspending}
-                    aria-busy={suspending}
-                    style={knownButtonStyle(suspending)}
-                  >
-                    {suspending ? '戻しています…' : '復習に戻す'}
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-                {onMarkUnknown ? (
-                  <button
-                    type="button"
-                    data-testid="mark-unknown"
-                    onClick={() => void markUnknown()}
-                    disabled={markingUnknown}
-                    aria-busy={markingUnknown}
-                    style={unknownButtonStyle(markingUnknown)}
-                  >
-                    {markingUnknown ? '記録中…' : '知らなかった'}
-                  </button>
-                ) : null}
-                {onMarkKnown ? (
-                  <button
-                    type="button"
-                    data-testid="mark-known"
-                    onClick={() => void toggleSuspended()}
-                    disabled={suspending}
-                    aria-busy={suspending}
-                    style={knownButtonStyle(suspending)}
-                  >
-                    {suspending ? '記録中…' : 'もう覚えた（復習から外す）'}
-                  </button>
-                ) : null}
-              </div>
-            )}
           </div>
         </div>
       </div>
