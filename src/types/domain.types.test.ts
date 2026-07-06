@@ -16,6 +16,9 @@ import type {
   TranslationSpan,
   ReadabilityLevel,
   PassageMeta,
+  ContentType,
+  AudioAsset,
+  VoiceProfile,
 } from './domain';
 
 describe('domain types', () => {
@@ -139,6 +142,25 @@ describe('domain types', () => {
     expectTypeOf<ReadabilityLevel>().toEqualTypeOf<'easy' | 'standard' | 'advanced'>();
   });
 
+  it('ContentType includes listening_scene for generated audio situations', () => {
+    const all: Record<ContentType, true> = {
+      article: true,
+      short_story: true,
+      long_story: true,
+      listening_scene: true,
+    };
+    expect(Object.keys(all)).toContain('listening_scene');
+  });
+
+  it('AudioAsset accepts WAV output for Azure multi-speaker synthesis', () => {
+    expectTypeOf<AudioAsset['format']>().toEqualTypeOf<'audio/mpeg' | 'audio/aac' | 'audio/wav'>();
+  });
+
+  it('VoiceProfile captures accent, provider voice id and role', () => {
+    expectTypeOf<VoiceProfile['accent']>().toEqualTypeOf<'us' | 'gb' | 'au' | 'in'>();
+    expectTypeOf<VoiceProfile['provider']>().toEqualTypeOf<'azure' | 'polly'>();
+  });
+
   it('Settings.translationMode is the three reading modes', () => {
     expectTypeOf<Settings['translationMode']>().toEqualTypeOf<'off' | 'per_sentence' | 'full'>();
   });
@@ -171,6 +193,7 @@ describe('domain types', () => {
     };
     expect(annotated.translationSpans).toHaveLength(1);
     expectTypeOf<Sentence['translationSpans']>().toEqualTypeOf<TranslationSpan[] | undefined>();
+    expectTypeOf<Sentence['speakerId']>().toEqualTypeOf<string | undefined>();
   });
 
   it('PassageMeta keeps sceneIllustrationUrl optional for legacy passages', () => {
@@ -186,5 +209,19 @@ describe('domain types', () => {
     expect(legacy.sceneIllustrationUrl).toBeUndefined();
     expect(illustrated.sceneIllustrationUrl).toContain('data:image/png;base64,');
     expectTypeOf<PassageMeta['sceneIllustrationUrl']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<PassageMeta['listeningScene']>().toEqualTypeOf<
+      | {
+          sceneKind: 'radio_news' | 'street_interview' | 'podcast_dialogue' | 'public_announcement';
+          noiseLevel: 'none' | 'low' | 'medium';
+          accent: 'us' | 'gb' | 'au' | 'in';
+          speakers: {
+            speakerId: string;
+            label: string;
+            role: 'narrator' | 'interviewer' | 'guest' | 'announcer';
+            voiceProfileId: string;
+          }[];
+        }
+      | undefined
+    >();
   });
 });

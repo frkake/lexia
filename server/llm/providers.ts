@@ -33,6 +33,7 @@ import type {
   StoryPlanExtensionRequest,
   StoryPlanRequest,
   TranslationSpan,
+  VoiceRole,
   WordData,
   WordSuggestionRequest,
 } from '../../src/types/domain';
@@ -62,6 +63,7 @@ import {
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 import { structureCollocations, structureMore } from '../../src/domain/wordData/structuredWordData';
+import { defaultVoiceForAccent } from '../../src/domain/audio/voiceCatalog';
 
 export type Env = Record<string, string | undefined>;
 
@@ -344,12 +346,40 @@ function normalizeSentence(raw: Raw): Sentence {
   // paragraphIndex (F-8②): carried through when the model supplies it; absent ⇒ single-paragraph
   // fallback in the reader (back-compat with passages generated before this field).
   const paragraphIndex = typeof raw.paragraphIndex === 'number' ? raw.paragraphIndex : undefined;
+  const speakerId = typeof raw.speakerId === 'string' && raw.speakerId.trim() ? raw.speakerId.trim() : undefined;
   return {
     tokens,
     translationJa,
     ...(translationSpans ? { translationSpans } : {}),
     ...(paragraphIndex !== undefined ? { paragraphIndex } : {}),
+    ...(speakerId ? { speakerId } : {}),
   };
+}
+
+function listeningSpeakers(req: GenerationRequest): NonNullable<PassageOutput['meta']['listeningScene']>['speakers'] {
+  if (!req.listeningOptions) return [];
+  const accent = req.listeningOptions.accent;
+  const mk = (speakerId: string, label: string, role: VoiceRole, gender: 'female' | 'male') => ({
+    speakerId,
+    label,
+    role,
+    voiceProfileId: defaultVoiceForAccent(accent, gender, role).id,
+  });
+  switch (req.listeningOptions.sceneKind) {
+    case 'radio_news':
+      return [mk('anchor', 'Anchor', 'announcer', 'female'), mk('reporter', 'Reporter', 'guest', 'male')];
+    case 'street_interview':
+      return [
+        mk('interviewer', 'Interviewer', 'interviewer', 'female'),
+        mk('guest_1', 'Guest 1', 'guest', 'male'),
+        mk('guest_2', 'Guest 2', 'guest', 'female'),
+      ];
+    case 'podcast_dialogue':
+      return [mk('host', 'Host', 'interviewer', 'female'), mk('guest_1', 'Guest', 'guest', 'male')];
+    case 'public_announcement':
+      return [mk('announcer', 'Announcer', 'announcer', 'female')];
+  }
+  return [];
 }
 
 /** Ensure arrays exist and request-owned meta stays authoritative for the validator/UI. */
@@ -376,6 +406,16 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
       typeof metaIn.approxWords === 'number'
         ? metaIn.approxWords
         : sentences.reduce((n, s) => n + (Array.isArray(s.tokens) ? s.tokens.length : 0), 0),
+    ...(req.contentType === 'listening_scene' && req.listeningOptions
+      ? {
+          listeningScene: {
+            sceneKind: req.listeningOptions.sceneKind,
+            noiseLevel: req.listeningOptions.noiseLevel,
+            accent: req.listeningOptions.accent,
+            speakers: listeningSpeakers(req),
+          },
+        }
+      : {}),
     ...(storyRef ? { storyRef } : {}),
   };
   const reanchored = reanchorSpans(
@@ -672,6 +712,16 @@ function emptyPassage(req: GenerationRequest): PassageOutput {
       newCount: 0,
       reviewCount: 0,
       approxWords: 0,
+      ...(req.contentType === 'listening_scene' && req.listeningOptions
+        ? {
+            listeningScene: {
+              sceneKind: req.listeningOptions.sceneKind,
+              noiseLevel: req.listeningOptions.noiseLevel,
+              accent: req.listeningOptions.accent,
+              speakers: listeningSpeakers(req),
+            },
+          }
+        : {}),
       ...(req.storyContext
         ? { storyRef: { storyId: req.storyContext.storyId, chapterIndex: req.storyContext.chapterIndex } }
         : {}),

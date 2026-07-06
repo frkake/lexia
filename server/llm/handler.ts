@@ -35,6 +35,12 @@ import {
   reviewSentence,
   suggestWords,
 } from './providers';
+import {
+  synthesizeSpeech,
+  synthesizeWordClip,
+  voiceCatalogResponse,
+  type TtsSynthesizeRequest,
+} from '../tts/providers';
 
 type Next = (err?: unknown) => void;
 
@@ -47,6 +53,9 @@ const REVIEW_SENTENCE_PATH = '/api/review:sentence';
 const STORY_PLAN_PATH = '/api/story:plan';
 const STORY_EXTEND_PATH = '/api/story:extend';
 const STORY_ILLUSTRATE_PATH = '/api/story:illustrate';
+const TTS_VOICES_PATH = '/api/tts:voices';
+const TTS_SYNTHESIZE_PATH = '/api/tts:synthesize';
+const TTS_WORD_PREFIX = '/api/tts/word';
 const WORDS_PREFIX = '/api/words/';
 
 export function createApiHandler(getEnv: () => Env) {
@@ -65,6 +74,29 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     // Config probe for the startup banner: reports whether the active provider has a key, never
     // the key value itself.
     return sendJson(res, 200, healthStatus(env));
+  }
+
+  if (path === TTS_VOICES_PATH) {
+    if (req.method !== 'GET') return sendStatus(res, 405, 'method not allowed');
+    return sendJson(res, 200, voiceCatalogResponse());
+  }
+
+  if (path === TTS_SYNTHESIZE_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<TtsSynthesizeRequest>(req);
+    if (!body || !body.text || !body.voiceId) {
+      throw new ProviderError(400, 'Invalid TTS synthesis body.');
+    }
+    return sendJson(res, 200, await synthesizeSpeech(env, body));
+  }
+
+  if (path === TTS_WORD_PREFIX) {
+    if (req.method !== 'GET') return sendStatus(res, 405, 'method not allowed');
+    const query = new URL(req.url ?? '', 'http://localhost').searchParams;
+    const wordId = query.get('wordId')?.trim();
+    const voiceId = query.get('voiceId')?.trim();
+    if (!wordId || !voiceId) throw new ProviderError(400, 'Invalid TTS word request.');
+    return sendJson(res, 200, await synthesizeWordClip(env, wordId, voiceId));
   }
 
   if (path === GENERATE_PATH) {

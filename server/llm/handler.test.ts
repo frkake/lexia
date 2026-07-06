@@ -133,6 +133,28 @@ describe('POST /api/story:illustrate (Requirement 6.8)', () => {
   });
 });
 
+describe('TTS API routes', () => {
+  it('returns the voice catalog with required accents', async () => {
+    const { res, status, json } = makeRes();
+    await run({}, makeReq('GET', '/api/tts:voices'), res);
+    expect(status()).toBe(200);
+    const body = json() as { voices: { accent: string }[] };
+    expect(new Set(body.voices.map((v) => v.accent))).toEqual(new Set(['us', 'gb', 'au', 'in']));
+  });
+
+  it('rejects malformed synthesis bodies with 400', async () => {
+    const { res, status } = makeRes();
+    await run({}, makeReq('POST', '/api/tts:synthesize', { text: 'hello' }), res);
+    expect(status()).toBe(400);
+  });
+
+  it('rejects malformed word-clip requests with 400', async () => {
+    const { res, status } = makeRes();
+    await run({}, makeReq('GET', '/api/tts/word?wordId=deal'), res);
+    expect(status()).toBe(400);
+  });
+});
+
 describe('POST /api/passages:illustrate', () => {
   it('returns { illustrationUrl } for a valid PassageIllustrationRequest', async () => {
     const fetchImpl = vi.fn(async () =>

@@ -26,7 +26,10 @@ import type {
   Cefr,
   ContentType,
   ExamCriterion,
+  EnglishAccent,
   LearningIntent,
+  AmbientNoiseLevel,
+  ListeningSceneKind,
   MasteryStage,
   ReadabilityLevel,
   SetupConfig,
@@ -98,6 +101,7 @@ const CONTENT_TYPES: { value: ContentType; label: string }[] = [
   { value: 'article', label: '単発記事' },
   { value: 'short_story', label: '短編物語' },
   { value: 'long_story', label: '長編物語' },
+  { value: 'listening_scene', label: 'リスニング' },
 ];
 
 const GENRES: { value: StoryGenre; label: string }[] = [
@@ -112,6 +116,26 @@ const READABILITY_OPTIONS: { value: ReadabilityLevel; label: string }[] = [
   { value: 'easy', label: 'やさしい' },
   { value: 'standard', label: '標準' },
   { value: 'advanced', label: '挑戦' },
+];
+
+const LISTENING_SCENES: { value: ListeningSceneKind; label: string }[] = [
+  { value: 'radio_news', label: 'ラジオニュース' },
+  { value: 'street_interview', label: '街頭インタビュー' },
+  { value: 'podcast_dialogue', label: 'ポッドキャスト' },
+  { value: 'public_announcement', label: '公共アナウンス' },
+];
+
+const ACCENTS: { value: EnglishAccent; label: string }[] = [
+  { value: 'us', label: 'アメリカ英語' },
+  { value: 'gb', label: 'イギリス英語' },
+  { value: 'au', label: 'オーストラリア英語' },
+  { value: 'in', label: 'インド英語' },
+];
+
+const NOISE_LEVELS: { value: AmbientNoiseLevel; label: string }[] = [
+  { value: 'none', label: 'なし' },
+  { value: 'low', label: '控えめ' },
+  { value: 'medium', label: '標準' },
 ];
 
 /** Default word target when none is seeded (mid of the article range). */
@@ -211,6 +235,9 @@ export function SetupScreen({
   const [readabilityLevel, setReadabilityLevel] = useState<ReadabilityLevel>(seededLevelPreset.readabilityLevel);
   const [genre, setGenre] = useState<StoryGenre>(initial?.storyOptions?.genre ?? 'fantasy');
   const [homageTitle, setHomageTitle] = useState<string>(initial?.storyOptions?.homageTitle ?? '');
+  const [sceneKind, setSceneKind] = useState<ListeningSceneKind>(initial?.listeningOptions?.sceneKind ?? 'radio_news');
+  const [accent, setAccent] = useState<EnglishAccent>(initial?.listeningOptions?.accent ?? 'gb');
+  const [noiseLevel, setNoiseLevel] = useState<AmbientNoiseLevel>(initial?.listeningOptions?.noiseLevel ?? 'low');
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.excludedWordIds ?? []));
   // Manual additions are seeded from the persisted setup (now manual-only, A-1-1) and re-filtered
   // whenever previewed candidates arrive so an overlap collapses to a single candidate chip.
@@ -229,7 +256,8 @@ export function SetupScreen({
   const [draft, setDraft] = useState('');
   const [attempted, setAttempted] = useState(false);
 
-  const isStory = contentType !== 'article';
+  const isStory = contentType === 'short_story' || contentType === 'long_story';
+  const isListening = contentType === 'listening_scene';
   const levelPreset = levelPresetForExamTarget(examTarget ?? DEFAULT_EXAM);
   const hasCustomLevel =
     vocabularyLevel !== levelPreset.vocabularyLevel || readabilityLevel !== levelPreset.readabilityLevel;
@@ -310,6 +338,7 @@ export function SetupScreen({
       ...(isStory
         ? { storyOptions: { genre, ...(homageTitle.trim() ? { homageTitle: homageTitle.trim() } : {}) } }
         : {}),
+      ...(isListening ? { listeningOptions: { sceneKind, accent, noiseLevel } } : {}),
       targetWordIds,
       excludedWordIds: [...excluded],
     };
@@ -449,7 +478,7 @@ export function SetupScreen({
           {/* Content type */}
           <section>
             <Label text="コンテンツ種別" />
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
               {CONTENT_TYPES.map(({ value, label }) => {
                 const on = contentType === value;
                 return (
@@ -499,6 +528,62 @@ export function SetupScreen({
                 onChange={(e) => setHomageTitle(e.target.value)}
                 style={homageInputStyle}
               />
+            </section>
+          ) : null}
+
+          {isListening ? (
+            <section>
+              <Label text="音声シーン" hint="字幕追従リスニング" />
+              <div style={advancedGridStyle}>
+                <label style={advancedLabelStyle}>
+                  <span style={advancedLabelTextStyle}>場面</span>
+                  <select
+                    aria-label="音声シーン"
+                    data-testid="listening-scene-kind"
+                    value={sceneKind}
+                    onChange={(e) => setSceneKind(e.target.value as ListeningSceneKind)}
+                    style={selectStyle}
+                  >
+                    {LISTENING_SCENES.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={advancedLabelStyle}>
+                  <span style={advancedLabelTextStyle}>アクセント</span>
+                  <select
+                    aria-label="英語アクセント"
+                    data-testid="listening-accent"
+                    value={accent}
+                    onChange={(e) => setAccent(e.target.value as EnglishAccent)}
+                    style={selectStyle}
+                  >
+                    {ACCENTS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={advancedLabelStyle}>
+                  <span style={advancedLabelTextStyle}>環境音</span>
+                  <select
+                    aria-label="環境音レベル"
+                    data-testid="listening-noise"
+                    value={noiseLevel}
+                    onChange={(e) => setNoiseLevel(e.target.value as AmbientNoiseLevel)}
+                    style={selectStyle}
+                  >
+                    {NOISE_LEVELS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </section>
           ) : null}
 

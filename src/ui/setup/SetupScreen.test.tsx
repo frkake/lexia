@@ -51,6 +51,7 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(getByTestId('content-type-article')).toBeTruthy();
     expect(getByTestId('content-type-short_story')).toBeTruthy();
     expect(getByTestId('content-type-long_story')).toBeTruthy();
+    expect(getByTestId('content-type-listening_scene')).toBeTruthy();
   });
 
   it('single-selects the learning intent (only one active at a time, 8.2)', () => {
@@ -157,6 +158,27 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     const cfg = onGenerate.mock.calls[0]![0];
     expect(cfg.contentType).toBe('short_story');
     expect(cfg.storyOptions).toEqual({ genre: 'mystery', homageTitle: 'Sherlock Holmes' });
+  });
+
+  it('emits listening scene options with the selected accent and does not show story genre controls', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, queryByTestId, getByText } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+    });
+
+    fireEvent.click(getByTestId('content-type-listening_scene'));
+    expect(queryByTestId('genre-fantasy')).toBeNull();
+    fireEvent.change(getByTestId('listening-scene-kind'), { target: { value: 'street_interview' } });
+    fireEvent.change(getByTestId('listening-accent'), { target: { value: 'in' } });
+    fireEvent.change(getByTestId('listening-noise'), { target: { value: 'medium' } });
+    fireEvent.click(getByText('文章を生成する'));
+
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.contentType).toBe('listening_scene');
+    expect(cfg.storyOptions).toBeUndefined();
+    expect(cfg.listeningOptions).toEqual({ sceneKind: 'street_interview', accent: 'in', noiseLevel: 'medium' });
   });
 
   it('clamps the emitted word target into the selected story range (7.3)', () => {

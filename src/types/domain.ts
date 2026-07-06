@@ -31,6 +31,38 @@ export interface AdvancedDifficulty {
   readabilityLevel?: ReadabilityLevel;
 }
 
+// ── Listening audio variants ─────────────────────────────────────────────────
+
+/** English accent/variety the learner wants to practice hearing. */
+export type EnglishAccent = 'us' | 'gb' | 'au' | 'in';
+
+export type VoiceGender = 'female' | 'male';
+
+export type VoiceProvider = 'azure' | 'polly';
+
+export type VoiceRole = 'narrator' | 'interviewer' | 'guest' | 'announcer';
+
+export interface VoiceProfile {
+  id: string;
+  labelJa: string;
+  accent: EnglishAccent;
+  gender: VoiceGender;
+  role: VoiceRole;
+  provider: VoiceProvider;
+  providerVoiceId: string;
+  locale: string;
+}
+
+export type ListeningSceneKind = 'radio_news' | 'street_interview' | 'podcast_dialogue' | 'public_announcement';
+
+export type AmbientNoiseLevel = 'none' | 'low' | 'medium';
+
+export interface ListeningOptions {
+  sceneKind: ListeningSceneKind;
+  noiseLevel: AmbientNoiseLevel;
+  accent: EnglishAccent;
+}
+
 // ── Exam-based difficulty (Requirement 9) ────────────────────────────────────
 
 /** Standardized exam whose scale a learner may use to pick difficulty. */
@@ -55,11 +87,13 @@ export interface ExamCriterion {
  */
 export type LearningIntent = 'business' | 'daily' | 'toeic' | 'eiken' | 'academic' | 'travel';
 
-/** Content kind (Requirement 6). Articles carry no story-only fields (type-level exclusivity). */
-export type ContentType = 'article' | 'short_story' | 'long_story';
+/** Content kind (Requirement 6 + listening scenes). Articles carry no story-only fields. */
+export type ContentType = 'article' | 'short_story' | 'long_story' | 'listening_scene';
 
 /** Story genre (Requirement 6.4). Open string so custom genres beyond the required three are allowed. */
 export type StoryGenre = 'fantasy' | 'sci_fi' | 'mystery' | (string & {});
+
+export type StoryContentType = 'short_story' | 'long_story';
 
 /** Four-stage mastery (most important semantic). */
 export type MasteryStage = 'New' | 'Learning' | 'Consolidating' | 'Mastered';
@@ -192,6 +226,18 @@ export interface PassageMeta {
    * or the thumbnail has not been generated (the list falls back to `sceneIllustrationUrl`).
    */
   sceneThumbnailUrl?: string;
+  /** Listening-scene metadata (absent for reading/story prose). */
+  listeningScene?: {
+    sceneKind: ListeningSceneKind;
+    noiseLevel: AmbientNoiseLevel;
+    accent: EnglishAccent;
+    speakers: {
+      speakerId: string;
+      label: string;
+      role: VoiceRole;
+      voiceProfileId: string;
+    }[];
+  };
   /** Link to the owning story chapter (Requirement 6.6). Absent for standalone articles. */
   storyRef?: { storyId: string; chapterIndex: number };
 }
@@ -219,6 +265,8 @@ export interface TranslationSpan {
 export interface Sentence {
   tokens: string[];
   translationJa: string;
+  /** Present for dialogue/listening scenes; used for speaker labels and multi-voice TTS. */
+  speakerId?: string;
   /**
    * Optional translation-side emphasis spans (Requirement 4). Absent ⇒ no JA-side emphasis,
    * keeping passages generated before this feature valid.
@@ -454,7 +502,7 @@ export interface ChapterPlan {
  */
 export interface StoryPlan {
   storyId: string;
-  contentType: Exclude<ContentType, 'article'>;
+  contentType: StoryContentType;
   genre: StoryGenre;
   /** Reference to an existing novel homage — style/motif only, never verbatim copy (6.5). */
   homage?: { title: string; styleNoteJa: string };
@@ -476,7 +524,7 @@ export interface StoryContext {
 
 /** Request for a story plan (Requirement 6.2). */
 export interface StoryPlanRequest {
-  contentType: Exclude<ContentType, 'article'>;
+  contentType: StoryContentType;
   genre: StoryGenre;
   homageTitle?: string;
   intent: LearningIntent;
@@ -592,7 +640,7 @@ export interface AudioAsset {
   passageId: string;
   voiceId: string;
   audioUrl: string;
-  format: 'audio/mpeg' | 'audio/aac';
+  format: 'audio/mpeg' | 'audio/aac' | 'audio/wav';
   durationMs: number;
   engine: 'polly' | 'azure';
 }
@@ -752,6 +800,8 @@ export interface SetupConfig {
    * Manually added words only (A-1-1). Auto-selected words are resolved at generation time from
    * the level/intent/SRS state and are NOT stored here, so they never survive a reset or re-visit.
    */
+  /** Scene format/accent for generated listening practice. */
+  listeningOptions?: ListeningOptions;
   targetWordIds: string[];
   excludedWordIds: string[];
 }
@@ -803,6 +853,8 @@ export interface GenerationRequest {
   targetWords: GenerationTargetWord[];
   /** Story-chapter consistency context (Requirement 6.6). Unset for standalone articles. */
   storyContext?: StoryContext;
+  /** Listening-scene format/accent, set only when contentType is `listening_scene`. */
+  listeningOptions?: ListeningOptions;
   /**
    * Continuation context for chunked generation of a long passage (B-5 第2弾). When a word target
    * exceeds the single-request ceiling the orchestrator splits it into sequential segments and

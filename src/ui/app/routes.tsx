@@ -269,6 +269,10 @@ function storyContinuationSetup(setup: SetupConfig, passage: IndexedPassage, pla
   };
 }
 
+function isStoryContentType(contentType: SetupConfig['contentType']): contentType is 'short_story' | 'long_story' {
+  return contentType === 'short_story' || contentType === 'long_story';
+}
+
 function chapterIndexOf(record: PassageRecord): number {
   return record.passage.meta.storyRef?.chapterIndex ?? 0;
 }
@@ -549,7 +553,7 @@ export function HomeRoute() {
       // revive as manual chips on the next visit. Level/sliders/etc. persist as chosen.
       c.settings.getState().setLastSetup({ ...setup, targetWordIds: manualTargetWordIds(setup, candidates) });
       // Story path: generate the plan and STOP at the confirmation gate (no body yet, 6.3).
-      if (storyMode && setup.contentType !== 'article') {
+      if (storyMode && isStoryContentType(setup.contentType)) {
         const planned = await c.storyPlanner.planStory({
           contentType: setup.contentType,
           genre: setup.storyOptions?.genre ?? 'fantasy',

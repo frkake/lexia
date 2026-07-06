@@ -98,6 +98,36 @@ function makePassage(): IndexedPassage {
   return tokenizer.index('p1', source);
 }
 
+function makeListeningPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: {
+      title: 'Morning voices',
+      intent: 'daily',
+      level: 'B1',
+      newCount: 0,
+      reviewCount: 0,
+      approxWords: 6,
+      listeningScene: {
+        sceneKind: 'street_interview',
+        noiseLevel: 'low',
+        accent: 'in',
+        speakers: [
+          { speakerId: 'interviewer', label: 'Interviewer', role: 'interviewer', voiceProfileId: 'azure-in-neerja' },
+          { speakerId: 'guest_1', label: 'Guest', role: 'guest', voiceProfileId: 'azure-in-prabhat' },
+        ],
+      },
+    },
+    sentences: [
+      { speakerId: 'interviewer', tokens: ['How', 'is', 'your', 'morning', '?'], translationJa: '' },
+      { speakerId: 'guest_1', tokens: ['It', 'is', 'busy', '.'], translationJa: '' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+  };
+  return tokenizer.index('p-listening', source);
+}
+
 describe('<PassageRenderer/>', () => {
   it('renders the passage prose including non-annotated words', () => {
     const { getByText } = render(<PassageRenderer passage={makePassage()} />);
@@ -309,6 +339,16 @@ describe('<PassageRenderer/> sentence-level 2-column grid (3.1)', () => {
     const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} />);
     expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('prose');
     expect(queryByTestId('sentence-row-0')).toBeNull();
+  });
+});
+
+describe('<PassageRenderer/> listening scenes', () => {
+  it('renders speaker labels without replacing the subtitle tokens', () => {
+    const { getByTestId, getByText } = render(<PassageRenderer passage={makeListeningPassage()} layout="grid" />);
+    expect(getByTestId('speaker-label-0').textContent).toBe('Interviewer');
+    expect(getByTestId('speaker-label-1').textContent).toBe('Guest');
+    expect(getByText('morning')).toBeTruthy();
+    expect(getByText('busy')).toBeTruthy();
   });
 });
 

@@ -182,6 +182,11 @@ export function PassageRenderer({
 
   const densityKind = (span: TargetSpan): AnnotationKind => span.masteryDensity;
   const lineAnchorForTarget = (span: TargetSpan): string | undefined => firstTargetAnchorBySpan.get(targetAnchorKey(span));
+  const speakerLabelFor = (sentenceIndex: number): string | null => {
+    const speakerId = source.sentences[sentenceIndex]?.speakerId;
+    if (!speakerId) return null;
+    return source.meta.listeningScene?.speakers.find((s) => s.speakerId === speakerId)?.label ?? speakerId;
+  };
 
   const isActive = (tokens: IndexedToken[], start: number, end: number): boolean =>
     activeTokenId != null && tokens.slice(start, end).some((t) => t.tokenId === activeTokenId);
@@ -630,7 +635,17 @@ export function PassageRenderer({
     // Safety net: surface any in-range cue not reached above (e.g. tokenEnd === tokens.length).
     emitBadges(tokens.length);
 
-    return out;
+    const speakerLabel = speakerLabelFor(sentenceIndex);
+    return (
+      <>
+        {speakerLabel ? (
+          <span data-testid={`speaker-label-${sentenceIndex}`} style={speakerLabelStyle}>
+            {speakerLabel}
+          </span>
+        ) : null}
+        {out}
+      </>
+    );
   }
 
   if (layout === 'grid') {
@@ -741,3 +756,16 @@ export function PassageRenderer({
     </div>
   );
 }
+
+const speakerLabelStyle: CSSProperties = {
+  display: 'inline-block',
+  marginRight: 8,
+  padding: '2px 7px',
+  borderRadius: 6,
+  background: colors.surfaceBlue,
+  color: colors.primary,
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 700,
+  verticalAlign: 'baseline',
+};

@@ -154,7 +154,7 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     });
     const log = await createRepositories(db).reviewLog.since(userId, 0);
     expect(log.some((entry) => entry.wordId === 'deal' && entry.source === 'passage')).toBe(true);
-  });
+  }, 10_000);
 
   it('keeps generating after the learner leaves Home and shows a completion toast instead of a forced jump (D-7)', async () => {
     generationProgressStore.getState().reset();

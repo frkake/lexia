@@ -143,6 +143,7 @@ function buildRequest(
     levelDetail: { subBand, examLabel },
     targetWords,
     ...(storyContext ? { storyContext } : {}),
+    ...(setup.contentType === 'listening_scene' && setup.listeningOptions ? { listeningOptions: setup.listeningOptions } : {}),
   };
 }
 

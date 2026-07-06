@@ -167,6 +167,19 @@ describe('SessionPlanner.buildRequest', () => {
     expect(req.storyContext).toBe(storyContext);
   });
 
+  it('passes listening-scene options through for accent-aware listening generation', () => {
+    const req = sessionPlanner.buildRequest(
+      {
+        ...setup,
+        contentType: 'listening_scene',
+        listeningOptions: { sceneKind: 'street_interview', accent: 'in', noiseLevel: 'medium' },
+      },
+      [],
+    );
+    expect(req.contentType).toBe('listening_scene');
+    expect(req.listeningOptions).toEqual({ sceneKind: 'street_interview', accent: 'in', noiseLevel: 'medium' });
+  });
+
   it('derives masteryDensity from scheduling state and defaults unknown words to new', () => {
     const states = [sched('w1', { stability: 40, lapses: 0, mastery: 'Consolidating' })];
     const req = sessionPlanner.buildRequest(setup, states);

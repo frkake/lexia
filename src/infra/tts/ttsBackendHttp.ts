@@ -7,7 +7,7 @@
  * unavailable). Credentials stay server-side; the client never sees the TTS engine key.
  */
 
-import type { TtsBackend, TtsSynthesisResult, TtsWordMark } from './ttsSynthesisAdapter';
+import type { TtsBackend, TtsSynthesisOptions, TtsSynthesisResult, TtsWordMark } from './ttsSynthesisAdapter';
 import type { AudioAsset } from '../../types/domain';
 
 export interface HttpTtsBackendOptions {
@@ -34,11 +34,16 @@ export class HttpTtsBackend implements TtsBackend {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async synthesize(text: string, voiceId: string): Promise<TtsSynthesisResult> {
+  async synthesize(text: string, voiceId: string, options: TtsSynthesisOptions = {}): Promise<TtsSynthesisResult> {
     const body = await this.request<TtsSynthesizeBody>('/api/tts:synthesize', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text, voiceId }),
+      body: JSON.stringify({
+        text,
+        voiceId,
+        ...(options.segments ? { segments: options.segments } : {}),
+        ...(options.scene ? { scene: options.scene } : {}),
+      }),
     });
     return {
       audioUrl: body.audioUrl,

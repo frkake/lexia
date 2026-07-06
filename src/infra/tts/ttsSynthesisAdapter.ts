@@ -10,7 +10,7 @@
 
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { TtsSynthesisPort } from '../../types/ports';
-import type { AudioAsset, IndexedPassage, TimingMap, WordMark } from '../../types/domain';
+import type { AmbientNoiseLevel, AudioAsset, IndexedPassage, ListeningSceneKind, TimingMap, WordMark } from '../../types/domain';
 
 /** A word-type speech mark from the backend: UTF-8 byte range + onset time (ms). */
 export interface TtsWordMark {
@@ -27,8 +27,23 @@ export interface TtsSynthesisResult {
   marks: TtsWordMark[];
 }
 
+export interface TtsSynthesisSegment {
+  text: string;
+  byteStart: number;
+  voiceId: string;
+  speakerId?: string;
+}
+
+export interface TtsSynthesisOptions {
+  segments?: TtsSynthesisSegment[];
+  scene?: {
+    sceneKind: ListeningSceneKind;
+    noiseLevel: AmbientNoiseLevel;
+  };
+}
+
 export interface TtsBackend {
-  synthesize(text: string, voiceId: string): Promise<TtsSynthesisResult>;
+  synthesize(text: string, voiceId: string, options?: TtsSynthesisOptions): Promise<TtsSynthesisResult>;
   wordClipUrl(wordId: string, voiceId: string): Promise<string>;
 }
 
@@ -48,7 +63,7 @@ export class TtsSynthesisAdapter implements TtsSynthesisPort {
     passage: IndexedPassage,
     voiceId: string,
   ): Promise<{ asset: AudioAsset; timing: TimingMap }> {
-    const result = await this.backend.synthesize(passage.renderText, voiceId);
+    const result = await this.backend.synthesize(passage.renderText, voiceId, synthesisOptions(passage, voiceId));
 
     // Resolve each mark to its unique covering token via the shared tokenizer.
     const ordered = [...result.marks].sort((a, b) => a.timeMs - b.timeMs);
@@ -86,6 +101,32 @@ export class TtsSynthesisAdapter implements TtsSynthesisPort {
   wordClipUrl(wordId: string, voiceId: string): Promise<string> {
     return this.backend.wordClipUrl(wordId, voiceId);
   }
+}
+
+function synthesisOptions(passage: IndexedPassage, voiceId: string): TtsSynthesisOptions | undefined {
+  const scene = passage.source.meta.listeningScene;
+  if (!scene) return undefined;
+  const speakerVoice = new Map(scene.speakers.map((s) => [s.speakerId, s.voiceProfileId]));
+  const segments: TtsSynthesisSegment[] = passage.sentences
+    .map((sentence) => {
+      const first = sentence.tokens[0];
+      if (!first) return null;
+      const sourceSentence = passage.source.sentences[sentence.sentenceIndex];
+      const speakerId = sourceSentence?.speakerId;
+      return {
+        text: sentence.renderText,
+        byteStart: first.byteStart,
+        voiceId: (speakerId && speakerVoice.get(speakerId)) || voiceId,
+        ...(speakerId ? { speakerId } : {}),
+      };
+    })
+    .filter((s): s is TtsSynthesisSegment => s !== null);
+  return segments.length > 0
+    ? {
+        segments,
+        scene: { sceneKind: scene.sceneKind, noiseLevel: scene.noiseLevel },
+      }
+    : undefined;
 }
 
 function fail(kind: TtsSynthesisErrorKind, message: string): TtsSynthesisError {

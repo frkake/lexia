@@ -8,9 +8,9 @@
 
 import { colors, fonts, radius, shadow } from './theme/tokens';
 import { usePlayerStore, playerStore } from '../state/stores/playerStore';
+import { nextVoiceProfileId, resolveVoiceProfile } from '../domain/audio/voiceCatalog';
 
 const RATES = [1, 1.25, 1.5, 0.75] as const;
-const VOICES = ['Joanna', 'Matthew', 'Amy'] as const;
 
 /** Format an elapsed/total millisecond count as `m:ss`. */
 export function formatClock(ms: number): string {
@@ -63,12 +63,11 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
   };
 
   const cycleVoice = (): void => {
-    const current = voiceId || VOICES[0];
-    const i = VOICES.indexOf(current as (typeof VOICES)[number]);
-    const next = VOICES[(i + 1) % VOICES.length] ?? VOICES[0];
+    const next = nextVoiceProfileId(voiceId);
     playerStore.getState().setVoice(next);
     onVoiceChange?.(next);
   };
+  const voice = resolveVoiceProfile(voiceId);
 
   return (
     <div
@@ -139,8 +138,8 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
         <button type="button" aria-label={`再生速度 ${rate}倍`} onClick={cycleRate} style={chip()}>
           {rate.toFixed(rate % 1 === 0 ? 1 : 2)}×
         </button>
-        <button type="button" aria-label={`声を切り替え 現在 ${voiceId || VOICES[0]}`} onClick={cycleVoice} style={chip()}>
-          声: {voiceId || VOICES[0]}
+        <button type="button" aria-label={`声を切り替え 現在 ${voice.labelJa}`} onClick={cycleVoice} style={chip()}>
+          声: {voice.labelJa}
         </button>
       </div>
     </div>

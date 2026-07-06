@@ -70,8 +70,8 @@ describe('<BottomPlayer/>', () => {
     act(() => playerStore.getState().load(asset, timing));
     const { getByRole } = render(<BottomPlayer onVoiceChange={onVoiceChange} />);
     fireEvent.click(getByRole('button', { name: /声を切り替え/ }));
-    expect(playerStore.getState().voiceId).toBe('Joanna');
-    expect(onVoiceChange).toHaveBeenCalledWith('Joanna');
+    expect(playerStore.getState().voiceId).toBe('azure-us-guy');
+    expect(onVoiceChange).toHaveBeenCalledWith('azure-us-guy');
   });
 
   it('degrades to an audio-preparing label while loading', () => {

@@ -101,6 +101,17 @@ curl -X POST http://localhost:5173/api/passages:generate \
   -d '{"level":"B1","themes":["会議"],"newWordRatio":0.3,"length":"short","targetWords":[]}'
 ```
 
+## 音声API（TTS）
+
+読解画面の音声は `/api/tts:*` 経由で合成する。Azure Speech を優先し、未設定時は Amazon Polly を互換フォールバックとして使える。
+リスニング用シーンでは、文ごとに話者・アクセントを分けて合成し、返却された speech marks をトークン単位のハイライトに変換する。
+
+- 音声一覧: `GET /api/tts:voices`
+- 文章音声: `POST /api/tts:synthesize`（`text`, `voiceId`, 任意の `segments`）
+- 単語音声: `GET /api/tts/word?wordId=deal&voiceId=azure-us-jenny`
+- Azure Speech: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`
+- Amazon Polly: `AWS_REGION`（任意で `POLLY_ENGINE`）
+
 ### ユニット / 統合テスト（Vitest）
 
 ```bash
@@ -129,6 +140,5 @@ pnpm test:e2e:update                            # スクリーンショットの
 - ビジュアル回帰（`e2e/visual.spec.ts`）：6 フレームを `gallery.html` の固定フィクスチャで描画して
   スナップショット比較し、状態別注釈・習熟度色・カテゴリチップを design.md「Design Tokens」と照合。
   ベースライン（`e2e/visual.spec.ts-snapshots/`）はフォント描画依存のため生成環境に紐づく。
-
 
 

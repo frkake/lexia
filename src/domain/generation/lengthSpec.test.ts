@@ -22,6 +22,7 @@ describe('lengthSpec.wordRange', () => {
     expect(lengthSpec.wordRange('article')).toEqual({ min: 100, max: 1500, step: 100 });
     expect(lengthSpec.wordRange('short_story')).toEqual({ min: 500, max: 3000, step: 100 });
     expect(lengthSpec.wordRange('long_story')).toEqual({ min: 800, max: 2500, step: 100 });
+    expect(lengthSpec.wordRange('listening_scene')).toEqual({ min: 100, max: 1200, step: 100 });
   });
 });
 

@@ -27,6 +27,32 @@ describe('HttpTtsBackend', () => {
     expect(JSON.parse(init!.body as string)).toEqual({ text: 'We closed the deal.', voiceId: 'Joanna' });
   });
 
+  it('POSTs listening-scene segments when supplied', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        audioUrl: 'data:audio/wav;base64,AA==',
+        format: 'audio/wav',
+        durationMs: 1000,
+        engine: 'azure',
+        marks: [{ start: 0, end: 2, timeMs: 0 }],
+      }),
+    );
+    const backend = new HttpTtsBackend({ fetch: fetchMock });
+
+    await backend.synthesize('Hi there.', 'azure-gb-sonia', {
+      segments: [{ text: 'Hi there.', byteStart: 0, voiceId: 'azure-gb-sonia', speakerId: 'host' }],
+      scene: { sceneKind: 'podcast_dialogue', noiseLevel: 'low' },
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse(init!.body as string)).toEqual({
+      text: 'Hi there.',
+      voiceId: 'azure-gb-sonia',
+      segments: [{ text: 'Hi there.', byteStart: 0, voiceId: 'azure-gb-sonia', speakerId: 'host' }],
+      scene: { sceneKind: 'podcast_dialogue', noiseLevel: 'low' },
+    });
+  });
+
   it('resolves a word clip url', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ url: 'https://cdn/word.mp3' }));
     const backend = new HttpTtsBackend({ fetch: fetchMock });

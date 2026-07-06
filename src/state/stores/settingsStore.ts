@@ -31,6 +31,7 @@ const DEFAULT_SETUP: SetupConfig = {
   newWordRatio: 0.3,
   wordTarget: 400,
   contentType: 'article',
+  listeningOptions: { sceneKind: 'radio_news', noiseLevel: 'low', accent: 'gb' },
   targetWordIds: [],
   excludedWordIds: [],
 };

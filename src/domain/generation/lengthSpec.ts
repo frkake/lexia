@@ -31,6 +31,7 @@ const WORD_RANGES: Record<ContentType, { min: number; max: number; step: 100 }> 
   article: { min: 100, max: 1500, step: 100 },
   short_story: { min: 500, max: 3000, step: 100 },
   long_story: { min: 800, max: 2500, step: 100 },
+  listening_scene: { min: 100, max: 1200, step: 100 },
 };
 
 /**

@@ -337,6 +337,19 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
     expect(user).toContain('竜と少女の冒険。'); // synopsis threaded in
     expect(user).toContain('少女は旅に出た。'); // prior-chapter summary threaded in
   });
+
+  it('adds listening-scene transcript and speaker guidance for radio/interview practice', () => {
+    const { system, user } = buildPassageMessages({
+      ...base,
+      contentType: 'listening_scene',
+      listeningOptions: { sceneKind: 'street_interview', accent: 'in', noiseLevel: 'medium' },
+    });
+    expect(system).toContain('listening_scene');
+    expect(system).toContain('speakerId');
+    expect(user).toContain('"sceneKind": "street_interview"');
+    expect(user).toContain('target accent for TTS voices: in');
+    expect(user).toContain('guest_1');
+  });
 });
 
 describe('maxTokensForWordTarget', () => {

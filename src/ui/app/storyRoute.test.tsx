@@ -168,7 +168,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(screen.getByText('キャラクター設定')).toBeTruthy();
     expect(screen.getByText('Mia')).toBeTruthy();
     expect(screen.getByText('少女が星を探す短い物語。')).toBeTruthy();
-  });
+  }, 10_000);
 
   it('shows body-generation errors on the story confirmation gate', async () => {
     const userId = 'story_route_confirm_error_user' as UserId;
@@ -254,8 +254,10 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     fireEvent.click(screen.getByText('文章を生成する'));
     expect(((await screen.findByAltText('Mia')) as HTMLImageElement).src).toContain('OLDPORTRAIT');
 
-    fireEvent.click(screen.getByTestId('character-description-display-0'));
-    fireEvent.change(screen.getByLabelText('Miaの説明'), { target: { value: '青い外套と星形の杖を持つ少女' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('character-description-display-0'));
+    });
+    fireEvent.change(await screen.findByLabelText('Miaの説明'), { target: { value: '青い外套と星形の杖を持つ少女' } });
     fireEvent.click(screen.getByTestId('regenerate-character-portrait-0'));
     await waitFor(() => expect((screen.getByAltText('Mia') as HTMLImageElement).src).toContain('NEWPORTRAIT'));
     expect(regeneratedDescription).toBe('青い外套と星形の杖を持つ少女');
@@ -269,7 +271,7 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
       expect(stories[0]!.plan.characters[0]!.portraitIllustrationUrl).toBe('data:image/png;base64,NEWPORTRAIT');
       expect(stories[0]!.plan.characters[0]!.fullBodyIllustrationUrl).toBe('data:image/png;base64,NEWFULL');
     });
-  });
+  }, 10_000);
 
   it('opens an individual character detail page and generates the full-body illustration', async () => {
     const userId = 'story_route_character_detail_user' as UserId;

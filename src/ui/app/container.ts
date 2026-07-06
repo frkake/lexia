@@ -19,6 +19,7 @@ import { TtsSynthesisAdapter, type TtsBackend } from '../../infra/tts/ttsSynthes
 import { HttpTtsBackend } from '../../infra/tts/ttsBackendHttp';
 import { JsonSyncAdapter } from '../../infra/sync/exportImport';
 import { createCefrDictionary } from '../../infra/cefr/cefrDictionary';
+import { DEFAULT_VOICE_PROFILE_ID } from '../../domain/audio/voiceCatalog';
 import {
   createGenerationOrchestrator,
   type GenerationOrchestrator,
@@ -31,8 +32,8 @@ import { settingsStore, type SettingsStore } from '../../state/stores/settingsSt
 import type { ContentGateway, StoryGateway, SyncAdapter, TtsSynthesisPort } from '../../types/ports';
 import type { Cefr, UserId, WordSchedulingState } from '../../types/domain';
 
-/** Polly Neural default voice used until the learner picks one in settings. */
-export const DEFAULT_VOICE_ID = 'Joanna';
+/** Default voice profile used until the learner picks one in settings. */
+export const DEFAULT_VOICE_ID = DEFAULT_VOICE_PROFILE_ID;
 
 /** TTS port that always degrades — used when no backend is configured. */
 export const degradingTts: TtsSynthesisPort = {

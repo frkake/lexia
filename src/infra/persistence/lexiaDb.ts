@@ -135,6 +135,9 @@ function migrateLastSetup(raw: unknown): Record<string, unknown> {
       legacy === 'short' || legacy === 'medium' || legacy === 'long' ? lengthSpec.migrateLegacyLength(legacy) : 400;
   }
   if (!('contentType' in setup)) setup.contentType = 'article';
+  if (!('listeningOptions' in setup)) {
+    setup.listeningOptions = { sceneKind: 'radio_news', noiseLevel: 'low', accent: 'gb' };
+  }
   if (!Array.isArray(setup.targetWordIds)) setup.targetWordIds = [];
   if (!Array.isArray(setup.excludedWordIds)) setup.excludedWordIds = [];
   delete setup.level;

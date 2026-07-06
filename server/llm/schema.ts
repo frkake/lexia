@@ -178,6 +178,7 @@ export const PASSAGE_JSON_SCHEMA = {
         properties: {
           tokens: { type: 'array', items: { type: 'string' } },
           translationJa: { type: 'string' },
+          speakerId: { type: ['string', 'null'] },
           // Translation-side emphasis (Requirement 4): the model quotes the JA expression
           // VERBATIM (anchorTextJa) and the server re-derives charStart/charEnd from it (the
           // model miscounts offsets), mirroring how target/notice spans are re-anchored.
@@ -198,7 +199,7 @@ export const PASSAGE_JSON_SCHEMA = {
           // 0-based paragraph index (F-8②): 0 for the first paragraph, +1 at each discourse break.
           paragraphIndex: { type: 'integer' },
         },
-        required: ['tokens', 'translationJa', 'translationSpans', 'paragraphIndex'],
+        required: ['tokens', 'translationJa', 'speakerId', 'translationSpans', 'paragraphIndex'],
       },
     },
     targetSpans: {
@@ -463,6 +464,8 @@ const PASSAGE_SYSTEM = [
   'rejoins tokens with deterministic spacing, so punctuation MUST be its own token.',
   '',
   'For every sentence also give translationJa: a natural Japanese translation of that sentence.',
+  'Also include speakerId on every sentence: use null for normal reading/story prose, and a stable',
+  'speaker id string for listening_scene utterances.',
   '',
   'Translation-side emphasis (translationSpans): for EACH sentence, mark the parts of translationJa',
   'that correspond to NEW elements so the learner sees the new word on both sides. For every NEW',
@@ -514,6 +517,13 @@ const PASSAGE_SYSTEM = [
   '  the required constructions; missing coverage causes rejection.',
   '- Target words & ratio: include EVERY requested target word at least once, copying its',
   '  masteryDensity, so the new/review balance matches newWordRatio.',
+  '- For contentType = "listening_scene", write a realistic listening transcript rather than',
+  '  expository prose. Treat each sentence object as one subtitle/utterance, set speakerId on every',
+  '  utterance, keep turns short enough to follow by ear, and include natural spoken features',
+  '  (brief acknowledgements, clarification, short pauses implied by punctuation) without heavy dialect spelling.',
+  '  radio_news = anchor/report format; street_interview = interviewer plus multiple short answers;',
+  '  podcast_dialogue = host/guest exchange; public_announcement = clear public-service announcement.',
+  '  Accents are handled by TTS voices, so keep the transcript standard and readable.',
   '',
   'Writing quality (as binding as the constraints above — a flat, mechanical passage is a FAILED',
   'passage):',
@@ -575,6 +585,7 @@ function passageUser(req: GenerationRequest): string {
     // Idiom / set-phrase quotas the Writing-quality block references (B-1 / B-2).
     idiomQuota: idiomQuotaFor(req.wordTarget),
     setPhraseQuota: setPhraseQuotaFor(req.wordTarget),
+    listeningOptions: req.listeningOptions ?? null,
     targetWords: targets,
     // Sub-band position + concrete exam goal within the CEFR band (A-3-1); omitted when absent.
     ...(req.levelDetail ? { levelDetail: req.levelDetail } : {}),
@@ -607,6 +618,17 @@ function passageUser(req: GenerationRequest): string {
       'must read clearly harder than a plain B2 text — use upper-B2 lexis, occasional C1',
       'words in transparent contexts, and denser clause structure, while staying below C1',
       'overall.',
+    );
+  }
+  if (req.contentType === 'listening_scene' && req.listeningOptions) {
+    lines.push(
+      '',
+      'Listening-scene requirements:',
+      `- sceneKind: ${req.listeningOptions.sceneKind}`,
+      `- target accent for TTS voices: ${req.listeningOptions.accent}`,
+      `- ambient noise level: ${req.listeningOptions.noiseLevel}`,
+      '- Use stable speakerId values such as "anchor", "interviewer", "guest_1", "guest_2", "announcer".',
+      '- Every sentence object MUST include a non-null speakerId.',
     );
   }
   if (req.storyContext) {

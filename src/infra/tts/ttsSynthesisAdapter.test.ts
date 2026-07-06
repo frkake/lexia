@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TtsSynthesisAdapter } from './ttsSynthesisAdapter';
-import type { TtsBackend, TtsSynthesisResult, TtsWordMark } from './ttsSynthesisAdapter';
+import type { TtsBackend, TtsSynthesisOptions, TtsSynthesisResult, TtsWordMark } from './ttsSynthesisAdapter';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { IndexedPassage, PassageOutput } from '../../types/domain';
 
@@ -68,6 +68,49 @@ describe('TtsSynthesisAdapter.synthesize', () => {
       backend({ audioUrl: 'u', format: 'audio/mpeg', durationMs: 1_200, engine: 'polly', marks }),
     );
     await expect(adapter.synthesize(idx, 'joanna')).rejects.toMatchObject({ kind: 'mark_unresolved' });
+  });
+
+  it('passes speaker-specific segments for listening-scene passages', async () => {
+    const idx = tokenizer.index('p1', {
+      meta: {
+        title: 'Street voices',
+        intent: 'daily',
+        level: 'B1',
+        newCount: 0,
+        reviewCount: 0,
+        approxWords: 4,
+        listeningScene: {
+          sceneKind: 'street_interview',
+          noiseLevel: 'low',
+          accent: 'in',
+          speakers: [
+            { speakerId: 'interviewer', label: 'Interviewer', role: 'interviewer', voiceProfileId: 'azure-in-neerja' },
+            { speakerId: 'guest_1', label: 'Guest', role: 'guest', voiceProfileId: 'azure-in-prabhat' },
+          ],
+        },
+      },
+      sentences: [
+        { speakerId: 'interviewer', tokens: ['How', 'are', 'you', '?'], translationJa: '' },
+        { speakerId: 'guest_1', tokens: ['I', 'am', 'fine', '.'], translationJa: '' },
+      ],
+      targetSpans: [],
+      collocationSpans: [],
+      noticeCues: [],
+    });
+    let seen: TtsSynthesisOptions | undefined;
+    const adapter = new TtsSynthesisAdapter({
+      synthesize: async (_text, _voiceId, options) => {
+        seen = options;
+        return { audioUrl: 'u', format: 'audio/wav', durationMs: 1000, engine: 'azure', marks: marksFor(idx) };
+      },
+      wordClipUrl: async () => '',
+    });
+    await adapter.synthesize(idx, 'azure-us-jenny');
+    expect(seen?.segments?.map((s) => [s.speakerId, s.voiceId, s.byteStart])).toEqual([
+      ['interviewer', 'azure-in-neerja', 0],
+      ['guest_1', 'azure-in-prabhat', idx.sentences[1]!.tokens[0]!.byteStart],
+    ]);
+    expect(seen?.scene).toEqual({ sceneKind: 'street_interview', noiseLevel: 'low' });
   });
 });
 
