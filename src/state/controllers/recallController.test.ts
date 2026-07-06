@@ -88,6 +88,34 @@ describe('applyRecallSignal (Flow 3 wiring)', () => {
     expect(stored?.stability).toBeGreaterThan(0); // bootstrapped from New
   });
 
+  it('suppresses a read-through within 24h of a prior EXPLICIT review of the same word (cross-source, C-5d)', async () => {
+    const { repos, userId } = await freshRepos();
+    await repos.scheduling.upsert(sched(userId, 'w1', { stability: 5, lapses: 1 }));
+    // Simulate a same-day「知らなかった」review at t0.
+    const t0 = 10 * DAY_MS;
+    await repos.reviewLog.append({ userId, wordId: 'w1', rating: 1, source: 'review', at: t0 });
+    const before = await repos.scheduling.get(userId, 'w1');
+
+    const out = await applyRecallSignal(repos, userId, { kind: 'read_through', wordId: 'w1', at: t0 + DAY_MS / 2 });
+
+    expect(out.applied).toBe(false); // the review's schedule is not overwritten by the read-through
+    expect(await repos.scheduling.get(userId, 'w1')).toEqual(before);
+  });
+
+  it('skips a suspended (known-declared) word — no seed, no credit (C-5d)', async () => {
+    const { repos, userId } = await freshRepos();
+    await repos.scheduling.upsert(sched(userId, 'w1', { stability: 5, suspended: true }));
+    const before = await repos.scheduling.get(userId, 'w1');
+
+    const lookup = await applyRecallSignal(repos, userId, { kind: 'lookup', wordId: 'w1', at: 10 * DAY_MS });
+    const read = await applyRecallSignal(repos, userId, { kind: 'read_through', wordId: 'w1', at: 12 * DAY_MS });
+
+    expect(lookup.applied).toBe(false);
+    expect(read.applied).toBe(false);
+    expect(await repos.scheduling.get(userId, 'w1')).toEqual(before);
+    expect(await repos.reviewLog.since(userId, 0)).toHaveLength(0);
+  });
+
   it('never promotes the mastery stage from a passage event', async () => {
     const { repos, userId } = await freshRepos();
     // A Learning word whose stability already exceeds the consolidate threshold:

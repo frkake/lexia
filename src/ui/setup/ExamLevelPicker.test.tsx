@@ -44,4 +44,30 @@ describe('<ExamLevelPicker/>', () => {
     const { getByTestId } = render(<ExamLevelPicker value={{ kind: 'ielts', value: '9.0' }} onChange={() => {}} />);
     expect(getByTestId('exam-conversion').textContent).toContain('n/a');
   });
+
+  it('offers a direct score input for TOEIC with its scale range (A-3-1)', () => {
+    const { getByTestId } = render(<ExamLevelPicker value={{ kind: 'toeic', value: '800' }} onChange={() => {}} />);
+    const input = getByTestId('exam-score-input') as HTMLInputElement;
+    expect(input.value).toBe('800');
+    expect(input.getAttribute('min')).toBe('10');
+    expect(input.getAttribute('max')).toBe('990');
+  });
+
+  it('emits the typed score verbatim as the criterion value so 900 ≠ 800 downstream (A-3-1)', () => {
+    const onChange = vi.fn<(c: ExamCriterion) => void>();
+    const { getByTestId } = render(<ExamLevelPicker value={{ kind: 'toeic', value: '800' }} onChange={onChange} />);
+    fireEvent.change(getByTestId('exam-score-input'), { target: { value: '900' } });
+    expect(onChange).toHaveBeenCalledWith({ kind: 'toeic', value: '900' });
+  });
+
+  it('hides the numeric input for 英検 (fixed grades, not a numeric scale) (A-3-1)', () => {
+    const { queryByTestId } = render(<ExamLevelPicker value={{ kind: 'eiken', value: '2' }} onChange={() => {}} />);
+    expect(queryByTestId('exam-score-input')).toBeNull();
+  });
+
+  it('prefixes the conversion row with the resolved CEFR level (A-3-3)', () => {
+    // 英検準1 ⇒ B2; the row now names the CEFR pivot alongside the cross-exam bands.
+    const { getByTestId } = render(<ExamLevelPicker value={{ kind: 'eiken', value: '準1' }} onChange={() => {}} />);
+    expect(getByTestId('exam-conversion').textContent).toContain('CEFR B2');
+  });
 });

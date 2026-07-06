@@ -9,10 +9,7 @@
 
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import type { GenerationOrchestrator } from '../../domain/generation/generationOrchestrator';
-import type { ContentGateway } from '../../types/ports';
 import type { GenerationRequest, IndexedPassage, WordData } from '../../types/domain';
-
-const STALE_WORD_MS = 5 * 60_000;
 
 /** Deterministic key for a generation request (identical requests de-duplicate). */
 function requestKey(req: GenerationRequest): string {
@@ -33,11 +30,6 @@ export const contentKeys = {
   passage: (req: GenerationRequest) => ['content', 'passage', requestKey(req)] as const,
 };
 
-/** Fetch adjacent word data (rejects with the gateway's typed error on failure). */
-export function fetchWordData(gateway: ContentGateway, wordId: string): Promise<WordData> {
-  return gateway.getWordData(wordId);
-}
-
 /** Run the generate→validate→repair pipeline, throwing the error so retry can fire. */
 export async function generatePassageQuery(
   orchestrator: GenerationOrchestrator,
@@ -48,12 +40,20 @@ export async function generatePassageQuery(
   throw result.error;
 }
 
-export function useWordData(gateway: ContentGateway, wordId: string | null): UseQueryResult<WordData> {
+/**
+ * Adjacent word data, cache-first (E-3(a)). The loader is injected (routes pass the Dexie-first
+ * `loadAndCacheWordData`) so a once-opened word reopens with no `/api/words/` request, and
+ * `staleTime: Infinity` keeps WordData — immutable, user-independent content — from ever refetching.
+ */
+export function useWordData(
+  loadWordData: (wordId: string) => Promise<WordData>,
+  wordId: string | null,
+): UseQueryResult<WordData> {
   return useQuery({
     queryKey: contentKeys.word(wordId ?? ''),
-    queryFn: () => fetchWordData(gateway, wordId!),
+    queryFn: () => loadWordData(wordId!),
     enabled: !!wordId,
-    staleTime: STALE_WORD_MS,
+    staleTime: Infinity,
   });
 }
 

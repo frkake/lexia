@@ -8,7 +8,10 @@
  */
 
 import { masteryProjector } from '../srs/masteryProjector';
+import { isDueForReview } from '../srs/dueState';
+import { SESSION_REVIEW_LIMIT } from '../srs/parameters';
 import { levelPresetForExamTarget, readabilityForCefr } from '../difficulty/levelPreset';
+import { examScale } from '../difficulty/examScale';
 import type { SchedulingRepository } from '../../types/ports';
 import type {
   UserId,
@@ -81,13 +84,20 @@ async function selectCandidates(
   return ordered;
 }
 
-function planReviewQueue(
+async function planReviewQueue(
   repo: SchedulingRepository,
   userId: UserId,
   now: number,
 ): Promise<WordSchedulingState[]> {
-  // dueBefore already returns due-soonest first (the review presentation order).
-  return repo.dueBefore(userId, now);
+  // C-5b: the review queue is exactly the words `isDueForReview` accepts (learned + dueAt elapsed),
+  // due-soonest first, capped at SESSION_REVIEW_LIMIT (load design; policy principle 7). Freshly
+  // seeded New words (stability undefined) are gated out here just as they are in the dashboard
+  // count, so "今日の復習 N 語" and the session's card total can only differ by this cap.
+  const due = await repo.dueBefore(userId, now);
+  return due
+    .filter((s) => isDueForReview(s, now))
+    .sort((a, b) => a.dueAt - b.dueAt)
+    .slice(0, SESSION_REVIEW_LIMIT);
 }
 
 function buildRequest(
@@ -118,6 +128,10 @@ function buildRequest(
     });
   }
 
+  // Sub-band + exam label for the passage prompt (A-3-1): keeps the coarse CEFR pivot but lets the
+  // prompt distinguish e.g. "TOEIC 900" (upper B2) from "TOEIC 800" (mid B2).
+  const { subBand, examLabel } = examScale.examToDifficultyTarget(setup.examTarget);
+
   return {
     // Resolve the exam-based difficulty to the internal CEFR pivot (generation/validation use CEFR).
     level: resolveVocabularyLevel(setup),
@@ -126,6 +140,7 @@ function buildRequest(
     wordTarget: setup.wordTarget,
     contentType: setup.contentType,
     readabilityLevel: resolveReadabilityLevel(setup),
+    levelDetail: { subBand, examLabel },
     targetWords,
     ...(storyContext ? { storyContext } : {}),
   };

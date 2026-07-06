@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { HomeScreen } from './HomeScreen';
 import type { DashboardSnapshot } from '../../domain/dashboard/dashboardProjector';
@@ -32,6 +32,29 @@ describe('<HomeScreen/>', () => {
     // Progress ledger (embedded DashboardScreen, rail layout) rendered from the snapshot.
     expect(screen.getByText('学習の状況')).toBeTruthy();
     expect(screen.getByText('復習が必要な単語')).toBeTruthy();
+  });
+
+  it('makes the masthead "今日の復習" figure a button that starts review (D-6)', () => {
+    const onStartReview = vi.fn();
+    render(
+      <MemoryRouter>
+        <HomeScreen
+          setup={{ candidates: [], onGenerate: vi.fn() }}
+          snapshot={snapshot}
+          now={1_000_000}
+          onStartReview={onStartReview}
+        />
+      </MemoryRouter>,
+    );
+    const stat = screen.getByRole('button', { name: /今日の復習/ });
+    fireEvent.click(stat);
+    expect(onStartReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the "今日の復習" figure as a non-interactive tile when no review handler is wired', () => {
+    renderHome(); // no onStartReview
+    expect(screen.queryByRole('button', { name: /今日の復習/ })).toBeNull();
+    expect(screen.getByText('今日の復習')).toBeTruthy();
   });
 
   it('omits the stat cluster and ledger while the snapshot is loading', () => {

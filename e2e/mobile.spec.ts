@@ -16,7 +16,7 @@ test.describe('mobile reading (iPhone / Safari engine)', () => {
 
   test('docks the player to the bottom and shows the mobile back/meta header', async ({ page }) => {
     await generateFromSetup(page);
-    await page.waitForURL(/\/read$/);
+    await page.waitForURL(/\/p\//);
 
     const player = page.locator('.bottom-player');
     await expect(player).toBeVisible();
@@ -36,9 +36,14 @@ test.describe('mobile reading (iPhone / Safari engine)', () => {
 
   test('reflows the sentence grid to one column so the Japanese drops below the English (Req 3.3)', async ({ page }) => {
     await generateFromSetup(page);
-    await page.waitForURL(/\/read$/);
+    await page.waitForURL(/\/p\//);
 
-    // New 3-zone layout is active (grid), but at <=600px the per-sentence grid collapses to a
+    // F-8①: the right-cell Japanese aside only renders when translation is enabled (default is off →
+    // single-column, no aside). Turn on 全文 so the two-column grid is active and the mobile reflow
+    // (aside drops below the English) is actually exercised.
+    await page.getByRole('button', { name: '全文' }).click();
+
+    // New 3-zone layout is active (grid), but at <=1024px the per-sentence grid collapses to a
     // single column — the right-cell Japanese reflows directly below its English sentence.
     await expect(page.getByTestId('passage-prose')).toHaveAttribute('data-layout', 'grid');
     const columns = await page
@@ -56,7 +61,7 @@ test.describe('mobile reading (iPhone / Safari engine)', () => {
 
   test('follow-along highlight tracks the playhead on WebKit', async ({ page }) => {
     await generateFromSetup(page);
-    await page.waitForURL(/\/read$/);
+    await page.waitForURL(/\/p\//);
     await expect(page.getByRole('button', { name: '再生', exact: true })).toBeEnabled();
     await ensureSeekable(page);
 

@@ -14,8 +14,13 @@
  */
 
 import { sessionPlanner, type SessionPlanner } from '../../domain/session/sessionPlanner';
-import type { GenerationOrchestrator, GenerationError } from '../../domain/generation/generationOrchestrator';
+import type {
+  GenerationOrchestrator,
+  GenerationError,
+  GenerationRunPhase,
+} from '../../domain/generation/generationOrchestrator';
 import { tokenizer } from '../../domain/tokenizer/joinService';
+import { persistImage } from '../../infra/persistence/imageStore';
 import { newSchedulingState } from './newState';
 import type { SessionStore } from '../stores/sessionStore';
 import type { PlayerStore } from '../stores/playerStore';
@@ -25,6 +30,7 @@ import type {
   ProgressRepository,
   TimingMapRepository,
   TtsSynthesisPort,
+  ImageRepository,
 } from '../../types/ports';
 import type {
   IndexedPassage,
@@ -57,6 +63,10 @@ export interface GenerationControllerDeps {
   wordData?: Record<string, WordData>;
   /** Optional scene-illustration generator. Enrichment only; failures never block reading. */
   illustratePassage?: (req: PassageIllustrationRequest) => Promise<string>;
+  /** Cancels the in-flight generation (D-7): threaded to the orchestrator's ContentGateway calls. */
+  signal?: AbortSignal;
+  /** Reports the body-generation sub-phase (passage → repair → annotate) for the progress panel. */
+  onPhase?: (phase: GenerationRunPhase) => void;
 }
 
 export interface GenerationOutcome {
@@ -97,7 +107,7 @@ export async function runGenerationPipeline(
     if (existing) {
       states.push(existing);
     } else {
-      const seeded = newSchedulingState(userId, wordId);
+      const seeded = newSchedulingState(userId, wordId, now);
       states.push(seeded);
       toSeed.push(seeded);
     }
@@ -106,7 +116,9 @@ export async function runGenerationPipeline(
   const req = planner.buildRequest(setup, states, deps.wordData, options.storyContext);
   for (const state of toSeed) state.level = req.level;
   const passageId = options.passageId ?? deps.genId();
-  const result = await deps.createOrchestrator(passageId).generate(req);
+  const result = await deps
+    .createOrchestrator(passageId)
+    .generate(req, { signal: deps.signal, onPhase: deps.onPhase });
 
   if (!result.ok) {
     return { ok: false, error: result.error };
@@ -181,6 +193,62 @@ async function enrichPassageIllustration(
     };
     await deps.passages.put({ ...record, passage: enrichedSource });
     deps.session.getState().replacePassage(tokenizer.index(record.passageId, enrichedSource));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface BackfillIllustrationDeps {
+  passages: PassageRepository;
+  /** Image blob store (D7): the generated scene is stored here and referenced by `lexia-image:`. */
+  images: ImageRepository;
+  session: SessionStore;
+  /** Scene-illustration generator. When absent, backfill is a no-op (enrichment unavailable). */
+  illustratePassage?: (req: PassageIllustrationRequest) => Promise<string>;
+  userId: UserId;
+  now: () => number;
+}
+
+/**
+ * E-3(e): backfill a scene illustration for a passage that was persisted WITHOUT one — its image API
+ * call failed at generation time, or the passage predates illustrations. Loads the stored record and,
+ * only while it still has no `sceneIllustrationUrl`, generates a scene, routes the bytes through the
+ * `images` table (D7 / persistImage), stores the reference on the passage, and refreshes the active
+ * reading session if it is still showing this passage. Idempotent (a stored illustration short-circuits
+ * it) and never throws — a failure just leaves the passage un-illustrated (silent degrade; the manual
+ * regenerate button remains the explicit path). Call sites dedupe per session per passageId so a
+ * failed attempt isn't retried on every re-render. Returns true only when an illustration was stored.
+ */
+export async function backfillPassageIllustration(
+  deps: BackfillIllustrationDeps,
+  passageId: string,
+  storyContext?: StoryContext,
+): Promise<boolean> {
+  if (!deps.illustratePassage) return false;
+  try {
+    const record = await deps.passages.get(passageId);
+    if (!record || record.userId !== deps.userId) return false;
+    if (record.passage.meta.sceneIllustrationUrl) return false;
+    if (record.passage.sentences.length === 0) return false;
+
+    const indexed = tokenizer.index(record.passageId, record.passage);
+    const illustrationUrl = await deps.illustratePassage(buildPassageIllustrationRequest(indexed, storyContext));
+
+    // Re-read before writing so a concurrent write (e.g. a manual regenerate that landed first) is
+    // never clobbered — and skip storing the freshly generated image if one now exists.
+    const fresh = await deps.passages.get(passageId);
+    if (!fresh || fresh.userId !== deps.userId || fresh.passage.meta.sceneIllustrationUrl) return false;
+
+    const storedUrl = (await persistImage(deps.images, deps.userId, illustrationUrl, deps.now())) ?? illustrationUrl;
+    const enrichedSource = {
+      ...fresh.passage,
+      meta: { ...fresh.passage.meta, sceneIllustrationUrl: storedUrl },
+    };
+    await deps.passages.put({ ...fresh, passage: enrichedSource });
+    if (deps.session.getState().passage?.passageId === passageId) {
+      deps.session.getState().replacePassage(tokenizer.index(passageId, enrichedSource));
+    }
     return true;
   } catch {
     return false;

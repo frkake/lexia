@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "Lexia",
+  "short_name": "Lexia",
+  "description": "文脈で覚える英単語学習アプリ",
+  "lang": "ja",
+  "dir": "ltr",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "theme_color": "#3D6CB0",
+  "background_color": "#F6F8FA",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

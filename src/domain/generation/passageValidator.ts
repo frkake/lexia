@@ -13,9 +13,9 @@
 
 import { tokenizer } from '../tokenizer/joinService';
 import { CEFR_OUT_OF_BAND_TOLERANCE } from '../srs/parameters';
-import { LENGTH_WORD_TOLERANCE } from './lengthSpec';
+import { LENGTH_WORD_TOLERANCE, idiomQuotaFor, setPhraseQuotaFor } from './lengthSpec';
 import { CATEGORY_ATTRIBUTES, isCueGrounded } from './noticeGrounding';
-import type { Cefr, PassageOutput, Sentence, SpanRef } from '../../types/domain';
+import type { Cefr, PassageOutput, ReadabilityLevel, Sentence, SpanRef, SyntaxPattern } from '../../types/domain';
 
 export type SpanViolationKind =
   | 'span_out_of_range'
@@ -26,7 +26,17 @@ export type SpanViolationKind =
   | 'cefr_out_of_band'
   | 'length_out_of_range'
   | 'translation_span_mismatch'
-  | 'verbatim_copy';
+  | 'verbatim_copy'
+  // ── B-1 / B-2 quality gates (self-reported expressions + collocation coverage) ──
+  | 'expression_quota_unmet'
+  | 'expression_span_mismatch'
+  | 'collocation_missing'
+  | 'collocation_id_unknown'
+  // ── F-8② paragraph structure ──
+  | 'paragraph_index_invalid'
+  // ── B-3 difficulty-by-syntax gates (sentence-length profile + advanced syntax repertoire) ──
+  | 'sentence_length_profile_mismatch'
+  | 'syntax_repertoire_unmet';
 
 /** Minimum consecutive-word run (matched verbatim against a homage reference) that counts as copying. */
 export const VERBATIM_COPY_MIN_RUN = 8;
@@ -70,6 +80,13 @@ export interface ValidationContext {
   targets: ValidationTarget[];
   /** Target word count for the requested length; the length gate runs only when present. */
   approxWords?: number;
+  /**
+   * Requested sentence-structure band (B-3), independent of the CEFR vocabulary level. When present
+   * (and the candidate carries `syntaxSpans`), the validator checks the average sentence length
+   * against the band and — at `advanced` — that the passage covers ≥3 distinct required
+   * constructions. Absent ⇒ the syntax gates are skipped (back-compat for fixtures / pre-B-3 paths).
+   */
+  readabilityLevel?: ReadabilityLevel;
   /** External CEFR band lookup for a lowercased token; undefined ⇒ unknown band. */
   cefrOf?: (token: string) => Cefr | undefined;
   /**
@@ -84,6 +101,9 @@ export interface ValidationReport {
   ok: boolean;
   violations: SpanViolation[];
   cefrOffBandRatio: number;
+  /** Number of tokens that carried a known CEFR band — the profile's denominator (B-4). 0 when no
+   * dictionary was injected, in which case `cefrOffBandRatio` is 0 and the gate is inert. */
+  cefrSampleSize: number;
 }
 
 export interface PassageValidator {
@@ -93,6 +113,36 @@ export interface PassageValidator {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const CEFR_RANK: Record<Cefr, number> = { A2: 0, B1: 1, B2: 2, C1: 3, C2: 4 };
+
+/**
+ * Allowed average-words-per-sentence band per readability level (B-3). The prompt asks for 8-12 /
+ * 12-16 / 16-24; these validator bands are deliberately looser (LLM sentence length is noisy) so only
+ * a passage that clearly ignores the requested rhythm — e.g. all short single clauses at `advanced`,
+ * or a wall of 20-word sentences at `easy` — is flagged.
+ */
+const SENTENCE_LENGTH_BANDS: Record<ReadabilityLevel, [number, number]> = {
+  easy: [6, 13],
+  standard: [10, 18],
+  advanced: [14, 30],
+};
+
+/** Distinct required (named, non-`other`) constructions an `advanced` passage must self-report (B-3). */
+const ADVANCED_MIN_DISTINCT_PATTERNS = 3;
+
+/** The named exam-frequent constructions that count toward the advanced repertoire (excludes `other`). */
+const REQUIRED_SYNTAX_PATTERNS = new Set<SyntaxPattern>([
+  'nonrestrictive_relative',
+  'participial',
+  'inversion',
+  'cleft',
+  'subjunctive',
+  'appositive',
+]);
+
+/** Lowercase + collapse whitespace, for a spacing/case-tolerant verbatim substring test. */
+function normalizeForContains(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
 
 const SUFFIXES = ['ing', 'edly', 'ied', 'ies', 'es', 'ed', 'er', 'est', 'ly', "'s", 's', 'd', 'n'];
 
@@ -106,6 +156,11 @@ function renderSpan(sentence: Sentence, span: SpanRef): string {
   return tokenizer
     .renderText({ tokens: sentence.tokens.slice(span.tokenStart, span.tokenEnd), translationJa: '' })
     .trim();
+}
+
+/** Canonical full-sentence render (deterministic spacing) — for the B-3 syntaxSpan anchor check. */
+function renderSentence(sentence: Sentence): string {
+  return tokenizer.renderText({ tokens: sentence.tokens, translationJa: '' }).trim();
 }
 
 function stem(word: string): string {
@@ -128,6 +183,32 @@ function isInflectionOf(form: string, base: string, inflections?: string[]): boo
 }
 
 const isWord = (token: string): boolean => /[a-zA-Z]/.test(token);
+
+/**
+ * Valid collocation identifiers supplied for a word (design decision D4): for structured
+ * `core.collocations` entries this is each entry's stable `id`; for legacy plain-string collocations
+ * the string itself is the identifier. A collocationSpan's `collocationId` must be one of these.
+ */
+function collocationIdentifiers(attributes?: Record<string, unknown>): Set<string> {
+  const out = new Set<string>();
+  const colls = (attributes as { core?: { collocations?: unknown } } | undefined)?.core?.collocations;
+  if (!Array.isArray(colls)) return out;
+  for (const c of colls) {
+    if (typeof c === 'string') {
+      if (c.trim()) out.add(c);
+    } else if (c && typeof c === 'object') {
+      const id = (c as { id?: unknown }).id;
+      if (typeof id === 'string' && id) out.add(id);
+    }
+  }
+  return out;
+}
+
+/** Whether a word supplies at least one collocation (structured entry or legacy string). */
+function hasSuppliedCollocations(attributes?: Record<string, unknown>): boolean {
+  const colls = (attributes as { core?: { collocations?: unknown } } | undefined)?.core?.collocations;
+  return Array.isArray(colls) && colls.length > 0;
+}
 
 /** Lowercased word tokens of a free-text string (letters/digits runs), for verbatim-run matching. */
 function wordSequence(text: string): string[] {
@@ -266,6 +347,132 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
     }
   }
 
+  // ── B-1 / B-2 quality gates ───────────────────────────────────────────────
+  // Run only when the candidate carries `expressionSpans` — i.e. it came from the batch-1
+  // generation path. Passages/fixtures generated before this feature omit the field and skip these
+  // gates entirely (back-compat: no migration, no retroactive failures). Every violation here is
+  // quality-level and ships as a `qualityWarnings` residual, never a hard failure (R4).
+  if (candidate.expressionSpans !== undefined) {
+    // Expression spans: range + surface fidelity, then a per-category DISTINCT-count quota.
+    if (ctx.approxWords !== undefined && ctx.approxWords > 0) {
+      const idiomQuota = idiomQuotaFor(ctx.approxWords);
+      const setPhraseQuota = setPhraseQuotaFor(ctx.approxWords);
+      const idioms = new Set<string>();
+      const setPhrases = new Set<string>();
+      for (const es of candidate.expressionSpans) {
+        if (!spanInRange(es.span, sentences)) {
+          violations.push({ kind: 'expression_span_mismatch', detail: `expression "${es.surface}" span out of range` });
+          continue;
+        }
+        const rendered = renderSpan(sentences[es.span.sentenceIndex]!, es.span);
+        if (rendered.toLowerCase() !== es.surface.trim().toLowerCase()) {
+          violations.push({ kind: 'expression_span_mismatch', detail: `declared "${es.surface}" ≠ tokens "${rendered}"` });
+          continue;
+        }
+        const key = es.surface.trim().toLowerCase();
+        if (es.category === 'set_phrase') setPhrases.add(key);
+        else idioms.add(key); // idiom | phrasal_verb
+      }
+      if (idioms.size < idiomQuota) {
+        violations.push({
+          kind: 'expression_quota_unmet',
+          detail: `${idioms.size} idiom/phrasal expression(s) vs quota ${idiomQuota}`,
+        });
+      }
+      if (setPhrases.size < setPhraseQuota) {
+        violations.push({
+          kind: 'expression_quota_unmet',
+          detail: `${setPhrases.size} set phrase(s) vs quota ${setPhraseQuota}`,
+        });
+      }
+    }
+
+    // Collocation id fidelity (D4): every collocationSpan's id must be a supplied identifier of its
+    // head word (structured entry id OR legacy collocation string).
+    for (const cs of candidate.collocationSpans) {
+      const ids = collocationIdentifiers(targetById.get(cs.headWordId)?.attributes);
+      if (ids.size > 0 && !ids.has(cs.collocationId)) {
+        violations.push({
+          kind: 'collocation_id_unknown',
+          detail: `collocationId "${cs.collocationId}" is not a supplied collocation of "${cs.headWordId}"`,
+        });
+      }
+    }
+    // Collocation coverage: a target word that supplies collocations must appear inside ≥1 of them.
+    const headsWithSpan = new Set(candidate.collocationSpans.map((c) => c.headWordId));
+    for (const target of ctx.targets) {
+      if (hasSuppliedCollocations(target.attributes) && !headsWithSpan.has(target.wordId)) {
+        violations.push({
+          kind: 'collocation_missing',
+          detail: `target "${target.wordId}" has supplied collocations but no collocationSpan`,
+        });
+      }
+    }
+  }
+
+  // ── F-8② paragraph structure ──────────────────────────────────────────────
+  // Only when every sentence carries a paragraphIndex (new-pipeline passages). It must start at 0
+  // and never decrease. A quality-level violation (shippable residual), not a hard failure.
+  if (sentences.length > 0 && sentences.every((s) => typeof s.paragraphIndex === 'number')) {
+    let monotonic = (sentences[0]!.paragraphIndex as number) === 0;
+    for (let i = 1; i < sentences.length && monotonic; i += 1) {
+      if ((sentences[i]!.paragraphIndex as number) < (sentences[i - 1]!.paragraphIndex as number)) monotonic = false;
+    }
+    if (!monotonic) {
+      violations.push({
+        kind: 'paragraph_index_invalid',
+        detail: 'paragraphIndex must start at 0 and be non-decreasing',
+      });
+    }
+  }
+
+  // ── B-3 difficulty-by-syntax gates ────────────────────────────────────────
+  // Run only when the candidate carries `syntaxSpans` (the new B-3 generation path) AND the request
+  // declared a readabilityLevel — so pre-B-3 fixtures/passages are unaffected (back-compat, mirroring
+  // the expressionSpans gate). Both violations are quality-level: shipped as `qualityWarnings` when
+  // the repair budget is spent, never a hard failure (R4).
+  if (candidate.syntaxSpans !== undefined && ctx.readabilityLevel !== undefined && sentences.length > 0) {
+    // Sentence-length profile: average words/sentence must sit inside the readability band.
+    let profileWords = 0;
+    for (const sentence of sentences) {
+      for (const token of sentence.tokens) if (isWord(token)) profileWords += 1;
+    }
+    const avgWordsPerSentence = profileWords / sentences.length;
+    const [lo, hi] = SENTENCE_LENGTH_BANDS[ctx.readabilityLevel];
+    if (avgWordsPerSentence < lo || avgWordsPerSentence > hi) {
+      violations.push({
+        kind: 'sentence_length_profile_mismatch',
+        detail: `avg ${avgWordsPerSentence.toFixed(1)} words/sentence outside ${ctx.readabilityLevel} band [${lo}, ${hi}]`,
+      });
+    }
+
+    // Advanced syntax repertoire: the passage must self-report ≥3 DISTINCT required constructions,
+    // and every reported anchorText must occur verbatim in its sentence (an untrustworthy self-report
+    // is as bad as an absent one). Only enforced at `advanced`; easy/standard place no syntax floor.
+    if (ctx.readabilityLevel === 'advanced') {
+      const distinct = new Set<SyntaxPattern>();
+      for (const span of candidate.syntaxSpans) {
+        if (REQUIRED_SYNTAX_PATTERNS.has(span.pattern)) distinct.add(span.pattern);
+        const sentence = sentences[span.sentenceIndex];
+        const anchored =
+          sentence !== undefined &&
+          normalizeForContains(renderSentence(sentence)).includes(normalizeForContains(span.anchorText));
+        if (!anchored) {
+          violations.push({
+            kind: 'syntax_repertoire_unmet',
+            detail: `syntaxSpan anchor "${span.anchorText}" is not verbatim in sentence ${span.sentenceIndex}`,
+          });
+        }
+      }
+      if (distinct.size < ADVANCED_MIN_DISTINCT_PATTERNS) {
+        violations.push({
+          kind: 'syntax_repertoire_unmet',
+          detail: `${distinct.size} distinct required construction(s) vs minimum ${ADVANCED_MIN_DISTINCT_PATTERNS}`,
+        });
+      }
+    }
+  }
+
   // CEFR vocabulary profile (over tokens with a known band).
   let known = 0;
   let offBand = 0;
@@ -324,7 +531,7 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
   // selects — the model only copies each target's masteryDensity — so it is a selection
   // concern, not something to validate on the generated output (it cannot be repaired here).
 
-  return { ok: violations.length === 0, violations, cefrOffBandRatio };
+  return { ok: violations.length === 0, violations, cefrOffBandRatio, cefrSampleSize: known };
 }
 
 export const passageValidator: PassageValidator = { validate };

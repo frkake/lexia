@@ -37,6 +37,14 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(getByTestId('intent-toeic')).toBeTruthy();
   });
 
+  it('shows a persistent config warning banner when configWarning is set, and hides it otherwise (F-1)', () => {
+    const warning = '生成サーバの API キーが未設定です。server/.env に OPENAI_API_KEY を設定してサーバを再起動すると文章を生成できます。';
+    const { queryByTestId, rerender } = renderScreen({ candidates: CANDIDATES });
+    expect(queryByTestId('config-warning')).toBeNull();
+    rerender(<SetupScreen candidates={CANDIDATES} configWarning={warning} />);
+    expect(queryByTestId('config-warning')?.textContent).toContain('OPENAI_API_KEY');
+  });
+
   it('offers the exam-based difficulty picker and the content-type selector (9.1/6.1)', () => {
     const { getByTestId } = renderScreen({ candidates: CANDIDATES });
     expect(getByTestId('exam-kind-eiken')).toBeTruthy();
@@ -216,8 +224,8 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(cfg.excludedWordIds).toContain('concede');
   });
 
-  it('resets manual edits and emits a cleared selection, restoring all auto candidates', () => {
-    const onResetTargetWords = vi.fn<(s: SetupConfig) => void>();
+  it('resets manual edits locally and notifies the route with no setup payload (A-2-1)', () => {
+    const onResetTargetWords = vi.fn<() => void>();
     const onGenerate = vi.fn<(s: SetupConfig) => void>();
     const { getByTestId, getByText, getByLabelText, queryByTestId } = renderScreen({
       candidates: CANDIDATES,
@@ -231,18 +239,17 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     fireEvent.click(getByText('＋ 追加'));
     fireEvent.change(getByLabelText('追加する単語'), { target: { value: 'zest' } });
     fireEvent.click(getByText('追加'));
-    expect(getByTestId('target-zest')).toBeTruthy();
+    expect(getByTestId('target-added-zest')).toBeTruthy();
 
     fireEvent.click(getByTestId('reset-candidates'));
 
-    // The route is asked to clear the persisted target/excluded words.
+    // The route is merely notified — no setup (and therefore no level/slider values) is emitted, so
+    // reset can never silently commit an unconfirmed form value.
     expect(onResetTargetWords).toHaveBeenCalledTimes(1);
-    const resetArg = onResetTargetWords.mock.calls[0]![0];
-    expect(resetArg.excludedWordIds).toEqual([]);
-    expect(resetArg.targetWordIds).toEqual(['mitigate', 'concede', 'candid']);
+    expect(onResetTargetWords.mock.calls[0]).toEqual([]);
 
     // Manual addition is gone; the previously-excluded candidate is selected again.
-    expect(queryByTestId('target-zest')).toBeNull();
+    expect(queryByTestId('target-added-zest')).toBeNull();
     expect(getByTestId('target-concede').getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.click(getByText('文章を生成する'));
@@ -252,7 +259,7 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
   });
 
   it('disables reset when there are no manual edits to clear', () => {
-    const onResetTargetWords = vi.fn<(s: SetupConfig) => void>();
+    const onResetTargetWords = vi.fn<() => void>();
     const { getByTestId } = renderScreen({
       candidates: CANDIDATES,
       initial: { examTarget: { kind: 'eiken', value: '2' } },
@@ -261,6 +268,48 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(getByTestId('reset-candidates').hasAttribute('disabled')).toBe(true);
     fireEvent.click(getByTestId('target-concede'));
     expect(getByTestId('reset-candidates').hasAttribute('disabled')).toBe(false);
+  });
+
+  it('shows no target chips by default — nothing is prefilled (A-1-1)', () => {
+    const { container } = renderScreen({ initial: { examTarget: { kind: 'eiken', value: '2' } } });
+    expect(container.querySelectorAll('[data-testid^="target-"]').length).toBe(0);
+  });
+
+  it('puts only manually-added words into targetWordIds when no candidates are previewed (A-1-1)', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByText, getByLabelText, getByTestId } = renderScreen({
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+    });
+    fireEvent.click(getByText('＋ 追加'));
+    fireEvent.change(getByLabelText('追加する単語'), { target: { value: 'zeal' } });
+    fireEvent.click(getByText('追加'));
+    expect(getByTestId('target-added-zeal')).toBeTruthy();
+    fireEvent.click(getByText('文章を生成する'));
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.targetWordIds).toEqual(['zeal']);
+    expect(cfg.excludedWordIds).toEqual([]);
+  });
+
+  it('does not double-render a word present in both initial additions and late-arriving candidates (A-2-1)', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const initial: Partial<SetupConfig> = { examTarget: { kind: 'eiken', value: '2' }, targetWordIds: ['mitigate'] };
+    const { rerender, getByTestId, queryByTestId, getByText } = renderScreen({ initial, onGenerate });
+
+    // Seeded as a manual addition chip (candidates are empty at first).
+    expect(getByTestId('target-added-mitigate')).toBeTruthy();
+
+    // Candidates arrive asynchronously and include the same word.
+    rerender(
+      <SetupScreen initial={initial} candidates={[{ wordId: 'mitigate', surface: 'mitigate' }]} onGenerate={onGenerate} />,
+    );
+
+    // It now renders exactly once, as a candidate chip; the added duplicate is dropped.
+    expect(getByTestId('target-mitigate')).toBeTruthy();
+    expect(queryByTestId('target-added-mitigate')).toBeNull();
+
+    fireEvent.click(getByText('文章を生成する'));
+    expect(onGenerate.mock.calls[0]![0].targetWordIds).toEqual(['mitigate']);
   });
 
   it('omits the reset button when no reset handler is wired', () => {
@@ -295,5 +344,124 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(getByText('単語候補を更新できませんでした。')).toBeTruthy();
     expect(getByRole('button', { name: '生成しています…' }).getAttribute('aria-busy')).toBe('true');
     expect(getByText('生成サービスに接続できませんでした。')).toBeTruthy();
+  });
+
+  it('replaces the button with the progress panel and freezes the form while a run is active (D-7)', () => {
+    const onCancel = vi.fn();
+    const { container, getByTestId, queryByText } = renderScreen({
+      candidates: CANDIDATES,
+      generationProgress: { phase: 'passage', startedAt: 0, error: null, onCancel },
+    });
+    // The plain generate button is gone; the phased progress panel is shown instead.
+    expect(queryByText('文章を生成する')).toBeNull();
+    expect(getByTestId('generation-progress').getAttribute('data-phase')).toBe('passage');
+    // The whole form is frozen: the wrapping <fieldset> is disabled (disables every nested control).
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+    // Cancel is reachable (outside the disabled fieldset) and wired.
+    fireEvent.click(getByTestId('cancel-generation'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the error + 再試行 in the panel and keeps the form editable on an error (D-7)', () => {
+    const onGenerate = vi.fn();
+    const { container, getByTestId, queryByText } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+      generationProgress: {
+        phase: 'error',
+        startedAt: null,
+        error: '生成に時間がかかりすぎたため中断しました。',
+        onCancel: vi.fn(),
+      },
+    });
+    expect(getByTestId('generation-progress').getAttribute('data-phase')).toBe('error');
+    expect(queryByText('生成に時間がかかりすぎたため中断しました。')).toBeTruthy();
+    // The form is NOT frozen on error (the learner can adjust + retry).
+    expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+    // 再試行 re-emits the setup for a fresh run.
+    fireEvent.click(getByTestId('retry-generation'));
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists excluded words and un-excludes them individually and in bulk (A-2-3)', () => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, queryByTestId, getByText } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+    });
+    // Nothing excluded yet → no list.
+    expect(queryByTestId('excluded-words')).toBeNull();
+
+    fireEvent.click(getByTestId('target-mitigate'));
+    fireEvent.click(getByTestId('target-concede'));
+    expect(getByTestId('excluded-words').textContent).toContain('除外中の単語 (2)');
+    expect(getByTestId('excluded-mitigate')).toBeTruthy();
+
+    // Un-exclude one from the list → it leaves the list and rejoins the selected candidates.
+    fireEvent.click(getByTestId('excluded-mitigate'));
+    expect(queryByTestId('excluded-mitigate')).toBeNull();
+    expect(getByTestId('excluded-words').textContent).toContain('除外中の単語 (1)');
+    expect(getByTestId('target-mitigate').getAttribute('aria-pressed')).toBe('true');
+
+    // Bulk clear empties the list; generation then excludes nothing.
+    fireEvent.click(getByTestId('clear-excluded'));
+    expect(queryByTestId('excluded-words')).toBeNull();
+    fireEvent.click(getByText('文章を生成する'));
+    expect(onGenerate.mock.calls[0]![0].excludedWordIds).toEqual([]);
+  });
+
+  it('surfaces previously-excluded words even when they are not current candidates (A-2-3)', () => {
+    const { getByTestId } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' }, excludedWordIds: ['obscure'] },
+    });
+    expect(getByTestId('excluded-words').textContent).toContain('除外中の単語 (1)');
+    expect(getByTestId('excluded-obscure').textContent).toContain('obscure');
+  });
+
+  it('shows the exclude/restore affordance and reflects state via aria on candidate chips (A-2-4)', () => {
+    const { getByTestId } = renderScreen({
+      candidates: CANDIDATES,
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+    });
+    const chip = getByTestId('target-mitigate');
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(chip.getAttribute('aria-label')).toBe('mitigate を除外');
+    expect(chip.textContent).toContain('×');
+
+    fireEvent.click(chip);
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+    expect(chip.getAttribute('aria-label')).toBe('mitigate の除外を戻す');
+    expect(chip.textContent).toContain('↩');
+  });
+
+  it('gives manual chips a delete affordance and aria-label (A-2-4)', () => {
+    const { getByTestId, getByText, getByLabelText } = renderScreen({
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+    });
+    fireEvent.click(getByText('＋ 追加'));
+    fireEvent.change(getByLabelText('追加する単語'), { target: { value: 'zeal' } });
+    fireEvent.click(getByText('追加'));
+    const chip = getByTestId('target-added-zeal');
+    expect(chip.getAttribute('aria-label')).toBe('zeal を削除');
+    expect(chip.textContent).toContain('×');
+  });
+
+  it('annotates the advanced vocabulary levels and the target-linked badge with exam grades (A-3-3)', () => {
+    const { getByTestId } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+    });
+    // Badge for the B1 preset shows the 英検 grade next to the CEFR symbol.
+    expect(getByTestId('advanced-level-mode').textContent).toContain('B1（英検2級相当）');
+
+    const select = getByTestId('advanced-vocabulary-level');
+    const labels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(labels).toContain('B1（英検2級・TOEIC 550–784 相当）');
+    expect(labels.some((l) => l?.includes('C2（英検対象外）'))).toBe(true);
+    // The option value stays the bare CEFR so the emitted config is unchanged.
+    expect((select.querySelector('option') as HTMLOptionElement).value).toBe('A2');
   });
 });

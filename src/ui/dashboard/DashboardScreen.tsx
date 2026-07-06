@@ -17,7 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import type { CSSProperties, ReactNode } from 'react';
 import { MasteryDot } from '../shared/MasteryDot';
 import { masteryColors, colors, fonts, radius } from '../theme/tokens';
-import { DAY_MS } from '../../domain/srs/parameters';
+import { dueLabel } from '../shared/dueLabel';
 import type { MasteryStage } from '../../types/domain';
 import type { DashboardSnapshot, MasteryBreakdown } from '../../domain/dashboard/dashboardProjector';
 
@@ -41,9 +41,19 @@ export interface DashboardScreenProps {
   layout?: 'full' | 'rail';
   onContinue?: (passageId: string, sentenceIndex: number) => void;
   onStartReview?: () => void;
+  /**
+   * D-5: open the word's detail card. When supplied, each「復習が必要な単語」row becomes a
+   * `<button>` that fires this; without it the rows stay non-interactive (standalone dashboard).
+   */
+  onSelectWord?: (wordId: string) => void;
+  /** D-5: shown when the due list is truncated —「他 M 語を単語帳で見る」→ /wordbook?filter=due. */
+  onShowAllDue?: () => void;
 }
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+
+/** D-5: cap the home due list so a large review backlog can't run the ledger off the page. */
+export const DUE_LIST_LIMIT = 8;
 
 const STAGE_SEGMENTS: { key: keyof Omit<MasteryBreakdown, 'total'>; stage: MasteryStage; label: string }[] = [
   { key: 'new', stage: 'New', label: '未学習' },
@@ -59,15 +69,6 @@ function greetingFor(now: number): string {
   return 'こんばんは';
 }
 
-/** Relative day label for a due timestamp (今日 / 明日 / M/D). */
-function dueLabel(dueAt: number, now: number): string {
-  const diff = Math.floor(dueAt / DAY_MS) - Math.floor(now / DAY_MS);
-  if (diff <= 0) return '今日';
-  if (diff === 1) return '明日';
-  const d = new Date(dueAt);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-}
-
 export function DashboardScreen({
   snapshot,
   userName = '学習者',
@@ -77,6 +78,8 @@ export function DashboardScreen({
   layout = 'full',
   onContinue,
   onStartReview,
+  onSelectWord,
+  onShowAllDue,
 }: DashboardScreenProps) {
   const navigate = useNavigate();
   const { mastery } = snapshot;
@@ -90,7 +93,7 @@ export function DashboardScreen({
     else void navigate('/review');
   };
 
-  const weeklyMax = Math.max(1, ...snapshot.weekly.map((d) => d.reviewCount));
+  const weeklyMax = Math.max(1, ...snapshot.weekly.map((d) => d.reviewCount + d.readingCount));
 
   // ── section markup (shared by both layouts) ──────────────────────────────────
 
@@ -177,23 +180,53 @@ export function DashboardScreen({
 
   const weeklyCard: ReactNode = (
     <section style={cardStyle}>
-      <div style={{ ...sectionTitleStyle, marginBottom: 18 }}>
-        今週の学習 <span style={{ color: colors.faint, fontWeight: 400 }}>This week</span>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 18 }}>
+        <div style={sectionTitleStyle}>
+          今週の学習 <span style={{ color: colors.faint, fontWeight: 400 }}>This week</span>
+        </div>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <span style={weeklyLegendItemStyle}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: colors.primary }} />
+            復習
+          </span>
+          <span style={weeklyLegendItemStyle}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: colors.green }} />
+            読解
+          </span>
+        </div>
       </div>
+      {/* F-3: stacked bars split each day's activity into explicit reviews vs reading-origin credits. */}
       <div data-testid="weekly-bars" style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 96 }}>
         {snapshot.weekly.map((d, i) => {
-          const ratio = d.reviewCount / weeklyMax;
-          const height = Math.max(8, Math.round(ratio * 88));
-          const isMax = d.reviewCount === weeklyMax && weeklyMax > 1;
-          const fill = d.reviewCount === 0 ? '#EBEEF2' : isMax ? colors.primary : '#A9C2E2';
+          const total = d.reviewCount + d.readingCount;
+          const barHeight = Math.max(8, Math.round((total / weeklyMax) * 88));
+          const reviewHeight = total > 0 ? Math.round(barHeight * (d.reviewCount / total)) : 0;
+          const readingHeight = barHeight - reviewHeight;
           return (
             <div key={d.dayStartMs} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
               <div
                 data-testid={`weekly-bar-${i}`}
-                style={{ width: '100%', maxWidth: 34, height, background: fill, borderRadius: '4px 4px 0 0' }}
-              />
+                style={{
+                  width: '100%',
+                  maxWidth: 34,
+                  height: barHeight,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'flex-end',
+                  borderRadius: '4px 4px 0 0',
+                  overflow: 'hidden',
+                  background: total === 0 ? '#EBEEF2' : 'transparent',
+                }}
+              >
+                {d.readingCount > 0 ? (
+                  <div data-testid={`weekly-reading-${i}`} style={{ height: readingHeight, background: colors.green }} />
+                ) : null}
+                {d.reviewCount > 0 ? (
+                  <div data-testid={`weekly-review-${i}`} style={{ height: reviewHeight, background: colors.primary }} />
+                ) : null}
+              </div>
               <span style={{ fontFamily: fonts.num, fontSize: 11, color: colors.faint }}>
-                {WEEKDAYS[new Date(d.dayStartMs).getUTCDay()]}
+                {WEEKDAYS[new Date(d.dayStartMs).getDay()]}
               </span>
             </div>
           );
@@ -202,6 +235,11 @@ export function DashboardScreen({
     </section>
   );
 
+  // D-5: the projector returns every due word; the ledger shows only the first DUE_LIST_LIMIT and
+  // rolls the rest into a「他 M 語を単語帳で見る」link so a large backlog can't run off the page.
+  const shownDue = snapshot.dueList.slice(0, DUE_LIST_LIMIT);
+  const remainingDue = snapshot.dueList.length - shownDue.length;
+
   const dueCard: ReactNode = (
     <section style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -209,32 +247,49 @@ export function DashboardScreen({
         <span style={dueBadgeStyle}>{snapshot.dueTodayCount}</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {snapshot.dueList.map((d, i) => (
-          <div
-            key={d.wordId}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 11,
-              padding: '9px 0',
-              borderBottom: i < snapshot.dueList.length - 1 ? `1px solid ${colors.dividerRow}` : 'none',
-            }}
-          >
-            <MasteryDot stage={d.mastery} size={8} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ fontFamily: fonts.serif, fontSize: 16, color: colors.ink }}>{d.wordId}</span>
-              {glosses[d.wordId] ? (
-                <span style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginLeft: 8 }}>
-                  {glosses[d.wordId]}
-                </span>
-              ) : null}
+        {shownDue.map((d, i) => {
+          const divider = i < shownDue.length - 1;
+          const rowBody: ReactNode = (
+            <>
+              <MasteryDot stage={d.mastery} size={8} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontFamily: fonts.serif, fontSize: 16, color: colors.ink }}>{d.wordId}</span>
+                {glosses[d.wordId] ? (
+                  <span style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginLeft: 8 }}>
+                    {glosses[d.wordId]}
+                  </span>
+                ) : null}
+              </div>
+              <span style={{ fontFamily: fonts.ui, fontSize: 11, color: dueLabel(d.dueAt, now) === '今日' ? colors.terracotta : colors.muted }}>
+                {dueLabel(d.dueAt, now)}
+              </span>
+            </>
+          );
+          // D-5: interactive row → opens the word's detail card. Falls back to a plain div when no
+          // handler is wired (keeps the standalone dashboard non-interactive).
+          return onSelectWord ? (
+            <button
+              key={d.wordId}
+              type="button"
+              className="interactive-row"
+              data-testid={`due-word-${d.wordId}`}
+              onClick={() => onSelectWord(d.wordId)}
+              style={dueRowStyle(divider, true)}
+            >
+              {rowBody}
+            </button>
+          ) : (
+            <div key={d.wordId} style={dueRowStyle(divider, false)}>
+              {rowBody}
             </div>
-            <span style={{ fontFamily: fonts.ui, fontSize: 11, color: dueLabel(d.dueAt, now) === '今日' ? colors.terracotta : colors.muted }}>
-              {dueLabel(d.dueAt, now)}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
+      {remainingDue > 0 && onShowAllDue ? (
+        <button type="button" data-testid="due-show-all" onClick={onShowAllDue} style={showAllDueStyle}>
+          他 {remainingDue} 語を単語帳で見る
+        </button>
+      ) : null}
       <button type="button" onClick={startReview} style={softButtonStyle}>
         復習をはじめる
       </button>
@@ -286,6 +341,15 @@ const cardStyle: CSSProperties = {
 
 const sectionTitleStyle: CSSProperties = { fontFamily: fonts.ui, fontSize: 14, fontWeight: 600, color: colors.ink };
 
+const weeklyLegendItemStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  color: colors.muted,
+};
+
 const streakChipStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -330,4 +394,35 @@ const dueBadgeStyle: CSSProperties = {
   background: colors.terracotta,
   borderRadius: 10,
   padding: '2px 9px',
+};
+
+// D-5: a due row. As a <button> it resets the native chrome but keeps the row's flex layout and the
+// bottom divider; `interactive` only toggles the cursor (hover/focus affordance lands with D-2).
+const dueRowStyle = (divider: boolean, interactive: boolean): CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  width: '100%',
+  gap: 11,
+  padding: '9px 0',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: divider ? `1px solid ${colors.dividerRow}` : 'none',
+  textAlign: 'left',
+  font: 'inherit',
+  cursor: interactive ? 'pointer' : 'default',
+});
+
+const showAllDueStyle: CSSProperties = {
+  width: '100%',
+  marginTop: 12,
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: 'transparent',
+  border: 'none',
+  borderTop: `1px solid ${colors.dividerRow}`,
+  paddingTop: 12,
+  textAlign: 'left',
+  cursor: 'pointer',
 };

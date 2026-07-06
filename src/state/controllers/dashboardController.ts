@@ -25,6 +25,8 @@ export async function loadDashboardSnapshot(
   deps: DashboardControllerDeps,
   userId: UserId,
   now: number,
+  /** Learner's local offset from UTC in minutes (F-4; JST = +540). Defaults to 0 = UTC. */
+  tzOffsetMinutes = 0,
 ): Promise<DashboardSnapshot> {
   // A modest window of recent passages backs the in-progress reading cards (title / level
   // resolution). In-progress passages are among the most recent, so this covers them.
@@ -42,5 +44,6 @@ export async function loadDashboardSnapshot(
     progress: inProgress,
     log,
     passages,
+    tzOffsetMinutes,
   });
 }

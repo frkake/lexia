@@ -11,17 +11,22 @@ import { AppShell } from './AppShell';
 import {
   HomeRoute,
   LibraryRoute,
+  NotFoundRoute,
   ReadingRoute,
   ReviewRoute,
+  RouteErrorBoundary,
+  SettingsRoute,
   StoryCharacterDetailRoute,
   StoryDirectoryRoute,
   WordbookRoute,
+  WordPageRoute,
 } from './app/routes';
 
 export const appRoutes: RouteObject[] = [
   {
     path: '/',
     element: <AppShell />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <HomeRoute /> },
       { path: 'library', element: <LibraryRoute /> },
@@ -31,6 +36,9 @@ export const appRoutes: RouteObject[] = [
       { path: 's/:storyId/:chapterIndex', element: <ReadingRoute /> },
       { path: 'review', element: <ReviewRoute /> },
       { path: 'wordbook', element: <WordbookRoute /> },
+      { path: 'w/:wordId', element: <WordPageRoute /> },
+      { path: 'settings', element: <SettingsRoute /> },
+      { path: '*', element: <NotFoundRoute /> },
     ],
   },
 ];

@@ -4,15 +4,16 @@
  *   - a lookup tap → Again (1) lapse;
  *   - a tap-free read-through → a damped Good, `S' = S + decay·(S_good − S)`,
  *     crediting passive recognition less than active recall;
- *   - passage-origin updates of the same word are debounced by a daily cooldown to
- *     avoid double-counting with a same-day explicit review;
+ *   - a passage-origin update of the same word is debounced by a daily cooldown against the last
+ *     scheduling change of ANY source (C-5d): a same-day explicit「知らなかった」/review is not
+ *     overwritten by a subsequent read-through, so a lapse's 10-minute step survives to completion;
  *   - passage events never promote the mastery stage and are recorded append-only
  *     with `source='passage'`.
  *
  * NOTE on the contract: design.md sketches `apply(state, signal, log)` with an async
- * ReviewLogReader. To keep this an I/O-free pure domain service, the resolved
- * last-passage-update timestamp is passed in instead; the state layer reads it from
- * ReviewLogRepository.lastPassageUpdate before calling.
+ * ReviewLogReader. To keep this an I/O-free pure domain service, the resolved last-update timestamp
+ * is passed in instead; the state layer reads it from `ReviewLogRepository.lastUpdate` (latest entry
+ * of any source) before calling.
  */
 
 import { fsrs } from './fsrsScheduler';
@@ -30,17 +31,20 @@ export interface RecallEventService {
   apply(
     state: WordSchedulingState,
     signal: RecallSignal,
-    lastPassageUpdateAt: number | null,
+    /** Latest scheduling change of ANY source for this word (cross-source cooldown, C-5d). */
+    lastUpdateAt: number | null,
   ): RecallApplyResult;
 }
 
 function apply(
   state: WordSchedulingState,
   signal: RecallSignal,
-  lastPassageUpdateAt: number | null,
+  lastUpdateAt: number | null,
 ): RecallApplyResult {
-  // Daily cooldown: a second passage-origin update within the window is suppressed.
-  if (lastPassageUpdateAt !== null && signal.at - lastPassageUpdateAt < DAILY_COOLDOWN_MS) {
+  // Daily cooldown (cross-source, C-5d): a passage-origin update within the window of the word's
+  // last scheduling change — review OR passage — is suppressed, so a same-day「知らなかった」isn't
+  // overwritten by the read-through fired on completion.
+  if (lastUpdateAt !== null && signal.at - lastUpdateAt < DAILY_COOLDOWN_MS) {
     return { next: state, logEntry: null };
   }
 

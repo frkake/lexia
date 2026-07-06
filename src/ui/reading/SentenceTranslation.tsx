@@ -96,10 +96,23 @@ export interface SentenceTranslationProps {
   placement?: TranslationPlacement;
   /** New-element emphasis spans into `text` (Requirement 4). */
   spans?: TranslationSpan[];
+  /**
+   * F-9: controlled reveal state for per-sentence mode. When `open` is supplied the caller owns the
+   * open/close (e.g. ReadingScreen's session-level "すべて開く / すべて閉じる" toolbar) via `onToggle`;
+   * when omitted the block self-manages its reveal locally (legacy behavior).
+   */
+  open?: boolean;
+  onToggle?: () => void;
 }
 
-export function SentenceTranslation({ text, mode, placement = 'block', spans }: SentenceTranslationProps) {
-  const [open, setOpen] = useState(false);
+export function SentenceTranslation({ text, mode, placement = 'block', spans, open: openProp, onToggle }: SentenceTranslationProps) {
+  const [openLocal, setOpenLocal] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : openLocal;
+  const toggle = (): void => {
+    if (controlled) onToggle?.();
+    else setOpenLocal((v) => !v);
+  };
 
   if (mode === 'off') return null;
   if (mode === 'full') return <TranslationBlock text={text} placement={placement} spans={spans} />;
@@ -109,7 +122,7 @@ export function SentenceTranslation({ text, mode, placement = 'block', spans }: 
     <div style={{ margin: placement === 'aside' ? 0 : '11px 0 4px' }}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         style={{
           display: 'inline-flex',
           alignItems: 'center',

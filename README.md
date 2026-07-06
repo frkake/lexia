@@ -26,10 +26,57 @@
 単語を単独の日本語訳として覚えるのではなく、実際に使われる文脈、周辺語彙、感情的な響き、語源的なつながり、比喩的な広がりをあわせて学ぶ。
 これにより、意味を推測する力、類義語を使い分ける力、自然な文章の中で単語を運用する力を身につける。
 
+## セットアップ
+
+### 前提条件
+
+| ツール | バージョン | インストール |
+|--------|-----------|-------------|
+| Node.js | v20 以上（推奨 v24） | https://nodejs.org/ または `nvm install 24` |
+| pnpm | v9 以上（推奨 v10） | `corepack enable && corepack prepare pnpm@latest --activate` |
+
+> **Corepack を使う場合**: Node.js 16.13+ に同梱の Corepack で pnpm を有効化できます。  
+> もしくは `npm install -g pnpm` でグローバルインストールしてください。
+
+### 手順
+
+```bash
+# 1. リポジトリをクローン
+git clone <repository-url>
+cd lexia
+
+# 2. 依存パッケージのインストール
+pnpm install
+
+# 3. 環境変数の設定
+cp .env.example .env
+# .env を編集し、LLM プロバイダの API キーを設定する:
+#   - OpenAI を使う場合: OPENAI_API_KEY を設定
+#   - Claude を使う場合: LLM_PROVIDER=claude に変更し ANTHROPIC_API_KEY を設定
+
+# 4. 開発サーバの起動
+pnpm dev
+```
+
+`pnpm dev` が成功すると、以下にアクセスできます:
+- アプリ: http://localhost:5173/
+- ビジュアルギャラリー: http://localhost:5173/gallery.html
+
+### 動作確認
+
+開発サーバ起動後、別ターミナルで LLM 接続を確認:
+
+```bash
+curl -X POST http://localhost:5173/api/passages:generate \
+  -H 'content-type: application/json' \
+  -d '{"level":"B1","themes":["会議"],"newWordRatio":0.3,"length":"short","targetWords":[]}'
+```
+
+正常にレスポンスが返れば LLM 連携が動作しています。
+
 ## 開発・テスト
 
 ```bash
-pnpm install
 pnpm dev              # Vite 開発サーバ（実アプリ /, ビジュアルギャラリー /gallery.html）
 pnpm build            # tsc --noEmit + vite build
 pnpm typecheck        # tsc --noEmit

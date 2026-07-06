@@ -92,6 +92,12 @@ export async function mockApi(page: Page): Promise<void> {
   await page.route('**/api/passages:generate', (route) =>
     route.fulfill({ json: { passage: E2E_PASSAGE, stop_reason: 'end_turn' } }),
   );
+  // Annotation pass (F-6): a clean complete pass so the generated reading page shows no failure
+  // banner. Without this the unmatched request would hit the (key-less) dev handler, fail, and the
+  // orchestrator would record annotationStatus='failed'.
+  await page.route('**/api/passages:annotate', (route) =>
+    route.fulfill({ json: { noticeCues: E2E_PASSAGE.noticeCues, annotationStatus: 'complete' } }),
+  );
   // Word-data lookups. Guard against the suggest sub-path so it isn't captured by the wildcard.
   await page.route('**/api/words/**', (route) => route.fulfill({ json: E2E_WORD }));
   // Setup-open word suggestion (Requirement 5.1): a small deterministic ABC list.
@@ -129,12 +135,14 @@ export async function seek(page: Page, ratio: number): Promise<void> {
   }, Math.round(ratio * 1000));
 }
 
-/** Add a manual target word in Setup and trigger generation. */
+/** Add a manual target word on the Home (generation) screen and trigger generation. */
 export async function generateFromSetup(page: Page, word = 'decisive'): Promise<void> {
-  await page.goto('/setup');
+  await page.goto('/');
   await page.getByRole('button', { name: '＋ 追加' }).click();
   await page.getByLabel('追加する単語').fill(word);
   await page.getByRole('button', { name: '追加', exact: true }).click();
-  await page.getByTestId(`target-${word}`).waitFor();
+  // Manually-added words render as `target-added-${word}` chips (auto-selected candidates use
+  // `target-${wordId}`); wait on the manual-add chip so generation only fires once it's committed.
+  await page.getByTestId(`target-added-${word}`).waitFor();
   await page.getByRole('button', { name: '文章を生成する' }).click();
 }

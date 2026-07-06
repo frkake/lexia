@@ -7,7 +7,7 @@
  * measure C2, so those cells are reported as `n/a` (9.2/9.3). Depends on domain types only.
  */
 
-import type { Cefr, ExamCriterion, ExamKind } from '../../types/domain';
+import type { Cefr, ExamCriterion, ExamKind, LevelSubBand } from '../../types/domain';
 
 const CEFR_ORDER: Cefr[] = ['A2', 'B1', 'B2', 'C1', 'C2'];
 const CEFR_RANK: Record<Cefr, number> = { A2: 0, B1: 1, B2: 2, C1: 3, C2: 4 };
@@ -28,6 +28,12 @@ export interface ExamScale {
   cefrToExam(cefr: Cefr): ExamDisplay;
   /** Selectable options for an exam kind, ascending by CEFR (picker source). */
   optionsFor(kind: ExamKind): ExamCriterion[];
+  /**
+   * Resolve a criterion to its CEFR pivot PLUS a sub-band position within that band and a display
+   * label (A-3-1). The sub-band splits the band into thirds so "TOEIC 900" (upper B2) is nudged
+   * harder than "TOEIC 800" (mid B2) without changing the coarse pivot.
+   */
+  examToDifficultyTarget(criterion: ExamCriterion): { level: Cefr; subBand: LevelSubBand; examLabel: string };
 }
 
 /** Display conversion table, keyed by CEFR (research.md). */
@@ -124,13 +130,61 @@ function cefrToExam(cefr: Cefr): ExamDisplay {
   return DISPLAY[cefr];
 }
 
+/** Finite floor/ceiling per numeric exam so an unbounded top band still splits into thirds (A-3-1). */
+const NUMERIC_RANGE: Record<Exclude<ExamKind, 'eiken'>, { floor: number; ceil: number; bands: Band[] }> = {
+  toeic: { floor: 10, ceil: 990, bands: TOEIC_BANDS },
+  toefl: { floor: 0, ceil: 120, bands: TOEFL_BANDS },
+  ielts: { floor: 0, ceil: 9, bands: IELTS_BANDS },
+};
+
+/** Place `score` within its CEFR band's thirds: bottom → low, middle → mid, top → high. */
+function numericSubBand(kind: Exclude<ExamKind, 'eiken'>, score: number): LevelSubBand {
+  const { floor, ceil, bands } = NUMERIC_RANGE[kind];
+  let min = floor;
+  for (const b of bands) {
+    const max = Number.isFinite(b.max) ? b.max : ceil;
+    if (score <= max) {
+      const range = max - min || 1;
+      const pos = (score - min) / range;
+      return pos < 1 / 3 ? 'low' : pos < 2 / 3 ? 'mid' : 'high';
+    }
+    min = max; // the next band starts where this one ended
+  }
+  return 'high';
+}
+
+/** Human-readable exam goal label (A-3-1), e.g. "TOEIC 900" / "英検準1級". */
+function examLabelFor(criterion: ExamCriterion): string {
+  const v = criterion.value.trim();
+  switch (criterion.kind) {
+    case 'eiken':
+      return `英検${v}級`;
+    case 'toeic':
+      return `TOEIC ${v}`;
+    case 'toefl':
+      return `TOEFL ${v}`;
+    default:
+      return `IELTS ${v}`;
+  }
+}
+
+function examToDifficultyTarget(criterion: ExamCriterion): { level: Cefr; subBand: LevelSubBand; examLabel: string } {
+  const level = examToCefr(criterion);
+  const examLabel = examLabelFor(criterion);
+  // 英検 grades carry no finer position inside the band → mid.
+  if (criterion.kind === 'eiken') return { level, subBand: 'mid', examLabel };
+  const score = Number.parseFloat(criterion.value);
+  const subBand: LevelSubBand = Number.isFinite(score) ? numericSubBand(criterion.kind, score) : 'mid';
+  return { level, subBand, examLabel };
+}
+
 function optionsFor(kind: ExamKind): ExamCriterion[] {
   return [...OPTIONS[kind]]
     .sort((a, b) => CEFR_RANK[a.cefr] - CEFR_RANK[b.cefr])
     .map((o) => ({ kind, value: o.value }));
 }
 
-export const examScale: ExamScale = { examToCefr, cefrToExam, optionsFor };
+export const examScale: ExamScale = { examToCefr, cefrToExam, optionsFor, examToDifficultyTarget };
 
 /** Reverse pivot: pick a representative exam criterion for a CEFR (used by v1→v2 migration seed). */
 export function cefrToDefaultExam(cefr: Cefr, kind: ExamKind = 'eiken'): ExamCriterion {

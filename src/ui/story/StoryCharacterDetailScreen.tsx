@@ -5,6 +5,7 @@
 
 import type { CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
+import { AssetImage } from '../shared/AssetImage';
 import type { StoryCharacter, StoryPlan } from '../../types/domain';
 
 export interface StoryCharacterDetailScreenProps {
@@ -43,7 +44,7 @@ export function StoryCharacterDetailScreen({
         <div style={profileGridStyle}>
           <div style={imageStageStyle}>
             {fullBodyUrl ? (
-              <img src={fullBodyUrl} alt={`${character.name} の全身`} style={fullBodyImageStyle} />
+              <AssetImage src={fullBodyUrl} alt={`${character.name} の全身`} style={fullBodyImageStyle} />
             ) : regeneratingFullBody ? (
               <div data-testid="character-full-body-loading" aria-hidden="true" style={fullBodyLoadingStyle} />
             ) : (

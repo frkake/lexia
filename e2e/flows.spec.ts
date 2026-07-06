@@ -14,7 +14,7 @@ test.describe('reading flow (desktop)', () => {
 
   test('Setup generates a passage and lands on Reading with the annotated target', async ({ page }) => {
     await generateFromSetup(page);
-    await expect(page).toHaveURL(/\/read$/);
+    await expect(page).toHaveURL(/\/p\//);
     await expect(page.getByRole('heading', { name: 'A Decisive Agreement' })).toBeVisible();
     // The woven-in new word carries the "new" mastery-density annotation.
     await expect(page.locator('[data-kind="new"]')).toHaveText('decisive');
@@ -67,10 +67,11 @@ test.describe('reading flow (desktop)', () => {
 });
 
 test('Setup can generate a passage without target words when the backend is absent', async ({ page }) => {
-  await page.goto('/setup');
+  await mockApi(page);
+  await page.goto('/');
   await page.getByRole('button', { name: '文章を生成する' }).click();
-  await expect(page).toHaveURL(/\/read$/);
-  await expect(page.getByRole('heading', { name: 'ビジネスの短い読解' })).toBeVisible();
+  await expect(page).toHaveURL(/\/p\//);
+  await expect(page.getByRole('heading', { name: 'A Decisive Agreement' })).toBeVisible();
 });
 
 test('the resident audio element survives client-side navigation', async ({ page }) => {
@@ -79,8 +80,8 @@ test('the resident audio element survives client-side navigation', async ({ page
   await page.getByTestId('app-audio').evaluate((el) => el.setAttribute('data-marker', 'kept'));
   await page.getByRole('link', { name: '復習' }).click();
   await expect(page).toHaveURL(/\/review$/);
-  await page.getByRole('link', { name: '読む' }).click();
-  await expect(page).toHaveURL(/\/read$/);
+  await page.getByRole('link', { name: 'ホーム' }).click();
+  await expect(page).toHaveURL(/\/$/);
   // Same element instance — the AppShell layout (and its <audio>) never remounts.
   await expect(page.getByTestId('app-audio')).toHaveAttribute('data-marker', 'kept');
 });

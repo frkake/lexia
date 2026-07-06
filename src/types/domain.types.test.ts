@@ -1,6 +1,9 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import type {
   WordData,
+  EtymologyV2,
+  IdiomEntry,
+  SemanticNeighbor,
   WordSchedulingState,
   MasteryStage,
   MasteryDensity,
@@ -29,23 +32,19 @@ describe('domain types', () => {
       core: {
         meaningsJa: ['回復力のある'],
         examples: [{ en: 'a resilient community', ja: '回復力のある共同体' }],
-        collocations: ['resilient economy'],
+        collocations: [
+          { id: 'resilient-economy', pattern: 'a resilient ＜経済＞', type: 'Adj+N', slotExamples: ['economy'], glossJa: '回復力のある経済', l1Contrast: false },
+        ],
         synonymNuances: ['tough vs resilient'],
       },
     };
     expect(w.more).toBeUndefined();
     expectTypeOf<WordData['more']>().toEqualTypeOf<
       | Partial<{
-          etymology: { prefix?: string; root?: string; suffix?: string; noteJa?: string };
-          semanticNetwork: {
-            synonyms: string[];
-            antonyms: string[];
-            hypernyms: string[];
-            hyponyms: string[];
-            related: string[];
-          };
+          etymology: EtymologyV2;
+          semanticNetwork: SemanticNeighbor[];
           wordFamily: string[];
-          idioms: string[];
+          idioms: IdiomEntry[];
           grammarPatterns: string[];
           metaphor: string;
           commonErrors: string[];

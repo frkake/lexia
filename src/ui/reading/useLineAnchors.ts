@@ -24,10 +24,19 @@ export interface LineAnchor {
 }
 
 export interface UseLineAnchorsResult {
-  /** itemId/cueIndex → container-relative Y. Empty when disabled. */
+  /** itemId/cueIndex → FRAME-relative Y (frame = `.reading-layout` common ancestor). Empty when disabled. */
   anchors: LineAnchor[];
-  /** Attach to the element whose badges (data-line-anchor) should be measured. */
+  /** Attach to the element whose badges (data-line-anchor) should be measured (the prose wrapper). */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Attach to the common layout ancestor (`.reading-layout`) that also contains the rail. Anchor Y is
+   * measured relative to THIS frame, so the rail can subtract its own frame-relative origin and place
+   * each card on its badge's line even though the two live in different sub-trees (D-1 coordinate-system
+   * unification). Falls back to the prose container when no frame is attached (legacy / unit harness).
+   */
+  frameRef: React.RefObject<HTMLDivElement | null>;
+  /** Force a coalesced remeasure (e.g. after the scene illustration loads and shifts the prose down). */
+  remeasure: () => void;
 }
 
 export interface UseLineAnchorsDeps {
@@ -44,21 +53,27 @@ export const LINE_ANCHOR_ATTR = 'data-line-anchor';
 
 export function useLineAnchors({ fontScale, passageId, enabled = true }: UseLineAnchorsDeps): UseLineAnchorsResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const frameElRef = useRef<HTMLDivElement | null>(null);
   const [anchors, setAnchors] = useState<LineAnchor[]>([]);
   // A single pending rAF id so concurrent triggers coalesce into one measurement.
-  const frameRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const measure = useCallback((): void => {
     const container = containerRef.current;
     if (!container) return;
-    const containerTop = container.getBoundingClientRect().top;
+    // Measure every badge Y against the common ancestor frame (`.reading-layout`) so the rail, which
+    // sits in a different sub-tree with a large origin offset (toolbar/title/illustration stacked above
+    // the prose), can subtract its own frame-relative origin and land each card on its badge's line.
+    // Falls back to the prose container when no frame is attached (legacy callers / unit harness).
+    const origin = frameElRef.current ?? container;
+    const originTop = origin.getBoundingClientRect().top;
     const nodes = container.querySelectorAll<HTMLElement>(`[${LINE_ANCHOR_ATTR}]`);
     const next: LineAnchor[] = [];
     nodes.forEach((node) => {
       const raw = node.getAttribute(LINE_ANCHOR_ATTR);
       if (raw === null) return;
       const cueIndex = Number(raw);
-      const top = node.getBoundingClientRect().top - containerTop;
+      const top = node.getBoundingClientRect().top - originTop;
       if (Number.isFinite(cueIndex)) {
         next.push({ cueIndex, top });
       } else {
@@ -71,14 +86,14 @@ export function useLineAnchors({ fontScale, passageId, enabled = true }: UseLine
 
   /** Queue a measurement on the next frame; repeated calls in one frame collapse to one. */
   const scheduleMeasure = useCallback((): void => {
-    if (frameRef.current !== null) return;
+    if (rafRef.current !== null) return;
     // Without rAF (SSR / unusual host) fall back to a synchronous measure.
     if (typeof requestAnimationFrame !== 'function') {
       measure();
       return;
     }
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
       measure();
     });
   }, [measure]);
@@ -95,19 +110,21 @@ export function useLineAnchors({ fontScale, passageId, enabled = true }: UseLine
     scheduleMeasure(); // initial measurement after layout
 
     // ResizeObserver may be absent (older host / jsdom without a stub): the initial measure still
-    // ran above; we just skip reflow-driven remeasures rather than throwing.
+    // ran above; we just skip reflow-driven remeasures rather than throwing. Observe BOTH the prose
+    // container (line wrap) and the frame (illustration load / title reflow shifts everything below it).
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => scheduleMeasure()) : null;
     observer?.observe(container);
+    if (frameElRef.current) observer?.observe(frameElRef.current);
 
     return () => {
       observer?.disconnect();
-      if (frameRef.current !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
+      if (rafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
       }
     };
     // fontScale + passageId are remeasure triggers: re-running the effect re-observes and remeasures.
   }, [enabled, fontScale, passageId, scheduleMeasure]);
 
-  return { anchors, containerRef };
+  return { anchors, containerRef, frameRef: frameElRef, remeasure: scheduleMeasure };
 }

@@ -87,6 +87,23 @@ function StringHarness() {
   );
 }
 
+/** Attaches the frame ref to an outer ancestor (top 5) with the prose container nested inside (top 10). */
+function FrameHarness({ tops }: { tops: [number, number][] }) {
+  const { anchors, containerRef, frameRef } = useLineAnchors({ fontScale: 1, passageId: 'p1' });
+  return (
+    <div ref={frameRef} data-top="5">
+      <div ref={containerRef} data-top="10">
+        {tops.map(([idx, top]) => (
+          <span key={idx} data-line-anchor={idx} data-top={top}>
+            {idx}
+          </span>
+        ))}
+        <output data-testid="anchors">{JSON.stringify(anchors)}</output>
+      </div>
+    </div>
+  );
+}
+
 function readAnchors(getByTestId: (id: string) => HTMLElement): { cueIndex: number; top: number }[] {
   return JSON.parse(getByTestId('anchors').textContent || '[]');
 }
@@ -111,6 +128,17 @@ describe('useLineAnchors', () => {
     expect(JSON.parse(getByTestId('anchors').textContent || '[]')).toEqual([
       { itemId: 'notice:2', top: 80 },
       { itemId: 'word:deal', top: 30 },
+    ]);
+  });
+
+  it('measures anchors relative to the frame ancestor when a frameRef is attached (D-1)', () => {
+    // Frame top = 5, container top = 10; anchors must be measured against the FRAME (top - 5), not the
+    // container, so the rail can subtract its own frame-relative origin and align to the badge line.
+    const { getByTestId } = render(<FrameHarness tops={[[1, 40], [2, 80]]} />);
+    act(() => flushRaf());
+    expect(readAnchors(getByTestId)).toEqual([
+      { cueIndex: 1, top: 35 },
+      { cueIndex: 2, top: 75 },
     ]);
   });
 

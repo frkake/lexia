@@ -13,10 +13,12 @@ import { describe, it, expect } from 'vitest';
 import { runGenerationPipeline } from './generationController';
 import { applyReviewRating } from './reviewController';
 import { loadDashboardSnapshot } from './dashboardController';
-import { LexiaDb, SCHEMA_VERSIONS, type SchemaVersion } from '../../infra/persistence/lexiaDb';
+import { createContainer } from '../../ui/app/container';
+import { LexiaDb, SCHEMA_VERSIONS, APP_SCHEMA_VERSION, type SchemaVersion } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
 import { migrateAnonymousNamespace, ANONYMOUS_USER_ID } from '../../infra/auth/authAdapter';
 import { createGenerationOrchestrator } from '../../domain/generation/generationOrchestrator';
+import { createWordSuggestionService } from '../../domain/suggestion/wordSuggestionService';
 import { TtsSynthesisAdapter, type TtsBackend, type TtsWordMark } from '../../infra/tts/ttsSynthesisAdapter';
 import { createSessionStore } from '../stores/sessionStore';
 import { createPlayerStore } from '../stores/playerStore';
@@ -24,6 +26,7 @@ import { tokenizer } from '../../domain/tokenizer/joinService';
 import { DAY_MS } from '../../domain/srs/parameters';
 import type { ContentGateway } from '../../types/ports';
 import type {
+  GenerationRequest,
   IndexedPassage,
   PassageOutput,
   SetupConfig,
@@ -44,7 +47,7 @@ const wordData: WordData = {
   register: 'neutral',
   connotation: '肯定的',
   frequency: 4,
-  core: { meaningsJa: ['取引'], examples: [{ en: 'close a deal', ja: '取引をまとめる' }], collocations: ['close a deal'], synonymNuances: [] },
+  core: { meaningsJa: ['取引'], examples: [{ en: 'close a deal', ja: '取引をまとめる' }], collocations: [{ id: 'close-a-deal', pattern: 'close a deal', type: 'V+N', slotExamples: [], glossJa: '', l1Contrast: false }], synonymNuances: [] },
 };
 
 // A simple 8-word filler sentence, repeated so the passage clears the length gate for `length: 'short'`.
@@ -52,10 +55,12 @@ const FILLER = ['They', 'met', 'again', 'and', 'talked', 'for', 'a', 'while', '.
 
 function validPassage(): PassageOutput {
   return {
-    meta: { title: '取引の成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 117 },
+    meta: { title: '取引の成立', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 197 },
     sentences: [
       { tokens: ['We', 'closed', 'the', 'deal', 'today', '.'], translationJa: '今日、取引を成立させた。' },
-      ...Array.from({ length: 14 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
+      // 24 filler sentences (192 words) + the 5-word opener = 197 words, inside the ±25% band
+      // [150, 250] for the 200-word SETUP target (LENGTH_WORD_TOLERANCE restored to 0.25 in B-5).
+      ...Array.from({ length: 24 }, () => ({ tokens: [...FILLER], translationJa: '彼らは再び会って話した。' })),
     ],
     targetSpans: [{ sentenceIndex: 0, tokenStart: 3, tokenEnd: 4, wordId: 'deal', surface: 'deal', masteryDensity: 'new' }],
     collocationSpans: [{ sentenceIndex: 0, tokenStart: 1, tokenEnd: 4, headWordId: 'deal', collocationId: 'close-deal' }],
@@ -220,6 +225,176 @@ describe('B. review rating → reschedule → log → re-projection → dashboar
   });
 });
 
+// ── D. Seeded-word due timing (A-1-2 / A-1-3 / design decision D1) ────────────
+
+describe('D. a merely-read word is not due now, but re-weaves next day (A-1-2 / D1)', () => {
+  /** design decision D1's stability-gated /review predicate (C-5b's future `isDueForReview`). */
+  const isDueForReview = (s: WordSchedulingState, t: number): boolean => s.stability !== undefined && s.dueAt <= t;
+
+  it('seeds dueAt = now+1day; excluded from suggest immediately, present next day but never in the /review queue', async () => {
+    const { db, userId } = await freshDb('seedtiming');
+    const repos = createRepositories(db);
+    const session = createSessionStore();
+    const player = createPlayerStore();
+    const now = 1000;
+
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+    const marks = marksFor(tokenizer.index(PASSAGE_ID, validPassage()));
+    const tts = new TtsSynthesisAdapter(ttsBackend(marks));
+
+    const outcome = await runGenerationPipeline(
+      {
+        createOrchestrator: (passageId) => createGenerationOrchestrator({ gateway, passageId }),
+        scheduling: repos.scheduling,
+        passages: repos.passages,
+        progress: repos.progress,
+        timingMaps: repos.timingMaps,
+        tts,
+        session,
+        player,
+        now: () => now,
+        genId: () => PASSAGE_ID,
+        voiceId: 'Joanna',
+        wordData: { deal: wordData },
+      },
+      SETUP,
+      userId,
+    );
+    await outcome.audio;
+    expect(outcome.ok).toBe(true);
+
+    // The seeded word carries a next-day due date and remains New (stability undefined).
+    const seeded = await repos.scheduling.get(userId, 'deal');
+    expect(seeded?.dueAt).toBe(now + DAY_MS);
+    expect(seeded?.stability).toBeUndefined();
+    expect(isDueForReview(seeded!, now)).toBe(false);
+
+    const suggestGateway: ContentGateway = {
+      async generatePassage() {
+        throw new Error('unused');
+      },
+      async getWordData() {
+        throw new Error('unused');
+      },
+      suggestWords: async () => ['fresh1', 'fresh2', 'fresh3'],
+    };
+    const svc = createWordSuggestionService(suggestGateway);
+    const reviewPlan = { reviewSlots: 5, newSlots: 0 };
+
+    // Immediately after generation: the read word does NOT occupy a re-weaving slot.
+    const immediate = await svc.suggest(
+      { userId, level: seeded!.level!, intent: 'business', now, excludedWordIds: [], count: 12, plan: reviewPlan },
+      repos.scheduling,
+    );
+    expect(immediate.candidates.map((c) => c.wordId)).not.toContain('deal');
+
+    // 24h later: dueAt has elapsed → it re-surfaces as a 'due' re-weaving candidate …
+    const later = now + DAY_MS + 1;
+    const reweave = await svc.suggest(
+      { userId, level: seeded!.level!, intent: 'business', now: later, excludedWordIds: [], count: 12, plan: reviewPlan },
+      repos.scheduling,
+    );
+    const deal = reweave.candidates.find((c) => c.wordId === 'deal');
+    expect(deal).toBeDefined();
+    expect(deal?.reason).toBe('due');
+
+    // … yet it is still NOT in the stability-gated /review queue (D1's two-faced "due").
+    expect(seeded!.dueAt).toBeLessThanOrEqual(later);
+    expect(isDueForReview(seeded!, later)).toBe(false);
+    db.close();
+  });
+
+  it('after generate → reset, suggest fills the new slots with unseen words and keeps due review words (A-2-2)', async () => {
+    const { db, userId } = await freshDb('resetsuggest');
+    const repos = createRepositories(db);
+    const session = createSessionStore();
+    const player = createPlayerStore();
+    const now = 1_000;
+
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: validPassage(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+    const marks = marksFor(tokenizer.index(PASSAGE_ID, validPassage()));
+    const tts = new TtsSynthesisAdapter(ttsBackend(marks));
+    const outcome = await runGenerationPipeline(
+      {
+        createOrchestrator: (passageId) => createGenerationOrchestrator({ gateway, passageId }),
+        scheduling: repos.scheduling,
+        passages: repos.passages,
+        progress: repos.progress,
+        timingMaps: repos.timingMaps,
+        tts,
+        session,
+        player,
+        now: () => now,
+        genId: () => PASSAGE_ID,
+        voiceId: 'Joanna',
+        wordData: { deal: wordData },
+      },
+      SETUP,
+      userId,
+    );
+    await outcome.audio;
+    expect(outcome.ok).toBe(true);
+
+    // A previously-reviewed word whose review time has arrived — its history is NOT reset and it must
+    // keep re-appearing (learning history survives a reset; A-2-2 spec).
+    await repos.scheduling.upsert({
+      userId,
+      wordId: 'ledger',
+      level: 'B1',
+      stability: 20,
+      difficulty: 5,
+      reps: 4,
+      lapses: 0,
+      learningStep: 0,
+      lastReviewAt: now - 100,
+      dueAt: now - 1,
+      lastSource: 'review',
+      mastery: 'Consolidating',
+      reappearCount: 0,
+    });
+
+    // Reset clears only the manual add/exclude fields, so the follow-up suggest runs with NO
+    // exclusions and a real new-word budget.
+    const suggestGateway: ContentGateway = {
+      async generatePassage() {
+        throw new Error('unused');
+      },
+      async getWordData() {
+        throw new Error('unused');
+      },
+      suggestWords: async () => ['fresh1', 'fresh2', 'fresh3'],
+    };
+    const svc = createWordSuggestionService(suggestGateway);
+    const result = await svc.suggest(
+      { userId, level: 'B1', intent: 'business', now, excludedWordIds: [], count: 12, plan: { reviewSlots: 2, newSlots: 3 } },
+      repos.scheduling,
+    );
+    const ids = result.candidates.map((c) => c.wordId);
+    // (1) the new slots are filled with genuinely unseen words …
+    expect(ids).toEqual(expect.arrayContaining(['fresh1', 'fresh2', 'fresh3']));
+    // (2) the due review word is preserved (history kept) …
+    expect(ids).toContain('ledger');
+    // … while the just-seeded (not-yet-due) word does NOT flood the proposal, so the list actually
+    // changes after a reset rather than returning the same seeds.
+    expect(ids).not.toContain('deal');
+    db.close();
+  });
+});
+
 // ── C. Migration ─────────────────────────────────────────────────────────────
 
 describe('C. migration', () => {
@@ -243,14 +418,18 @@ describe('C. migration', () => {
     });
     v1.close();
 
-    // Append a v2 that adds an index; reopening triggers the upgrade.
-    const v2: SchemaVersion = { version: 2, stores: { scheduling: '[userId+wordId], userId, dueAt, stability, mastery, reps' } };
-    const v2db = new LexiaDb(userId, [...SCHEMA_VERSIONS, v2]);
-    await v2db.open();
-    expect(v2db.verno).toBe(2);
-    const kept = await createRepositories(v2db).scheduling.get(userId, 'keep');
+    // Append a further version that adds an index; reopening triggers the upgrade.
+    const nextVersion = APP_SCHEMA_VERSION + 1;
+    const vNext: SchemaVersion = {
+      version: nextVersion,
+      stores: { scheduling: '[userId+wordId], userId, dueAt, stability, mastery, reps' },
+    };
+    const nextDb = new LexiaDb(userId, [...SCHEMA_VERSIONS, vNext]);
+    await nextDb.open();
+    expect(nextDb.verno).toBe(nextVersion);
+    const kept = await createRepositories(nextDb).scheduling.get(userId, 'keep');
     expect(kept?.stability).toBe(6); // invariant preserved through the migration
-    v2db.close();
+    nextDb.close();
   });
 
   it('migrates the anonymous namespace into the signed-in userId namespace', async () => {
@@ -286,5 +465,53 @@ describe('C. migration', () => {
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({ userId: target, wordId: 'deal', source: 'review' });
     userDb.close();
+  });
+});
+
+// ── D. Production wiring: the CEFR vocabulary gate is live via createContainer (B-4) ──────────
+describe('D. createContainer wires the production CEFR dictionary (gate is live)', () => {
+  it('measures real bands (known > 0) so an off-band passage is flagged without an explicit cefrOf seam', async () => {
+    const { db, userId } = await freshDb('cefr');
+    // A B1 request whose passage is saturated with C1 vocabulary. The container is built WITHOUT a
+    // `cefrOf` seam — exactly how main.tsx builds it — so this proves the default dictionary is
+    // injected. Pre-B-4 the seam was undefined ⇒ known=0, ratio=0, and no cefr violation ever fired.
+    const offBand = (): PassageOutput => ({
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 8 },
+      sentences: [
+        {
+          tokens: ['The', 'esoteric', 'and', 'ubiquitous', 'idea', 'was', 'superfluous', 'yet', 'meticulous', '.'],
+          translationJa: '',
+        },
+      ],
+      targetSpans: [],
+      collocationSpans: [],
+      noticeCues: [],
+    });
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        return { passage: offBand(), stopReason: 'end_turn' };
+      },
+      async getWordData() {
+        throw new Error('unused');
+      },
+    };
+    const container = await createContainer(userId, { db, content: gateway });
+    const req: GenerationRequest = {
+      level: 'B1',
+      intent: 'business',
+      newWordRatio: 0.3,
+      wordTarget: 8,
+      contentType: 'article',
+      targetWords: [],
+    };
+    const result = await container.createOrchestrator('p_cefr').generate(req);
+    // The only violation is the vocabulary band, so repairs exhaust and the report surfaces it.
+    expect(result.ok).toBe(false);
+    if (!result.ok && result.error.kind === 'validation_exhausted') {
+      expect(result.error.lastReport.cefrSampleSize).toBeGreaterThan(0);
+      expect(result.error.lastReport.cefrOffBandRatio).toBeGreaterThan(0.15);
+      expect(result.error.lastReport.violations.some((v) => v.kind === 'cefr_out_of_band')).toBe(true);
+    }
+    db.close();
   });
 });

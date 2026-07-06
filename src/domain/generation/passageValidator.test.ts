@@ -306,6 +306,144 @@ describe('PassageValidator', () => {
     });
   });
 
+  // ── B-1 / B-2: self-reported expressions + collocation coverage ────────────
+  describe('expression quotas and collocation coverage (B-1/B-2)', () => {
+    // Two sentences carrying two idioms/phrasal verbs and two set phrases; approxWords=17 keeps the
+    // length gate happy and the quotas at their floor of 2 each.
+    function exprPassage(over: Partial<PassageOutput> = {}): PassageOutput {
+      return {
+        meta: { title: 't', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 17 },
+        sentences: [
+          { tokens: ['They', 'come', 'up', 'with', 'a', 'plan', 'in', 'the', 'long', 'run', '.'], translationJa: '' },
+          { tokens: ['Please', 'find', 'attached', 'the', 'file', ',', 'moving', 'forward', '.'], translationJa: '' },
+        ],
+        targetSpans: [],
+        collocationSpans: [],
+        noticeCues: [],
+        expressionSpans: [
+          { span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 }, surface: 'come up with', category: 'phrasal_verb', meaningJa: '' },
+          { span: { sentenceIndex: 0, tokenStart: 6, tokenEnd: 10 }, surface: 'in the long run', category: 'idiom', meaningJa: '' },
+          { span: { sentenceIndex: 1, tokenStart: 0, tokenEnd: 3 }, surface: 'Please find attached', category: 'set_phrase', meaningJa: '' },
+          { span: { sentenceIndex: 1, tokenStart: 6, tokenEnd: 8 }, surface: 'moving forward', category: 'set_phrase', meaningJa: '' },
+        ],
+        ...over,
+      };
+    }
+    const exprCtx: ValidationContext = { level: 'B2', targets: [], approxWords: 17 };
+
+    it('accepts a passage that meets both the idiom and set-phrase quotas', () => {
+      const report = passageValidator.validate(exprPassage(), exprCtx);
+      expect(report.violations.some((v) => v.kind === 'expression_quota_unmet')).toBe(false);
+      expect(report.ok).toBe(true);
+    });
+
+    it('flags expression_quota_unmet when idioms/set phrases fall below quota', () => {
+      const report = passageValidator.validate(
+        exprPassage({
+          expressionSpans: [
+            { span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 }, surface: 'come up with', category: 'phrasal_verb', meaningJa: '' },
+          ],
+        }),
+        exprCtx,
+      );
+      // 1 idiom/phrasal (< 2) and 0 set phrases (< 2) ⇒ two quota violations.
+      expect(report.violations.filter((v) => v.kind === 'expression_quota_unmet')).toHaveLength(2);
+      expect(report.ok).toBe(false);
+    });
+
+    it('flags expression_span_mismatch when a surface does not render its tokens', () => {
+      const report = passageValidator.validate(
+        exprPassage({
+          expressionSpans: [
+            { span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 }, surface: 'totally wrong', category: 'idiom', meaningJa: '' },
+          ],
+        }),
+        exprCtx,
+      );
+      expect(report.violations.some((v) => v.kind === 'expression_span_mismatch')).toBe(true);
+    });
+
+    it('skips the expression/collocation gates entirely when expressionSpans is absent (back-compat)', () => {
+      // A target with supplied collocations but no collocationSpan would be collocation_missing IF the
+      // gate ran — but with no expressionSpans field it is a pre-batch-1 passage, so the gate is off.
+      const report = passageValidator.validate(basePassage(), ctx);
+      expect(report.violations.some((v) => v.kind === 'collocation_missing')).toBe(false);
+      expect(report.ok).toBe(true);
+    });
+
+    it('flags collocation_missing when a target with supplied collocations has no collocationSpan', () => {
+      const collCtx: ValidationContext = {
+        level: 'B2',
+        targets: [{ wordId: 'leverage', surface: 'leverage', attributes: { core: { collocations: ['leverage our reputation'] } } }],
+        approxWords: 17,
+      };
+      const report = passageValidator.validate(exprPassage(), collCtx); // collocationSpans: []
+      expect(report.violations.some((v) => v.kind === 'collocation_missing')).toBe(true);
+    });
+
+    describe('collocation_id fidelity (D4 id ⇄ legacy-string fallback)', () => {
+      function collCtxWith(collocations: unknown[]): ValidationContext {
+        return {
+          level: 'B2',
+          targets: [{ wordId: 'leverage', surface: 'leverage', attributes: { core: { collocations } } }],
+          approxWords: 17,
+        };
+      }
+      const withColl = (collocationId: string): PassageOutput =>
+        exprPassage({ collocationSpans: [{ sentenceIndex: 0, tokenStart: 0, tokenEnd: 3, headWordId: 'leverage', collocationId }] });
+
+      it('accepts a collocationId matching a structured entry id', () => {
+        const report = passageValidator.validate(
+          withColl('leverage-reputation'),
+          collCtxWith([{ id: 'leverage-reputation', text: 'leverage our reputation' }]),
+        );
+        expect(report.violations.some((v) => v.kind === 'collocation_id_unknown')).toBe(false);
+        expect(report.violations.some((v) => v.kind === 'collocation_missing')).toBe(false);
+      });
+
+      it('accepts a collocationId matching a legacy plain-string collocation', () => {
+        const report = passageValidator.validate(
+          withColl('leverage our reputation'),
+          collCtxWith(['leverage our reputation']),
+        );
+        expect(report.violations.some((v) => v.kind === 'collocation_id_unknown')).toBe(false);
+      });
+
+      it('flags collocation_id_unknown when the id matches neither an entry id nor a legacy string', () => {
+        const report = passageValidator.validate(
+          withColl('invented-collocation'),
+          collCtxWith(['leverage our reputation']),
+        );
+        expect(report.violations.some((v) => v.kind === 'collocation_id_unknown')).toBe(true);
+      });
+    });
+
+    describe('paragraphIndex monotonicity (F-8②)', () => {
+      const paragraphs = (a: number, b: number): PassageOutput =>
+        exprPassage({
+          sentences: [
+            { tokens: ['They', 'come', 'up', 'with', 'a', 'plan', 'in', 'the', 'long', 'run', '.'], translationJa: '', paragraphIndex: a },
+            { tokens: ['Please', 'find', 'attached', 'the', 'file', ',', 'moving', 'forward', '.'], translationJa: '', paragraphIndex: b },
+          ],
+        });
+
+      it('accepts a non-decreasing paragraphIndex starting at 0', () => {
+        expect(passageValidator.validate(paragraphs(0, 1), exprCtx).violations.some((v) => v.kind === 'paragraph_index_invalid')).toBe(false);
+        expect(passageValidator.validate(paragraphs(0, 0), exprCtx).violations.some((v) => v.kind === 'paragraph_index_invalid')).toBe(false);
+      });
+
+      it('flags a paragraphIndex that does not start at 0 or that decreases', () => {
+        expect(passageValidator.validate(paragraphs(1, 2), exprCtx).violations.some((v) => v.kind === 'paragraph_index_invalid')).toBe(true);
+        expect(passageValidator.validate(paragraphs(0, -1), exprCtx).violations.some((v) => v.kind === 'paragraph_index_invalid')).toBe(true);
+      });
+
+      it('skips the check when paragraphIndex is absent on some sentences (back-compat)', () => {
+        const report = passageValidator.validate(exprPassage(), exprCtx); // no paragraphIndex at all
+        expect(report.violations.some((v) => v.kind === 'paragraph_index_invalid')).toBe(false);
+      });
+    });
+  });
+
   // ── Requirement 6.5 / 9.4: homage verbatim-copy guard ──────────────────────
   describe('verbatim_copy (homage copyright guard)', () => {
     const homageCtx: ValidationContext = {
@@ -348,6 +486,95 @@ describe('PassageValidator', () => {
     it('never flags verbatim copy when no homage reference is supplied (articles/originals)', () => {
       const report = passageValidator.validate(basePassage(), ctx);
       expect(report.violations.some((v) => v.kind === 'verbatim_copy')).toBe(false);
+    });
+  });
+
+  describe('B-3 sentence-length profile + advanced-syntax repertoire', () => {
+    // A ~5-word single-clause sentence.
+    const shortSentence = () => ({ tokens: ['The', 'team', 'meets', 'each', 'day', '.'], translationJa: '毎日会う。' });
+    // A ~20-word sentence (words only, excluding the period).
+    const longSentence = {
+      tokens: [
+        'The', 'committee', 'carefully', 'reviewed', 'the', 'detailed', 'proposal', 'before', 'the',
+        'board', 'finally', 'approved', 'the', 'ambitious', 'plan', 'for', 'the', 'coming', 'fiscal', 'year', '.',
+      ],
+      translationJa: '委員会は提案を検討し理事会が計画を承認した。',
+    };
+    const syntaxCtx = (readabilityLevel: 'easy' | 'standard' | 'advanced'): ValidationContext => ({
+      level: 'C1',
+      targets: [],
+      readabilityLevel,
+    });
+
+    it('flags both gates for an advanced request written as all short single clauses with no syntax self-report', () => {
+      const report = passageValidator.validate(
+        basePassage({ sentences: Array.from({ length: 6 }, shortSentence), targetSpans: [], noticeCues: [], syntaxSpans: [] }),
+        syntaxCtx('advanced'),
+      );
+      expect(report.violations.some((v) => v.kind === 'sentence_length_profile_mismatch')).toBe(true);
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(true);
+    });
+
+    it('flags sentence_length_profile_mismatch for an easy request with ~20-word sentences, but not the syntax gate', () => {
+      const report = passageValidator.validate(
+        basePassage({ sentences: [longSentence, longSentence], targetSpans: [], noticeCues: [], syntaxSpans: [] }),
+        syntaxCtx('easy'),
+      );
+      expect(report.violations.some((v) => v.kind === 'sentence_length_profile_mismatch')).toBe(true);
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(false);
+    });
+
+    it('accepts an advanced passage that hits the length band and self-reports ≥3 distinct required constructions', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [longSentence, longSentence, longSentence],
+          targetSpans: [],
+          noticeCues: [],
+          syntaxSpans: [
+            { sentenceIndex: 0, pattern: 'nonrestrictive_relative', anchorText: 'the detailed proposal', noteJa: '非制限関係詞。' },
+            { sentenceIndex: 1, pattern: 'participial', anchorText: 'carefully reviewed', noteJa: '分詞構文。' },
+            { sentenceIndex: 2, pattern: 'appositive', anchorText: 'the ambitious plan', noteJa: '同格。' },
+          ],
+        }),
+        syntaxCtx('advanced'),
+      );
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(false);
+      expect(report.violations.some((v) => v.kind === 'sentence_length_profile_mismatch')).toBe(false);
+    });
+
+    it('flags syntax_repertoire_unmet when a self-reported anchor is not verbatim in its sentence', () => {
+      const report = passageValidator.validate(
+        basePassage({
+          sentences: [longSentence, longSentence, longSentence],
+          targetSpans: [],
+          noticeCues: [],
+          syntaxSpans: [
+            { sentenceIndex: 0, pattern: 'nonrestrictive_relative', anchorText: 'the detailed proposal', noteJa: '' },
+            { sentenceIndex: 1, pattern: 'participial', anchorText: 'carefully reviewed', noteJa: '' },
+            { sentenceIndex: 2, pattern: 'appositive', anchorText: 'a clause that never appears', noteJa: '' },
+          ],
+        }),
+        syntaxCtx('advanced'),
+      );
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(true);
+    });
+
+    it('skips the B-3 gates entirely on pre-B-3 passages (no syntaxSpans field)', () => {
+      const report = passageValidator.validate(
+        basePassage({ sentences: Array.from({ length: 6 }, shortSentence), targetSpans: [], noticeCues: [] }),
+        syntaxCtx('advanced'),
+      );
+      expect(report.violations.some((v) => v.kind === 'sentence_length_profile_mismatch')).toBe(false);
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(false);
+    });
+
+    it('skips the B-3 gates when no readabilityLevel is supplied', () => {
+      const report = passageValidator.validate(
+        basePassage({ sentences: Array.from({ length: 6 }, shortSentence), targetSpans: [], noticeCues: [], syntaxSpans: [] }),
+        { level: 'C1', targets: [] },
+      );
+      expect(report.violations.some((v) => v.kind === 'sentence_length_profile_mismatch')).toBe(false);
+      expect(report.violations.some((v) => v.kind === 'syntax_repertoire_unmet')).toBe(false);
     });
   });
 });

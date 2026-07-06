@@ -13,6 +13,7 @@ const DESTINATIONS: { to: string; label: string; end?: boolean }[] = [
   { to: '/library', label: '文章' },
   { to: '/review', label: '復習' },
   { to: '/wordbook', label: '単語帳' },
+  { to: '/settings', label: '設定' },
 ];
 
 const linkStyle = (isActive: boolean): CSSProperties => ({

@@ -23,8 +23,15 @@ export interface HomeScreenProps {
   userName?: string;
   /** Clock for the greeting + date eyebrow (defaults to now). */
   now?: number;
-  onContinue?: () => void;
+  /** Resume the CONTINUE card's passage (F-2: the exact passageId, not merely "the newest"). */
+  onContinue?: (passageId: string, sentenceIndex: number) => void;
   onStartReview?: () => void;
+  /** D-5: JA gloss per due word id, shown beside the headword in the「復習が必要な単語」list. */
+  glosses?: Record<string, string>;
+  /** D-5: open a due word's detail card (overlay). */
+  onSelectWord?: (wordId: string) => void;
+  /** D-5: jump to the wordbook filtered to要復習 when the due list is truncated. */
+  onShowAllDue?: () => void;
 }
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
@@ -50,6 +57,9 @@ export function HomeScreen({
   now = Date.now(),
   onContinue,
   onStartReview,
+  glosses,
+  onSelectWord,
+  onShowAllDue,
 }: HomeScreenProps) {
   return (
     <div className="home-page">
@@ -68,7 +78,9 @@ export function HomeScreen({
 
         {snapshot ? (
           <div className="home-stats" style={statsRowStyle}>
-            <Stat label="今日の復習" value={snapshot.dueTodayCount} unit="語" accent />
+            {/* D-6: the review figure is a tap target that jumps straight to /review, so the masthead
+                count on a phone (where the "復習をはじめる" card sits far below) is actionable. */}
+            <Stat label="今日の復習" value={snapshot.dueTodayCount} unit="語" accent onClick={onStartReview} />
             <Stat label="学習の継続" value={snapshot.streakDays} unit="日連続" />
           </div>
         ) : null}
@@ -90,8 +102,11 @@ export function HomeScreen({
               now={now}
               showGreeting={false}
               layout="rail"
-              onContinue={onContinue ? () => onContinue() : undefined}
+              glosses={glosses}
+              onContinue={onContinue}
               onStartReview={onStartReview}
+              onSelectWord={onSelectWord}
+              onShowAllDue={onShowAllDue}
             />
           </aside>
         ) : null}
@@ -100,17 +115,44 @@ export function HomeScreen({
   );
 }
 
-/** A single masthead figure: tiny caps label over a large tabular number with a small unit. */
-function Stat({ label, value, unit, accent = false }: { label: string; value: number; unit: string; accent?: boolean }) {
-  return (
-    <div style={statTileStyle}>
+/** A single masthead figure: tiny caps label over a large tabular number with a small unit.
+ * When `onClick` is supplied the tile renders as a real <button> (D-6: keyboard + tap operable),
+ * otherwise as a plain <div>; the visual (statTileStyle) is identical either way. */
+function Stat({
+  label,
+  value,
+  unit,
+  accent = false,
+  onClick,
+}: {
+  label: string;
+  value: number;
+  unit: string;
+  accent?: boolean;
+  onClick?: () => void;
+}) {
+  const body = (
+    <>
       <span style={statLabelStyle}>{label}</span>
       <span style={statValueRowStyle}>
         <span style={{ ...statNumberStyle, color: accent ? colors.primary : colors.ink }}>{value}</span>
         <span style={statUnitStyle}>{unit}</span>
       </span>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`${label} ${value}${unit} — 復習をはじめる`}
+        style={{ ...statTileStyle, textAlign: 'left', cursor: 'pointer', font: 'inherit' }}
+      >
+        {body}
+      </button>
+    );
+  }
+  return <div style={statTileStyle}>{body}</div>;
 }
 
 // ── masthead ────────────────────────────────────────────────────────────────

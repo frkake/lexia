@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Plugin, loadEnv } from 'vite';
 import { createApiHandler } from './llm/handler';
-import type { Env } from './llm/providers';
+import { type Env, describeImageConfig } from './llm/providers';
 
 export function generationApiPlugin(): Plugin {
   let env: Env = {};
@@ -85,4 +85,25 @@ function logKeySource(env: Env): void {
   const detail = key.trim() ? `length ${key.length}` : 'not set';
   const suffix = flags.length ? ` [${flags.join('; ')}]` : '';
   console.log(`[generation-api] provider=${provider}, ${keyName}=${detail}${suffix} (source: .env files)`);
+  logImageConfig(env);
+}
+
+/**
+ * Second masked line for the image axis: which provider + key + model each use profile (fast/quality)
+ * resolves to, so a typo'd IMAGE_PROVIDER or a missing image key is diagnosable at startup rather than
+ * only at the first (silently-swallowed) illustration request.
+ */
+function logImageConfig(env: Env): void {
+  const parts = describeImageConfig(env).map((c) => {
+    if (c.status === 'unknown_provider') {
+      return `${c.profile}=UNKNOWN "${c.rawProvider}" [typo? use openai|grok|gemini — image requests will 503]`;
+    }
+    const flags: string[] = [];
+    if (c.status === 'missing_key') flags.push(`${c.keyEnvName} MISSING — set it in .env`);
+    else if (c.status === 'placeholder_key') flags.push(`${c.keyEnvName} looks like a placeholder`);
+    const keyDetail = c.keyLength ? `${c.keyEnvName}=length ${c.keyLength}` : `${c.keyEnvName}=not set`;
+    const suffix = flags.length ? ` [${flags.join('; ')}]` : '';
+    return `${c.profile}=${c.provider} (${keyDetail}, model=${c.model})${suffix}`;
+  });
+  console.log(`[generation-api] image: ${parts.join(' / ')} (source: .env files)`);
 }

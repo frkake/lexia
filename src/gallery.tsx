@@ -16,10 +16,22 @@ import { WordDetailCard } from './ui/wordcard/WordDetailCard';
 import { ReviewSession } from './ui/review/ReviewSession';
 import { SetupScreen } from './ui/setup/SetupScreen';
 import { WordbookScreen } from './ui/wordbook/WordbookScreen';
+import { ToastViewport } from './ui/shared/Toast';
+import { ModalOverlay } from './ui/shared/ModalOverlay';
 import * as fx from './gallery.fixtures';
 import { resolveFeatureFlags } from './ui/app/featureFlags';
 import { settingsStore } from './state/stores/settingsStore';
-import { colors } from './ui/theme/tokens';
+import { toastStore } from './state/stores/toastStore';
+import { colors, fonts } from './ui/theme/tokens';
+// F-7: load the same self-hosted fonts as the app so visual baselines render
+// the intended typography (Newsreader serif body, IBM Plex Sans UI, Noto JP).
+import '@fontsource-variable/newsreader/index.css';
+import '@fontsource/ibm-plex-sans/400.css';
+import '@fontsource/ibm-plex-sans/500.css';
+import '@fontsource/ibm-plex-sans/600.css';
+import '@fontsource/ibm-plex-sans/700.css';
+import '@fontsource-variable/noto-sans-jp/index.css';
+import '@fontsource-variable/noto-serif-jp/index.css';
 import './ui/theme/global.css';
 
 function screenFor(key: string): ReactNode {
@@ -60,6 +72,42 @@ function screenFor(key: string): ReactNode {
       return <SetupScreen candidates={fx.setupCandidates} initial={fx.setupInitial} />;
     case 'wordbook':
       return <WordbookScreen words={fx.wordbookEntries} />;
+    case 'toast': {
+      // D-8 shared toast surface: an Undo toast (same mechanism as the rating-Undo) + an error.
+      toastStore.getState().clear();
+      toastStore.getState().show({
+        message: 'negotiation を記録しました',
+        tone: 'success',
+        durationMs: 0,
+        action: { label: '取り消す', onAction: () => {} },
+      });
+      toastStore.getState().show({ message: '生成に失敗しました。時間をおいて再試行してください。', tone: 'error', durationMs: 0 });
+      return (
+        <div style={{ minHeight: '100vh', background: colors.surfacePage }}>
+          <ToastViewport />
+        </div>
+      );
+    }
+    case 'modal':
+      // D-8 shared accessible dialog primitive.
+      return (
+        <div style={{ minHeight: '100vh', background: colors.surfacePage }}>
+          <ModalOverlay onClose={() => {}} label="サンプルダイアログ">
+            <div style={{ padding: 24, width: 'min(420px, 90vw)' }}>
+              <div style={{ fontFamily: fonts.serifJp, fontSize: 20, color: colors.ink, marginBottom: 12 }}>
+                プランを破棄しますか？
+              </div>
+              <div style={{ fontFamily: fonts.bodyJp, fontSize: 14, color: colors.muted, marginBottom: 20 }}>
+                生成済みのプランと進行中のイラストが失われます。
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button type="button">キャンセル</button>
+                <button type="button">破棄する</button>
+              </div>
+            </div>
+          </ModalOverlay>
+        </div>
+      );
     default:
       return <div data-testid="gallery-unknown">unknown: {key}</div>;
   }

@@ -7,7 +7,7 @@
  */
 
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
-import { annotationEncoding, colors, radius } from '../theme/tokens';
+import { annotationEncoding, colors, fonts, radius } from '../theme/tokens';
 
 /** Annotation variants: the three densities plus the keyword/collocation chips. */
 export type AnnotationKind = 'new' | 'review' | 'known' | 'keyword' | 'collocation';
@@ -35,7 +35,7 @@ export function annotationStyle(kind: AnnotationKind, active = false): CSSProper
     base = { borderBottom: `1.5px ${enc.underlineStyle} ${enc.color}` };
   }
   if (active) {
-    return { ...base, color: colors.primary, fontStyle: 'italic', fontFamily: "'Newsreader',serif" };
+    return { ...base, color: colors.primary, fontStyle: 'italic', fontFamily: fonts.serif };
   }
   return base;
 }

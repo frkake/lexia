@@ -59,6 +59,25 @@
   }
 }
 
+/*
+ * D-6: the in-text notice / study-word badges render at 15px but need a ≥24px effective tap
+ * target (WCAG 2.5.8) and sit ~1px from clickable word spans. Expand the hit area with a
+ * transparent ::after (15px + 2×6px ≈ 27px) so the visible glyph — and the surrounding prose
+ * layout — are unchanged. Pointer events on the pseudo-element dispatch to the badge element,
+ * so the whole zone activates the badge without any extra handler.
+ */
+.notice-badge,
+.study-guide-badge {
+  position: relative;
+}
+
+.notice-badge::after,
+.study-guide-badge::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
 html,
 body,
 #root {
@@ -70,7 +89,7 @@ body,
 body {
   background: var(--surface-page);
   color: var(--body);
-  font-family: 'IBM Plex Sans', 'Noto Sans JP', sans-serif;
+  font-family: 'IBM Plex Sans', 'Noto Sans JP Variable', 'Noto Sans JP', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -95,7 +114,11 @@ body {
 .app-main {
   flex: 1 1 auto;
   min-height: 0;
-  /* leave room so the docked player never overlaps content */
+}
+
+/* D-8: reserve the docked-player gutter only when the bar is actually shown (AppShell toggles
+   `body.player-visible`). With no player rendered there is no dead space at the page bottom. */
+body.player-visible .app-main {
   padding-bottom: 84px;
 }
 
@@ -107,6 +130,32 @@ body {
 
 .reading-mobile-header {
   display: none;
+}
+
+/*
+ * D-1: unify the reading-layout reflow breakpoint with useIsNarrow (1024px). Across the whole
+ * phone+tablet band the rail cannot sit beside the prose as a ~1/3-width side column (it strangles
+ * the cards and their buttons), so collapse to one column and stack the rail below a full-width main.
+ * The ≤600px block below further tightens paddings and adds the mobile header; it comes AFTER this
+ * block so its phone-specific overrides win the cascade.
+ */
+@media (max-width: 1024px) {
+  .reading-layout {
+    flex-direction: column !important;
+  }
+
+  .reading-main {
+    flex: none !important;
+    justify-content: flex-start !important;
+  }
+
+  .reading-rail {
+    flex: none !important;
+    min-width: 0 !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--border-card);
+    padding: 28px 40px 40px !important;
+  }
 }
 
 /* Mobile: fix the player to the bottom inside the safe area (viewport-fit=cover). */
@@ -153,7 +202,7 @@ body {
     flex-wrap: wrap;
   }
 
-  .app-main {
+  body.player-visible .app-main {
     padding-bottom: calc(150px + env(safe-area-inset-bottom));
   }
 
@@ -172,14 +221,9 @@ body {
     display: flex;
   }
 
-  .reading-layout {
-    flex-direction: column !important;
-  }
-
+  /* Column reflow + rail stacking now live in the ≤1024px block above; here only phone paddings. */
   .reading-main {
-    flex: none !important;
     padding: 24px 18px 28px !important;
-    justify-content: flex-start !important;
   }
 
   .reading-toolbar {
@@ -204,9 +248,6 @@ body {
   }
 
   .reading-rail {
-    flex: none !important;
-    border-left: 0 !important;
-    border-top: 1px solid var(--border-card);
     padding: 24px 18px 34px !important;
   }
 
@@ -227,6 +268,25 @@ body {
   .setup-sliders {
     flex-direction: column !important;
     gap: 22px !important;
+  }
+
+  /*
+   * D-6: on a phone the review card's outer 48px + inner 80px paddings leave the 4-button flex row
+   * ~64px per cell, so the labels ("知らなかった" etc.) wrap character-by-character. Tighten the
+   * paddings and lay the ratings out as a 2×2 grid so each label sits on one line.
+   */
+  .review-frame {
+    padding: 20px 16px !important;
+  }
+
+  .review-body {
+    padding: 20px 16px 24px !important;
+  }
+
+  .review-rate-row {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
 }
 
@@ -317,7 +377,9 @@ body {
   max-width: none !important;
 }
 
-/* Tablet / narrow desktop: the two columns no longer both fit — collapse to one, ledger last. */
+/* Tablet / narrow desktop: the two columns no longer both fit — collapse to one. D-6: pull the
+ * progress ledger ABOVE the generation form (order:-1) so "復習をはじめる" / "続きを読む" are in the
+ * opening viewport on a phone instead of buried below the tall form. */
 @media (max-width: 900px) {
   .home-body {
     grid-template-columns: 1fr;
@@ -325,6 +387,7 @@ body {
 
   .home-ledger {
     position: static;
+    order: -1;
   }
 }
 

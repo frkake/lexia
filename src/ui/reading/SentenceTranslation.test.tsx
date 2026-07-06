@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
 import { settingsStore } from '../../state/stores/settingsStore';
@@ -28,6 +28,27 @@ describe('<SentenceTranslation/>', () => {
     expect(getByText(JA)).toBeTruthy();
     fireEvent.click(getByText(/和訳を隠す/));
     expect(queryByText(JA)).toBeNull();
+  });
+
+  it('honors a controlled `open` prop and reports toggles instead of self-managing (F-9)', () => {
+    const onToggle = vi.fn();
+    // Controlled-closed: the JA stays hidden and the button is the "表示" affordance.
+    const closed = render(
+      <SentenceTranslation text={JA} mode="per_sentence" open={false} onToggle={onToggle} />,
+    );
+    expect(closed.queryByText(JA)).toBeNull();
+    fireEvent.click(closed.getByText(/この文の和訳を表示/));
+    // Controlled: it does not flip its own state; it delegates to onToggle.
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(closed.queryByText(JA)).toBeNull();
+    closed.unmount();
+
+    // Controlled-open: the JA is shown because the caller says so.
+    const opened = render(
+      <SentenceTranslation text={JA} mode="per_sentence" open onToggle={onToggle} />,
+    );
+    expect(opened.getByText(JA)).toBeTruthy();
+    expect(opened.getByText(/和訳を隠す/)).toBeTruthy();
   });
 });
 

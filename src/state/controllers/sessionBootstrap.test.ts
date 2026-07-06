@@ -31,7 +31,7 @@ function passageOutput(): PassageOutput {
 }
 
 describe('restoreReadingSession (revisit restore, task 10.4)', () => {
-  it('reopens the last in-progress passage at its saved position', async () => {
+  it('reopens the last in-progress passage at its saved position and stamps lastOpenedAt', async () => {
     const { repos, userId } = await freshEnv();
     const session = createSessionStore();
     await repos.passages.put({ passageId: 'pX', userId, createdAt: 100, passage: passageOutput() });
@@ -42,9 +42,14 @@ describe('restoreReadingSession (revisit restore, task 10.4)', () => {
       percent: 50,
       status: 'in_progress',
       startedAt: 100,
+      lastOpenedAt: 100,
     });
 
-    const restored = await restoreReadingSession({ passages: repos.passages, progress: repos.progress, session }, userId);
+    const restored = await restoreReadingSession(
+      { passages: repos.passages, progress: repos.progress, session },
+      userId,
+      5_000,
+    );
 
     expect(restored?.passageId).toBe('pX');
     const s = session.getState();
@@ -52,12 +57,29 @@ describe('restoreReadingSession (revisit restore, task 10.4)', () => {
     expect(s.sentenceIndex).toBe(1);
     expect(s.percent).toBe(100); // 2 of 2 sentences read
     expect(s.status).toBe('in_progress');
+    // The revisit counts as an open: lastOpenedAt advances to now, startedAt is preserved.
+    const saved = await repos.progress.get(userId, 'pX');
+    expect(saved?.lastOpenedAt).toBe(5_000);
+    expect(saved?.startedAt).toBe(100);
+  });
+
+  it('picks the most-recently-opened (not merely newest-started) in-progress passage', async () => {
+    const { repos, userId } = await freshEnv();
+    const session = createSessionStore();
+    await repos.passages.put({ passageId: 'older-start', userId, createdAt: 1, passage: passageOutput() });
+    await repos.passages.put({ passageId: 'newer-start', userId, createdAt: 2, passage: passageOutput() });
+    // 'newer-start' was started later but 'older-start' was OPENED more recently.
+    await repos.progress.upsert({ userId, passageId: 'newer-start', sentenceIndex: 0, percent: 10, status: 'in_progress', startedAt: 200, lastOpenedAt: 200 });
+    await repos.progress.upsert({ userId, passageId: 'older-start', sentenceIndex: 1, percent: 50, status: 'in_progress', startedAt: 100, lastOpenedAt: 900 });
+
+    const restored = await restoreReadingSession({ passages: repos.passages, progress: repos.progress, session }, userId, 1_000);
+    expect(restored?.passageId).toBe('older-start');
   });
 
   it('returns null when there is nothing in progress', async () => {
     const { repos, userId } = await freshEnv();
     const session = createSessionStore();
-    const restored = await restoreReadingSession({ passages: repos.passages, progress: repos.progress, session }, userId);
+    const restored = await restoreReadingSession({ passages: repos.passages, progress: repos.progress, session }, userId, 1_000);
     expect(restored).toBeNull();
     expect(session.getState().passage).toBeNull();
   });
@@ -116,9 +138,14 @@ function deps(records: PassageRecord[], progress: ReadingProgress[] = []) {
       return records.find((r) => r.passageId === id);
     },
   };
-  const progressRepo: Pick<ProgressRepository, 'get'> = {
+  const progressRepo: Pick<ProgressRepository, 'get' | 'upsert'> = {
     async get(userId, passageId) {
       return progress.find((p) => p.userId === userId && p.passageId === passageId);
+    },
+    async upsert(p) {
+      const i = progress.findIndex((x) => x.userId === p.userId && x.passageId === p.passageId);
+      if (i >= 0) progress[i] = p;
+      else progress.push(p);
     },
   };
   return {
@@ -129,33 +156,53 @@ function deps(records: PassageRecord[], progress: ReadingProgress[] = []) {
 }
 
 describe('openPassage', () => {
-  it('loads a passage into the session and restores the saved sentence position', async () => {
+  it('loads a passage into the session, restores the saved position, and stamps lastOpenedAt', async () => {
     const d = deps(
       [record('p1', 'u')],
-      [{ userId: 'u' as UserId, passageId: 'p1', sentenceIndex: 2, percent: 100, status: 'in_progress', startedAt: 1 }],
+      [{ userId: 'u' as UserId, passageId: 'p1', sentenceIndex: 2, percent: 100, status: 'in_progress', startedAt: 1, lastOpenedAt: 1 }],
     );
-    const result = await openPassage(d, 'u' as UserId, 'p1');
+    const result = await openPassage(d, 'u' as UserId, 'p1', 9_000);
     expect(result?.passageId).toBe('p1');
     expect(d.session.getState().passage?.passageId).toBe('p1');
     expect(d.session.getState().sentenceIndex).toBe(2);
+    // The open advances lastOpenedAt to now while preserving the original startedAt.
+    const saved = await d.progress.get('u' as UserId, 'p1');
+    expect(saved?.lastOpenedAt).toBe(9_000);
+    expect(saved?.startedAt).toBe(1);
   });
 
-  it('starts at sentence 0 when there is no saved progress', async () => {
+  it('starts at sentence 0 and records an open when there is no saved progress', async () => {
     const d = deps([record('p1', 'u')]);
-    await openPassage(d, 'u' as UserId, 'p1');
+    await openPassage(d, 'u' as UserId, 'p1', 9_000);
     expect(d.session.getState().sentenceIndex).toBe(0);
+    const saved = await d.progress.get('u' as UserId, 'p1');
+    expect(saved?.status).toBe('in_progress');
+    expect(saved?.lastOpenedAt).toBe(9_000);
+    expect(saved?.startedAt).toBe(1); // record.createdAt fallback
+  });
+
+  it('preserves a completed status when reopening a finished passage', async () => {
+    const d = deps(
+      [record('p1', 'u')],
+      [{ userId: 'u' as UserId, passageId: 'p1', sentenceIndex: 2, percent: 100, status: 'completed', startedAt: 1, lastOpenedAt: 1, completedAt: 500 }],
+    );
+    await openPassage(d, 'u' as UserId, 'p1', 9_000);
+    const saved = await d.progress.get('u' as UserId, 'p1');
+    expect(saved?.status).toBe('completed');
+    expect(saved?.completedAt).toBe(500);
+    expect(saved?.lastOpenedAt).toBe(9_000); // still stamps the open for activity tracking
   });
 
   it('returns null for an unknown passage and leaves the session untouched', async () => {
     const d = deps([record('p1', 'u')]);
-    const result = await openPassage(d, 'u' as UserId, 'missing');
+    const result = await openPassage(d, 'u' as UserId, 'missing', 9_000);
     expect(result).toBeNull();
     expect(d.session.getState().passage).toBeNull();
   });
 
   it('returns null when the passage belongs to another user', async () => {
     const d = deps([record('p1', 'other')]);
-    const result = await openPassage(d, 'u' as UserId, 'p1');
+    const result = await openPassage(d, 'u' as UserId, 'p1', 9_000);
     expect(result).toBeNull();
     expect(d.session.getState().passage).toBeNull();
   });

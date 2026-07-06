@@ -142,7 +142,6 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
         <button type="button" aria-label={`声を切り替え 現在 ${voiceId || VOICES[0]}`} onClick={cycleVoice} style={chip()}>
           声: {voiceId || VOICES[0]}
         </button>
-        <span style={chip(true)}>✓ 追従ハイライト</span>
       </div>
     </div>
   );

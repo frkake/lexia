@@ -14,9 +14,11 @@ import { PassageRenderer } from './PassageRenderer';
 import { SentenceTranslation, TranslationModeToggle } from './SentenceTranslation';
 import { ReadingGuideRail, buildReadingGuide } from './ReadingGuideRail';
 import { useLineAnchors } from './useLineAnchors';
+import { useSentenceTracking, SENTENCE_INDEX_ATTR } from './useSentenceTracking';
 import { useIsNarrow } from './useIsNarrow';
 import type { StudyWord } from './StudyWordsList';
 import { Legend } from '../shared/Legend';
+import { AssetImage } from '../shared/AssetImage';
 import { colors, fonts, radius } from '../theme/tokens';
 import { useSessionStore, sessionStore } from '../../state/stores/sessionStore';
 import { useSettingsStore, settingsStore } from '../../state/stores/settingsStore';
@@ -39,6 +41,12 @@ function nearestStepIndex(scale: number): number {
   return best;
 }
 
+/** Read-through completion credit summary (C-5d): total study words and how many still need review. */
+export interface ReadingCompletionSummary {
+  total: number;
+  needReview: number;
+}
+
 export interface ReadingScreenProps {
   passage?: IndexedPassage;
   /** Live, mastery-enriched study words for the unified learning guide. */
@@ -48,8 +56,14 @@ export interface ReadingScreenProps {
   renderWordDetail?: (wordId: string, onClose: () => void) => ReactNode;
   /** Direct right-rail recognition: mark a word or expression as unknown without opening details. */
   onMarkUnknown?: (targetId: string) => void | Promise<void>;
-  /** Reading-time recognition: learner finished the passage without looking up the rest. */
-  onCompleteReading?: () => void;
+  /** A word detail card was opened (C-5d): the wiring fires a `lookup` recall signal. */
+  onOpenWordDetail?: (wordId: string) => void;
+  /**
+   * Reading-time recognition: learner finished the passage without looking up the rest. Resolves to
+   * a credit summary (C-5d) so the completion feedback can show how many words were credited and how
+   * many still need review.
+   */
+  onCompleteReading?: () => void | Promise<ReadingCompletionSummary | void>;
   /** Long-story continuation: generate or open the next chapter from the current story plan. */
   onGenerateNextChapter?: () => void;
   generatingNextChapter?: boolean;
@@ -58,6 +72,13 @@ export interface ReadingScreenProps {
   onRegenerateIllustration?: () => void;
   regeneratingIllustration?: boolean;
   illustrationError?: string | null;
+  /**
+   * F-6: re-run the annotation pass when it failed/partial for this passage. Wired only when the
+   * gateway supports annotation; the banner shows whenever `meta.annotationStatus` is failed/partial.
+   */
+  onRegenerateAnnotation?: () => void;
+  regeneratingAnnotation?: boolean;
+  annotationError?: string | null;
   /** Story-only settings scaffold shown from the body page. */
   storyPlan?: StoryPlan;
   onRegenerateStoryCharacter?: (characterIndex: number) => void;
@@ -76,6 +97,7 @@ export function ReadingScreen({
   onPlayWord,
   renderWordDetail,
   onMarkUnknown,
+  onOpenWordDetail,
   onCompleteReading,
   onGenerateNextChapter,
   generatingNextChapter = false,
@@ -83,6 +105,9 @@ export function ReadingScreen({
   onRegenerateIllustration,
   regeneratingIllustration = false,
   illustrationError = null,
+  onRegenerateAnnotation,
+  regeneratingAnnotation = false,
+  annotationError = null,
   storyPlan,
   onRegenerateStoryCharacter,
   regeneratingStoryCharacterIndex = null,
@@ -92,13 +117,27 @@ export function ReadingScreen({
   const navigate = useNavigate();
   const sessionPassage = useSessionStore((s) => s.passage);
   const activeWordId = useSessionStore((s) => s.activeWordId);
+  const sessionStatus = useSessionStore((s) => s.status);
   const fontScale = useSettingsStore((s) => s.fontScale);
   const translationMode = useSettingsStore((s) => s.translationMode);
   const [storyPlanOpen, setStoryPlanOpen] = useState(false);
+  // F-2: "前回の位置から再開しました" snackbar, shown when a saved position was restored on open.
+  const [restoreNotice, setRestoreNotice] = useState(false);
+  // C-5d read-through completion feedback: `completing` disables the button during the async write;
+  // `completionSummary` holds the credited/needs-review counts to show afterward.
+  const [completing, setCompleting] = useState(false);
+  const [completionSummary, setCompletionSummary] = useState<ReadingCompletionSummary | null>(null);
+  // F-9: sentence indexes whose 和訳 is revealed in per-sentence mode. Lifted here (from the
+  // per-block local state) so a session-level "すべて開く / すべて閉じる" can drive every block and
+  // so the reveal survives toolbar/mode re-renders while this passage stays open.
+  const [openTranslations, setOpenTranslations] = useState<Set<number>>(() => new Set());
   // Follow-along: the TTS playhead token (HighlightController) emphasizes its span.
   const activeTokenId = usePlayerStore((s) => s.currentTokenId);
 
   const active = passage ?? sessionPassage;
+  // Only drive/track the shared session position when this screen shows the session's own passage
+  // (a standalone `passage` prop — e.g. the gallery — has no session position to track/restore).
+  const tracksSession = !!active && sessionPassage?.passageId === active.passageId;
 
   // 3-zone layout (6.1): the grid + line-aligned rail apply only on a WIDE viewport. On a narrow
   // viewport the layout reflows (right-cell JA drops below the English, the rail flattens) — Req 3.3.
@@ -108,11 +147,61 @@ export function ReadingScreen({
 
   // Measure the in-text badge lines so the rail can align to them. Enabled only when the wide 3-zone
   // layout is active; otherwise it returns no anchors (legacy / narrow flat-flow fallback).
-  const { anchors, containerRef } = useLineAnchors({
+  const { anchors, containerRef, frameRef, remeasure } = useLineAnchors({
     fontScale,
     passageId: active?.passageId ?? 'none',
     enabled: lineAligned,
   });
+
+  // F-2: auto-advance the reading position as the learner scrolls past sentences, and offer a
+  // "先頭から読む" reset (which re-subscribes the observer via a bumped `trackReset` watermark).
+  const [trackReset, setTrackReset] = useState(0);
+  useSentenceTracking({
+    containerRef,
+    passageId: active?.passageId ?? 'none',
+    sentenceCount: active?.sentences.length ?? 0,
+    enabled: tracksSession,
+    resetKey: trackReset,
+    onReach: (idx) => {
+      const s = sessionStore.getState();
+      if (s.passage?.passageId !== active?.passageId) return;
+      if (idx > s.sentenceIndex) s.updateProgress(idx);
+    },
+  });
+
+  // F-2: restore scroll — the first time a passage with a saved position is shown, center that
+  // sentence and surface the resume snackbar. `openPassage` has already seeded the session position.
+  const restoredForPassage = useRef<string | null>(null);
+  useEffect(() => {
+    const id = active?.passageId ?? null;
+    if (!tracksSession || id === null) {
+      setRestoreNotice(false);
+      return;
+    }
+    if (restoredForPassage.current === id) return;
+    restoredForPassage.current = id;
+    const savedIndex = sessionStore.getState().sentenceIndex;
+    if (savedIndex <= 0) {
+      setRestoreNotice(false);
+      return;
+    }
+    setRestoreNotice(true);
+    const scrollToSaved = (): void => {
+      const el = containerRef.current?.querySelector<HTMLElement>(`[${SENTENCE_INDEX_ATTR}="${savedIndex}"]`);
+      el?.scrollIntoView?.({ block: 'center' });
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(scrollToSaved);
+    else scrollToSaved();
+  }, [active?.passageId, tracksSession, containerRef]);
+
+  const restartFromTop = (): void => {
+    setRestoreNotice(false);
+    const s = sessionStore.getState();
+    if (s.passage?.passageId === active?.passageId) s.updateProgress(0);
+    setTrackReset((n) => n + 1); // fresh watermark so scrolling doesn't snap back to the saved spot
+    const el = containerRef.current?.querySelector<HTMLElement>(`[${SENTENCE_INDEX_ATTR}="0"]`);
+    el?.scrollIntoView?.({ block: 'start' });
+  };
 
   // Spotlight Link: the single cue lit across both columns, plus its lifecycle wiring.
   const activeCueIndex = useEffectiveCue();
@@ -124,6 +213,13 @@ export function ReadingScreen({
       readingUiStore.getState().reset();
     }
     prevPassageId.current = id;
+  }, [active?.passageId]);
+  // C-5d: a fresh passage starts un-completed (a prior passage's summary must not leak across).
+  // F-9: also drop the per-sentence 和訳 reveal set — indexes are reused across passages.
+  useEffect(() => {
+    setCompletionSummary(null);
+    setCompleting(false);
+    setOpenTranslations(new Set());
   }, [active?.passageId]);
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -184,11 +280,43 @@ export function ReadingScreen({
     settingsStore.getState().setFontScale(next);
   };
 
+  // F-9: session-level bulk reveal for per-sentence 和訳. `allTranslationsOpen` drives the toolbar
+  // label (すべて開く ⇄ すべて閉じる); the per-block toggle flips a single index.
+  const sentenceCount = active.source.sentences.length;
+  const allTranslationsOpen = sentenceCount > 0 && openTranslations.size >= sentenceCount;
+  const toggleTranslation = (i: number): void => {
+    setOpenTranslations((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+  const toggleAllTranslations = (): void => {
+    setOpenTranslations(allTranslationsOpen ? new Set() : new Set(active.source.sentences.map((_, i) => i)));
+  };
+
   const metaLine = `${meta.intent} · LEVEL ${meta.level} · 新出 ${meta.newCount} / 復習 ${meta.reviewCount}`;
   const selectWord = (wordId: string): void => {
     sessionStore.getState().setActiveWord(wordId);
+    // C-5d: opening a word's detail is a lookup — the wiring records it and fires a recall signal.
+    onOpenWordDetail?.(wordId);
   };
   const closeDetail = (): void => sessionStore.getState().setActiveWord(null);
+
+  // C-5d completion: a passage that carries the session's completed status (or that we just recorded)
+  // shows the finished feedback instead of the record button, so it can't be re-recorded.
+  const readingCompleted = completionSummary !== null || (tracksSession && sessionStatus === 'completed');
+  const handleCompleteReading = async (): Promise<void> => {
+    if (!onCompleteReading || completing || readingCompleted) return;
+    setCompleting(true);
+    try {
+      const summary = await onCompleteReading();
+      if (summary && typeof summary === 'object') setCompletionSummary(summary);
+    } finally {
+      setCompleting(false);
+    }
+  };
 
   const activeGuide = guide ?? buildReadingGuide(active, effectiveStudyWords);
   const railContent = (
@@ -221,7 +349,7 @@ export function ReadingScreen({
         <span style={{ width: 34 }} />
       </div>
 
-      <div className="reading-layout" style={{ display: 'flex', background: colors.surfacePage }}>
+      <div ref={frameRef} className="reading-layout" style={{ display: 'flex', background: colors.surfacePage }}>
         {/* The 3-zone layout puts two sub-columns (EN+JA) in the main, so it needs a bigger share
             of the row than the legacy single-column split (1.9) to keep the English readable. */}
         <div className="reading-main" style={{ flex: zones === 'wide' ? 3 : 1.9, minWidth: 0, padding: '46px 60px 40px', display: 'flex', justifyContent: 'center' }}>
@@ -242,6 +370,17 @@ export function ReadingScreen({
                   </button>
                 ) : null}
                 <TranslationModeToggle />
+                {translationMode === 'per_sentence' ? (
+                  <button
+                    type="button"
+                    data-testid="translation-toggle-all"
+                    aria-pressed={allTranslationsOpen}
+                    onClick={toggleAllTranslations}
+                    style={translationToggleAllStyle}
+                  >
+                    {allTranslationsOpen ? 'すべて閉じる' : 'すべて開く'}
+                  </button>
+                ) : null}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} aria-label="文字サイズ">
                   <button type="button" aria-label="文字を小さく" onClick={() => stepFont(-1)} style={sizeButtonStyle}>
                     A
@@ -260,7 +399,13 @@ export function ReadingScreen({
             <figure style={{ margin: '0 0 30px' }}>
               <div className="reading-illustration" style={illustrationStyle}>
                 {meta.sceneIllustrationUrl ? (
-                  <img src={meta.sceneIllustrationUrl} alt={`${meta.title} の場面イラスト`} style={illustrationImageStyle} />
+                  <AssetImage
+                    src={meta.sceneIllustrationUrl}
+                    alt={`${meta.title} の場面イラスト`}
+                    style={illustrationImageStyle}
+                    // The illustration loading shifts the prose down; realign the rail once it settles.
+                    onLoad={lineAligned ? () => remeasure() : undefined}
+                  />
                 ) : (
                   <span style={{ fontFamily: fonts.mono, fontSize: 11, letterSpacing: '.05em', color: colors.faint2 }}>
                     本文のイラスト · story illustration
@@ -297,6 +442,35 @@ export function ReadingScreen({
               ) : null}
             </figure>
 
+            {/* F-6: the annotation pass failed/partial for this passage — the body reads fine but the
+                「気づき」rail is empty/short. Make the loss visible and offer a one-tap recovery. */}
+            {meta.annotationStatus === 'failed' || meta.annotationStatus === 'partial' ? (
+              <div data-testid="annotation-status-banner" style={annotationBannerStyle}>
+                <span role="alert" style={{ flex: 1, minWidth: 0, lineHeight: 1.5 }}>
+                  {meta.annotationStatus === 'partial'
+                    ? '注釈の一部だけ生成されました。再生成すると残りの気づきが復元されます。'
+                    : '注釈の生成に失敗しました。本文はそのまま読めます。'}
+                </span>
+                {onRegenerateAnnotation ? (
+                  <button
+                    type="button"
+                    data-testid="regenerate-annotation"
+                    onClick={onRegenerateAnnotation}
+                    disabled={regeneratingAnnotation}
+                    aria-busy={regeneratingAnnotation}
+                    style={secondaryActionButtonStyle(regeneratingAnnotation)}
+                  >
+                    {regeneratingAnnotation ? '生成しています…' : '注釈を再生成'}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {annotationError ? (
+              <div role="alert" style={{ ...inlineErrorStyle, marginBottom: 16 }}>
+                {annotationError}
+              </div>
+            ) : null}
+
             {/* The measurement container wraps the prose; useLineAnchors reads badge positions from it. */}
             <div ref={containerRef}>
               {newLayout ? (
@@ -306,6 +480,8 @@ export function ReadingScreen({
                   activeTokenId={activeTokenId}
                   onSelectWord={selectWord}
                   layout="grid"
+                  isNarrow={isNarrow}
+                  asideEnabled={translationMode !== 'off'}
                   guideAnchorIdByWordKey={activeGuide.wordAnchorIdByKey}
                   guideTargetIdByCueIndex={activeGuide.cueTargetIdByIndex}
                   guideNumberByCueIndex={activeGuide.guideNumberByCueIndex}
@@ -317,6 +493,8 @@ export function ReadingScreen({
                       mode={translationMode}
                       placement="aside"
                       spans={active.source.sentences[i]?.translationSpans}
+                      open={openTranslations.has(i)}
+                      onToggle={() => toggleTranslation(i)}
                     />
                   )}
                 />
@@ -326,13 +504,19 @@ export function ReadingScreen({
                   fontScale={fontScale}
                   activeTokenId={activeTokenId}
                   onSelectWord={selectWord}
+                  isNarrow={isNarrow}
                   guideAnchorIdByWordKey={activeGuide.wordAnchorIdByKey}
                   guideTargetIdByCueIndex={activeGuide.cueTargetIdByIndex}
                   guideNumberByCueIndex={activeGuide.guideNumberByCueIndex}
                   guideNumberByWordKey={activeGuide.guideNumberByWordKey}
                   absorbedCueIndexByIndex={activeGuide.absorbedCueIndexByIndex}
                   renderAfterSentence={(i) => (
-                    <SentenceTranslation text={active.source.sentences[i]?.translationJa ?? ''} mode={translationMode} />
+                    <SentenceTranslation
+                      text={active.source.sentences[i]?.translationJa ?? ''}
+                      mode={translationMode}
+                      open={openTranslations.has(i)}
+                      onToggle={() => toggleTranslation(i)}
+                    />
                   )}
                 />
               )}
@@ -360,9 +544,34 @@ export function ReadingScreen({
                   </button>
                 ) : null}
                 {onCompleteReading ? (
-                  <button type="button" data-testid="reading-complete" onClick={onCompleteReading} style={completeButtonStyle}>
-                    読了として記録
-                  </button>
+                  readingCompleted ? (
+                    <div data-testid="reading-completed-feedback" style={completedFeedbackStyle}>
+                      <span data-testid="reading-completed-summary" style={{ fontFamily: fonts.ui, fontSize: 13, color: colors.green, fontWeight: 600 }}>
+                        {completionSummary && completionSummary.total > 0
+                          ? `読了済み ✓（${completionSummary.total} 語にクレジット、うち ${completionSummary.needReview} 語は要復習）`
+                          : '読了済み ✓'}
+                      </span>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" data-testid="reading-completed-review" onClick={() => navigate('/review')} style={completedLinkStyle}>
+                          復習へ
+                        </button>
+                        <button type="button" data-testid="reading-completed-generate" onClick={() => navigate('/')} style={completedLinkStyle}>
+                          次の文章を生成
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid="reading-complete"
+                      onClick={() => void handleCompleteReading()}
+                      disabled={completing}
+                      aria-busy={completing}
+                      style={completeButtonStyle}
+                    >
+                      {completing ? '記録しています…' : '読了として記録'}
+                    </button>
+                  )
                 ) : null}
               </div>
             ) : null}
@@ -371,11 +580,30 @@ export function ReadingScreen({
 
         <aside
           className="reading-rail"
-          style={{ flex: 1, minWidth: 0, borderLeft: `1px solid ${colors.borderCard}`, background: colors.surfaceCard, padding: '30px 26px' }}
+          // minWidth 280 (D-1 width constraint): keep the rail wide enough that guide cards never
+          // strangle their text/buttons on a 3:1 wide split. Stacked ≤1024px, global.css relaxes it.
+          style={{ flex: 1, minWidth: 280, borderLeft: `1px solid ${colors.borderCard}`, background: colors.surfaceCard, padding: '30px 26px' }}
         >
           {railContent}
         </aside>
       </div>
+
+      {restoreNotice ? (
+        <div role="status" data-testid="reading-restore-notice" style={restoreNoticeStyle}>
+          <span>前回の位置から再開しました</span>
+          <button type="button" data-testid="reading-restart-top" onClick={restartFromTop} style={restoreNoticeButtonStyle}>
+            先頭から読む
+          </button>
+          <button
+            type="button"
+            aria-label="通知を閉じる"
+            onClick={() => setRestoreNotice(false)}
+            style={restoreNoticeCloseStyle}
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
 
       {activeWordId && renderWordDetail ? (
         <div
@@ -456,7 +684,7 @@ function StoryPlanDialog({
             {plan.characters.map((character, index) => (
               <article key={`${character.name}:${character.role}`} style={storyCharacterItemStyle}>
                 {storyCharacterPortraitUrl(character) ? (
-                  <img src={storyCharacterPortraitUrl(character)} alt={character.name} style={storyCharacterImageStyle} />
+                  <AssetImage src={storyCharacterPortraitUrl(character)} alt={character.name} style={storyCharacterImageStyle} />
                 ) : (
                   <div aria-hidden="true" style={storyCharacterInitialStyle}>
                     {[...character.name][0] ?? '?'}
@@ -538,6 +766,30 @@ const completeButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+const completedFeedbackStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  flexWrap: 'wrap',
+  justifyContent: 'flex-end',
+  background: colors.greenBg,
+  border: `1px solid ${colors.greenBorder}`,
+  borderRadius: radius.control,
+  padding: '9px 15px',
+};
+
+const completedLinkStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.primaryBorder}`,
+  borderRadius: radius.control,
+  padding: '6px 12px',
+  cursor: 'pointer',
+};
+
 const storySettingsButtonStyle: React.CSSProperties = {
   fontFamily: fonts.ui,
   fontSize: 12.5,
@@ -547,6 +799,18 @@ const storySettingsButtonStyle: React.CSSProperties = {
   border: `1px solid ${colors.primaryBorder}`,
   borderRadius: radius.control,
   padding: '7px 11px',
+  cursor: 'pointer',
+};
+
+// F-9: "すべて開く / すべて閉じる" toolbar control for per-sentence 和訳 (compact, secondary weight).
+const translationToggleAllStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  border: `1px solid ${colors.primaryBorder2}`,
+  borderRadius: radius.control - 1,
+  padding: '5px 11px',
   cursor: 'pointer',
 };
 
@@ -595,6 +859,21 @@ const inlineErrorStyle: React.CSSProperties = {
   padding: '7px 10px',
 };
 
+const annotationBannerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  flexWrap: 'wrap',
+  marginBottom: 16,
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.control,
+  padding: '10px 13px',
+};
+
 const storyErrorStyle: React.CSSProperties = {
   flexBasis: '100%',
   fontFamily: fonts.ui,
@@ -617,6 +896,8 @@ const backButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+// D-6: the "A" glyph is tiny, so give the button an explicit ≥32×32 hit box (WCAG 2.5.8) while
+// keeping it transparent/borderless — the visual stays a bare letter, the tap area is thumb-sized.
 const sizeButtonStyle: React.CSSProperties = {
   fontFamily: fonts.num,
   fontSize: 12,
@@ -625,6 +906,12 @@ const sizeButtonStyle: React.CSSProperties = {
   border: 'none',
   cursor: 'pointer',
   lineHeight: 1,
+  minWidth: 32,
+  minHeight: 32,
+  padding: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 };
 
 const illustrationStyle: React.CSSProperties = {
@@ -647,6 +934,53 @@ const illustrationImageStyle: React.CSSProperties = {
   objectPosition: 'center',
   display: 'block',
   background: colors.surfaceSubtle,
+};
+
+const restoreNoticeStyle: React.CSSProperties = {
+  position: 'fixed',
+  left: '50%',
+  bottom: 88,
+  transform: 'translateX(-50%)',
+  zIndex: 45,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 14,
+  maxWidth: 'calc(100vw - 32px)',
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  color: '#fff',
+  background: colors.ink,
+  borderRadius: radius.control,
+  padding: '10px 12px 10px 16px',
+  boxShadow: '0 8px 28px rgba(25,40,65,.28)',
+};
+
+const restoreNoticeButtonStyle: React.CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  fontWeight: 600,
+  color: '#fff',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px solid rgba(255,255,255,.6)',
+  padding: '0 0 1px',
+  cursor: 'pointer',
+};
+
+const restoreNoticeCloseStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  flex: '0 0 auto',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 'none',
+  borderRadius: '50%',
+  background: 'rgba(255,255,255,.14)',
+  color: '#fff',
+  fontSize: 15,
+  lineHeight: 1,
+  cursor: 'pointer',
 };
 
 const detailOverlayStyle: React.CSSProperties = {

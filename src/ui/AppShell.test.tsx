@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { AppShell } from './AppShell';
 import { playerStore } from '../state/stores/playerStore';
+import { sessionStore } from '../state/stores/sessionStore';
 
 function routerAt(path: string) {
   return createMemoryRouter(
@@ -22,6 +23,14 @@ function routerAt(path: string) {
 }
 
 describe('<AppShell/>', () => {
+  beforeEach(() => {
+    // Reset the shared singletons so the conditional player (D-8) starts hidden each test.
+    act(() => {
+      sessionStore.setState({ passage: null });
+      playerStore.setState({ status: 'idle' });
+    });
+  });
+
   it('renders the outlet content and attaches the resident audio to the player store', () => {
     const router = routerAt('/');
     const { getByTestId } = render(<RouterProvider router={router} />);
@@ -41,10 +50,34 @@ describe('<AppShell/>', () => {
     expect(getByTestId('app-audio')).toBe(before); // never recreated
   });
 
-  it('docks the bottom player in a safe-area-aware container', () => {
+  it('hides the docked player and reserves no gutter when there is no open passage (D-8)', () => {
+    const router = routerAt('/');
+    const { container } = render(<RouterProvider router={router} />);
+    // Nothing to listen to → no dead, silent player and no reserved bottom padding.
+    expect(container.querySelector('.bottom-player')).toBeNull();
+    expect(document.body.classList.contains('player-visible')).toBe(false);
+    expect(container.querySelector('.app-shell')).not.toBeNull();
+  });
+
+  it('docks the player and marks the body player-visible once a passage is open and audio is available (D-8)', () => {
+    act(() => {
+      sessionStore.setState({ passage: { passageId: 'p1' } as never });
+      playerStore.setState({ status: 'ready' });
+    });
     const router = routerAt('/');
     const { container } = render(<RouterProvider router={router} />);
     expect(container.querySelector('.bottom-player')).not.toBeNull();
-    expect(container.querySelector('.app-shell')).not.toBeNull();
+    expect(document.body.classList.contains('player-visible')).toBe(true);
+  });
+
+  it('keeps the player hidden when the TTS backend is unavailable, even with a passage open (D-8)', () => {
+    act(() => {
+      sessionStore.setState({ passage: { passageId: 'p1' } as never });
+      playerStore.setState({ status: 'unavailable' });
+    });
+    const router = routerAt('/');
+    const { container } = render(<RouterProvider router={router} />);
+    expect(container.querySelector('.bottom-player')).toBeNull();
+    expect(document.body.classList.contains('player-visible')).toBe(false);
   });
 });

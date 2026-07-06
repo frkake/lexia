@@ -20,12 +20,14 @@ export class DexieReviewLogRepository implements ReviewLogRepository {
       .toArray();
   }
 
-  /** Latest passage-origin timestamp for a word (drives the daily cooldown). */
-  async lastPassageUpdate(userId: UserId, wordId: string): Promise<number | undefined> {
+  /**
+   * Latest timestamp of ANY entry for a word — review, passage or undo (C-5d). Drives the
+   * cross-source daily cooldown so a same-day explicit rating isn't overwritten by a read-through.
+   */
+  async lastUpdate(userId: UserId, wordId: string): Promise<number | undefined> {
     const entries = await this.db.reviewLog
       .where('[userId+wordId]')
       .equals([userId, wordId])
-      .filter((e) => e.source === 'passage')
       .toArray();
     if (entries.length === 0) return undefined;
     return entries.reduce((max, e) => (e.at > max ? e.at : max), entries[0]!.at);

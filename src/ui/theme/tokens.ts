@@ -22,10 +22,16 @@ export const colors = {
   ink: '#1E2630',
   body: '#27313D',
   inkSoft: '#5A6675',
-  muted: '#717E8C',
-  faint: '#9AA4B1',
-  faint2: '#8A95A3',
-  fainter: '#B6BFC9',
+  // D-8: the secondary-text greys are darkened so every text use clears WCAG AA (4.5:1) on
+  // surfacePage (#F6F8FA) and surfaceCard (#FFFFFF) — verified in tokens.test.ts via
+  // ui/theme/contrast. The original ramp ordering (muted < faint2 < faint < fainter, dark→
+  // light) is preserved; they read closer together now because the AA floor compresses the
+  // usable luminance band. Prior values: muted #717E8C / faint #9AA4B1 / faint2 #8A95A3 /
+  // fainter #B6BFC9 (2.4–4.1:1, sub-AA).
+  muted: '#646F7C',
+  faint: '#6B717A',
+  faint2: '#68707B',
+  fainter: '#6D7278',
   // accents
   green: '#4C9A86',
   greenDeep: '#3E8C79',
@@ -37,6 +43,11 @@ export const colors = {
   /** Deepened terracotta for the idiom group's active "Spotlight Link" ring (≥3:1 on white). */
   terracottaDeep: '#A65A41',
   register: '#6B7686',
+  // C-4: a syntax-specific purple so「読み方の気づき」(grammar_pattern / sentence_structure) reads as
+  // a distinct channel from the blue vocabulary group. `syntax` is the badge fill; `syntaxDeep` is the
+  // chip text + active "Spotlight Link" ring (dark enough to clear ≥3:1 on white for the ring).
+  syntax: '#7A57C4',
+  syntaxDeep: '#5B3B94',
   // surfaces
   surfacePage: '#F6F8FA',
   surfaceCard: '#FFFFFF',
@@ -91,6 +102,8 @@ const CONNOTATION: Omit<NoticeStyle, 'label'> = { color: colors.greenDeep, bg: '
 const COLLOCATION: Omit<NoticeStyle, 'label'> = { color: colors.primaryDeep, bg: '#EAF0F8', numberColor: colors.primary };
 const REGISTER: Omit<NoticeStyle, 'label'> = { color: colors.inkSoft, bg: '#EDF1F6', numberColor: colors.register };
 const IDIOM: Omit<NoticeStyle, 'label'> = { color: colors.terracotta, bg: '#F3E9E4', numberColor: colors.terracotta };
+/** C-4: syntax cues (grammar_pattern / sentence_structure) — the「読み方の気づき」purple channel. */
+const SYNTAX: Omit<NoticeStyle, 'label'> = { color: colors.syntaxDeep, bg: '#EFE9F7', numberColor: colors.syntax };
 
 const NOTICE_LABELS: Record<NoticeCategory, string> = {
   connotation: 'コノテーション',
@@ -116,7 +129,7 @@ const NOTICE_LABELS: Record<NoticeCategory, string> = {
 const NOTICE_GROUP: Record<NoticeCategory, Omit<NoticeStyle, 'label'>> = {
   connotation: CONNOTATION,
   collocation: COLLOCATION,
-  grammar_pattern: COLLOCATION,
+  grammar_pattern: SYNTAX,
   semantic_network: COLLOCATION,
   frequency: COLLOCATION,
   register: REGISTER,
@@ -130,7 +143,7 @@ const NOTICE_GROUP: Record<NoticeCategory, Omit<NoticeStyle, 'label'>> = {
   metaphor: IDIOM,
   usage: REGISTER,
   memory_tip: CONNOTATION,
-  sentence_structure: COLLOCATION,
+  sentence_structure: SYNTAX,
 };
 
 /** Resolve the full chip + badge style for a notice category. */
@@ -160,6 +173,7 @@ const CUE_RING_BY_GROUP = new Map<Omit<NoticeStyle, 'label'>, string>([
   [COLLOCATION, colors.primaryDeep],
   [REGISTER, colors.inkSoft],
   [IDIOM, colors.terracottaDeep],
+  [SYNTAX, colors.syntaxDeep],
 ]);
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -178,12 +192,15 @@ export function cueHighlight(category: NoticeCategory): CueHighlight {
   };
 }
 
+// Self-hosted via @fontsource (F-7): variable families expose the "… Variable"
+// family name, so list it first and keep the legacy (locally-installed) name and
+// the generic fallback after it.
 export const fonts = {
-  ui: "'IBM Plex Sans','Noto Sans JP',sans-serif",
+  ui: "'IBM Plex Sans','Noto Sans JP Variable','Noto Sans JP',sans-serif",
   num: "'IBM Plex Sans',sans-serif",
-  serif: "'Newsreader',serif",
-  serifJp: "'Newsreader','Noto Serif JP',serif",
-  bodyJp: "'Noto Sans JP','IBM Plex Sans',sans-serif",
+  serif: "'Newsreader Variable','Newsreader',serif",
+  serifJp: "'Newsreader Variable','Newsreader','Noto Serif JP Variable','Noto Serif JP',serif",
+  bodyJp: "'Noto Sans JP Variable','Noto Sans JP','IBM Plex Sans',sans-serif",
   mono: "'IBM Plex Sans',monospace",
 } as const;
 

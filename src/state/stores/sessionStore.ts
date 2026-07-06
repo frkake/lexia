@@ -19,9 +19,16 @@ export interface SessionState {
   percent: number;
   activeWordId: string | null;
   startedAt: number;
+  /** When the passage was opened into this session (F-2 CONTINUE ordering); defaults to `now`. */
+  openedAt: number;
   completedAt?: number;
 
-  startPassage(passage: IndexedPassage, now: number): void;
+  /**
+   * Begin a reading session. `now` seeds `startedAt` (preserve the original start when reopening a
+   * saved passage by passing it back in); `openedAt` records the actual open time and defaults to
+   * `now` for freshly generated passages.
+   */
+  startPassage(passage: IndexedPassage, now: number, openedAt?: number): void;
   replacePassage(passage: IndexedPassage): void;
   updateProgress(sentenceIndex: number): void;
   setActiveWord(wordId: string | null): void;
@@ -44,9 +51,10 @@ export function createSessionStore() {
     percent: 0,
     activeWordId: null,
     startedAt: 0,
+    openedAt: 0,
     completedAt: undefined,
 
-    startPassage(passage, now) {
+    startPassage(passage, now, openedAt = now) {
       set({
         passage,
         status: 'in_progress',
@@ -54,6 +62,7 @@ export function createSessionStore() {
         percent: 0,
         activeWordId: null,
         startedAt: now,
+        openedAt,
         completedAt: undefined,
       });
     },
@@ -88,6 +97,7 @@ export function createSessionStore() {
         percent: s.percent,
         status: s.status === 'completed' ? 'completed' : 'in_progress',
         startedAt: s.startedAt,
+        lastOpenedAt: s.openedAt,
         ...(s.completedAt !== undefined ? { completedAt: s.completedAt } : {}),
       };
     },
@@ -100,6 +110,7 @@ export function createSessionStore() {
         percent: 0,
         activeWordId: null,
         startedAt: 0,
+        openedAt: 0,
         completedAt: undefined,
       });
     },

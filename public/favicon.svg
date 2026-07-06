@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Lexia">
+  <style>
+    .bg { fill: #3D6CB0; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #2D518C; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="100" height="100" rx="22" ry="22" />
+  <!-- Serif "L." lettermark (warm white). Geometry mirrors gen_icons.py so the
+       SVG and the rasterized PNG/ICO stay identical. -->
+  <g fill="#F6F8FA">
+    <rect x="33.5" y="30" width="10" height="40" />
+    <rect x="30" y="30" width="17" height="3.5" />
+    <rect x="33.5" y="61.5" width="26.5" height="8.5" />
+    <rect x="30" y="66.5" width="13.5" height="3.5" />
+    <rect x="56.5" y="59.5" width="4" height="10.5" />
+    <circle cx="69" cy="65.5" r="4.8" />
+  </g>
+</svg>

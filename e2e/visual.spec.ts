@@ -56,6 +56,10 @@ test('tokens: annotation encoding + notice chips (design.md 状態別注釈エ�
   expect(await styleOf(page.getByTestId('study-guide-badge-cordial'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
   // Standalone notice number badges keep the category number color.
   expect(await styleOf(page.getByTestId('notice-badge-3'), 'backgroundColor')).toBe(rgb('#3D6CB0'));
+  // D-1 compaction: guide cards start collapsed and the absorbed notices live in the expanded
+  // detail. Expand the owning study cards (decisive → notice 1, cordial → notice 2) first.
+  await page.getByTestId('guide-item-word:decisive').click();
+  await page.getByTestId('guide-item-word:cordial').click();
   // Absorbed notice chips still carry their category colors in the guide.
   expect(await styleOf(page.getByTestId('guide-absorbed-notice-1').getByText('コノテーション'), 'color')).toBe(rgb('#3E8C79'));
   expect(await styleOf(page.getByTestId('guide-absorbed-notice-2').getByText('レジスター'), 'color')).toBe(rgb('#5A6675'));
@@ -98,7 +102,7 @@ test('layout: overhauled setup renders intent / exam picker / word-target / cont
   await expect(page.getByTestId('exam-kind-eiken')).toBeVisible();
   await expect(page.getByTestId('exam-conversion')).toBeVisible();
   // 100-word-step word-target slider with page estimate (Req 7).
-  await expect(page.getByLabelText('文章の長さ')).toBeVisible();
+  await expect(page.getByLabel('文章の長さ')).toBeVisible();
   // Content-type selector incl. stories (Req 6).
   await expect(page.getByTestId('content-type-article')).toBeVisible();
   await expect(page.getByTestId('content-type-short_story')).toBeVisible();

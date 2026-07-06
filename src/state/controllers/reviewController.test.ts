@@ -1,7 +1,7 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { applyReviewRating } from './reviewController';
+import { applyReviewRating, markUnknownFromReading, undoReviewRating } from './reviewController';
 import { loadDashboardSnapshot } from './dashboardController';
 import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories, type Repositories } from '../../infra/persistence/repositories';
@@ -80,6 +80,54 @@ describe('applyReviewRating (Flow 2 wiring)', () => {
   });
 });
 
+describe('markUnknownFromReading (F-3: reading-time「知らなかった」)', () => {
+  it('resets the interval like an Again but logs source=passage (not review)', async () => {
+    const { repos, userId } = await freshEnv();
+    const now = 50 * DAY_MS;
+    await repos.scheduling.upsert(sched(userId, 'w1', { stability: 10, lapses: 0, lastReviewAt: now - 10 * DAY_MS }));
+
+    const next = await markUnknownFromReading(repos, userId, 'w1', now);
+
+    // Same SRS effect as applyReviewRating(rating=1): a lapse is recorded.
+    expect(next.lapses).toBe(1);
+    expect(next.lastSource).toBe('passage');
+    const log = await repos.reviewLog.since(userId, 0);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ wordId: 'w1', rating: 1, source: 'passage' });
+  });
+
+  it('produces the same reschedule as an explicit Again, differing only in the log source', async () => {
+    const now = 50 * DAY_MS;
+    const envA = await freshEnv();
+    const envB = await freshEnv();
+    const seed = (uid: UserId): WordSchedulingState =>
+      sched(uid, 'w1', { stability: 12, lapses: 0, lastReviewAt: now - 12 * DAY_MS });
+    await envA.repos.scheduling.upsert(seed(envA.userId));
+    await envB.repos.scheduling.upsert(seed(envB.userId));
+
+    const viaReview = await applyReviewRating(envA.repos, envA.userId, 'w1', 1, now);
+    const viaReading = await markUnknownFromReading(envB.repos, envB.userId, 'w1', now);
+
+    // The scheduling numbers match; only the provenance (lastSource / log source) differs.
+    expect(viaReading.stability).toBe(viaReview.stability);
+    expect(viaReading.dueAt).toBe(viaReview.dueAt);
+    expect(viaReading.lapses).toBe(viaReview.lapses);
+    expect(viaReview.lastSource).toBe('review');
+    expect(viaReading.lastSource).toBe('passage');
+  });
+
+  it('bootstraps a New word and records a passage-origin lapse', async () => {
+    const { repos, userId } = await freshEnv();
+    const now = 100 * DAY_MS;
+
+    const next = await markUnknownFromReading(repos, userId, 'fresh', now);
+
+    expect(next.stability).toBeGreaterThan(0); // seeded from New then rescheduled
+    const log = await repos.reviewLog.since(userId, 0);
+    expect(log[0]).toMatchObject({ wordId: 'fresh', rating: 1, source: 'passage' });
+  });
+});
+
 describe('dashboard reflection after a review (Flow 2 → DashboardProjector)', () => {
   it("updates today's due count, breakdown and weekly activity", async () => {
     const { db, repos, userId } = await freshEnv();
@@ -100,5 +148,26 @@ describe('dashboard reflection after a review (Flow 2 → DashboardProjector)', 
     expect(after.mastery.total).toBe(1);
     const todayBucket = after.weekly[after.weekly.length - 1];
     expect(todayBucket?.reviewCount).toBe(1);
+  });
+});
+
+describe('undoReviewRating (C-5c "1つ戻る")', () => {
+  it('restores the pre-rating state and appends an offsetting undo log (append-only)', async () => {
+    const { repos, userId } = await freshEnv();
+    const now = 100 * DAY_MS;
+    const prior = sched(userId, 'w1', { stability: 5, dueAt: now - DAY_MS });
+    await repos.scheduling.upsert(prior);
+
+    const rated = await applyReviewRating(repos, userId, 'w1', 3, now);
+    expect(rated.dueAt).toBeGreaterThan(now); // rescheduled forward
+
+    await undoReviewRating(repos, prior, 3, now + 1000);
+
+    const restored = await repos.scheduling.get(userId, 'w1');
+    expect(restored).toEqual(prior); // exact pre-rating state is back
+    const log = await repos.reviewLog.since(userId, 0);
+    expect(log).toHaveLength(2); // review row is kept; undo row is appended
+    expect(log[0]).toMatchObject({ rating: 3, source: 'review' });
+    expect(log[1]).toMatchObject({ rating: 3, source: 'undo' });
   });
 });

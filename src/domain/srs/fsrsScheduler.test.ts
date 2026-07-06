@@ -50,6 +50,26 @@ describe('FsrsScheduler.initial', () => {
     const s = fsrs.review(graduated({ stability: undefined, reps: 0, mastery: 'New', level: 'B2' }), 3, now);
     expect(s.level).toBe('B2');
   });
+
+  it('carries seededAt across the first review so the daily new-word cap (C-5b) is not reset', () => {
+    const seededAt = 500_000;
+    const now = 1_000_000;
+    // A freshly-seeded New word: stability undefined, seededAt set at introduction time.
+    const seeded = graduated({ stability: undefined, reps: 0, mastery: 'New', seededAt });
+    // Both reading-time signals bootstrap through seed(): read_through → Good (3), lookup → Again (1).
+    for (const rating of [3, 1] as const) {
+      const next = fsrs.review(seeded, rating, now);
+      expect(next.seededAt).toBe(seededAt);
+    }
+    // simulate (drives recallEventService) must preserve it too.
+    expect(fsrs.simulate(seeded, 3, now).seededAt).toBe(seededAt);
+  });
+
+  it('carries the suspended flag across the first review so a known-declared word is not un-suspended', () => {
+    const now = 1_000_000;
+    const seeded = graduated({ stability: undefined, reps: 0, mastery: 'New', suspended: true });
+    expect(fsrs.review(seeded, 3, now).suspended).toBe(true);
+  });
 });
 
 describe('FsrsScheduler.retrievability / nextIntervalMs', () => {

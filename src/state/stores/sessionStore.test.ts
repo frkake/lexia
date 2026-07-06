@@ -85,6 +85,25 @@ describe('sessionStore', () => {
     expect(store.getState().passage?.passageId).toBe('p1');
   });
 
+  it('defaults lastOpenedAt to the start time and carries it into the persisted progress (F-2)', () => {
+    const store = createSessionStore();
+    store.getState().startPassage(indexedPassage(), 1_000);
+    expect(store.getState().openedAt).toBe(1_000);
+    expect(store.getState().toReadingProgress(U)).toMatchObject({ startedAt: 1_000, lastOpenedAt: 1_000 });
+  });
+
+  it('records a distinct openedAt when reopening a passage started earlier (F-2)', () => {
+    const store = createSessionStore();
+    // startedAt preserved from the original start (100), openedAt = actual reopen time (5_000).
+    store.getState().startPassage(indexedPassage(), 100, 5_000);
+    store.getState().updateProgress(2);
+    expect(store.getState().toReadingProgress(U)).toMatchObject({
+      startedAt: 100,
+      lastOpenedAt: 5_000,
+      sentenceIndex: 2,
+    });
+  });
+
   it('marks completion at 100 percent', () => {
     const store = createSessionStore();
     store.getState().startPassage(indexedPassage(), 1_000);

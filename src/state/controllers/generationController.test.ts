@@ -1,12 +1,19 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
 import { describe, it, expect } from 'vitest';
-import { runGenerationPipeline, type GenerationControllerDeps } from './generationController';
+import {
+  backfillPassageIllustration,
+  runGenerationPipeline,
+  type BackfillIllustrationDeps,
+  type GenerationControllerDeps,
+} from './generationController';
+import { isImageRef, imageIdFromRef } from '../../infra/persistence/imageStore';
 import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
 import { createSessionStore } from '../stores/sessionStore';
 import { createPlayerStore } from '../stores/playerStore';
 import { tokenizer } from '../../domain/tokenizer/joinService';
+import { DAY_MS } from '../../domain/srs/parameters';
 import { ok } from '../../types/result';
 import type { GenerationOrchestrator } from '../../domain/generation/generationOrchestrator';
 import type {
@@ -128,6 +135,9 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect(seeded).toBeDefined();
     expect(seeded?.mastery).toBe('New');
     expect(seeded?.level).toBe('B1');
+    // A-1-2: a merely-read word is seeded due NEXT day (now+1d), not immediately, and stays New.
+    expect(seeded?.dueAt).toBe(1000 + DAY_MS);
+    expect(seeded?.stability).toBeUndefined();
     const inProgress = await repos.progress.byStatus(userId, 'in_progress');
     expect(inProgress.map((p) => p.passageId)).toContain(PASSAGE_ID);
   });
@@ -242,5 +252,98 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect(outcome.error).toEqual({ kind: 'refusal' });
     expect(session.getState().passage).toBeNull();
     expect(player.getState().status).toBe('idle');
+  });
+});
+
+describe('backfillPassageIllustration (E-3(e) scene backfill)', () => {
+  const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+
+  function backfillDeps(base: Awaited<ReturnType<typeof env>>, illustrate?: () => Promise<string>): BackfillIllustrationDeps {
+    return {
+      passages: base.repos.passages,
+      images: base.repos.images,
+      session: base.session,
+      illustratePassage: illustrate,
+      userId: base.userId,
+      now: () => 2000,
+    };
+  }
+
+  it('backfills a missing scene, stores the image in the images table, and refreshes the reader', async () => {
+    const base = await env(tts);
+    const { repos, session, userId } = base;
+    await repos.passages.put({ passageId: PASSAGE_ID, userId, createdAt: 1000, passage: passageOutput() });
+    session.getState().startPassage(indexedPassage(), 1000);
+
+    let calls = 0;
+    const stored = await backfillPassageIllustration(
+      backfillDeps(base, async () => {
+        calls += 1;
+        return 'data:image/png;base64,U0NFTkU='; // valid base64 ("SCENE")
+      }),
+      PASSAGE_ID,
+    );
+
+    expect(stored).toBe(true);
+    expect(calls).toBe(1);
+    // The passage now references the image by a lexia-image: key rather than an inline data URL (D7).
+    const persistedUrl = (await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl;
+    expect(isImageRef(persistedUrl)).toBe(true);
+    // …and the referenced blob lives in the images table.
+    const images = await repos.images.all(userId);
+    expect(images).toHaveLength(1);
+    expect(images[0]!.imageId).toBe(imageIdFromRef(persistedUrl));
+    // The active reader is refreshed in place so the scene appears while reading.
+    expect(session.getState().passage?.source.meta.sceneIllustrationUrl).toBe(persistedUrl);
+  });
+
+  it('is a no-op when the passage already has a scene illustration', async () => {
+    const base = await env(tts);
+    const { repos, userId } = base;
+    const passage = passageOutput();
+    passage.meta.sceneIllustrationUrl = 'data:image/png;base64,OLD';
+    await repos.passages.put({ passageId: PASSAGE_ID, userId, createdAt: 1000, passage });
+
+    let calls = 0;
+    const stored = await backfillPassageIllustration(
+      backfillDeps(base, async () => {
+        calls += 1;
+        return 'data:image/png;base64,NEW';
+      }),
+      PASSAGE_ID,
+    );
+
+    expect(stored).toBe(false);
+    expect(calls).toBe(0);
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBe('data:image/png;base64,OLD');
+    expect(await repos.images.all(userId)).toHaveLength(0);
+  });
+
+  it('degrades (no write, no image row) when illustration generation fails', async () => {
+    const base = await env(tts);
+    const { repos, userId } = base;
+    await repos.passages.put({ passageId: PASSAGE_ID, userId, createdAt: 1000, passage: passageOutput() });
+
+    const stored = await backfillPassageIllustration(
+      backfillDeps(base, async () => {
+        throw new Error('image down');
+      }),
+      PASSAGE_ID,
+    );
+
+    expect(stored).toBe(false);
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBeUndefined();
+    expect(await repos.images.all(userId)).toHaveLength(0);
+  });
+
+  it('is a no-op when no illustrator is configured', async () => {
+    const base = await env(tts);
+    const { repos, userId } = base;
+    await repos.passages.put({ passageId: PASSAGE_ID, userId, createdAt: 1000, passage: passageOutput() });
+
+    const stored = await backfillPassageIllustration(backfillDeps(base, undefined), PASSAGE_ID);
+
+    expect(stored).toBe(false);
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBeUndefined();
   });
 });

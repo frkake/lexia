@@ -76,6 +76,28 @@ describe('RecallEventService.apply', () => {
     expect(third.logEntry).not.toBeNull(); // cooldown elapsed
   });
 
+  it('suppresses a read-through within the cooldown of a same-day EXPLICIT review (cross-source, C-5d)', () => {
+    // A word rated「知らなかった」at t0 (its lastUpdate). A read-through fired on completion an hour
+    // later must not overwrite that lapse's schedule — the cross-source cooldown suppresses it.
+    const state = st({ stability: 4, lapses: 1, learningStep: 1 });
+    const t0 = 5 * DAY_MS;
+    const readThrough = apply(state, { kind: 'read_through', wordId: 'w1', at: t0 + 3_600_000 }, t0);
+    expect(readThrough.logEntry).toBeNull();
+    expect(readThrough.next).toEqual(state); // the lapse's 10-minute step survives to completion
+  });
+
+  it('preserves seededAt on a freshly-seeded New word so reading defeats no daily new-word cap (C-5b)', () => {
+    // A New word woven into a passage: stability undefined, seededAt stamped at generation time.
+    const seededAt = 2 * DAY_MS;
+    const at = 3 * DAY_MS;
+    const seeded = st({ stability: undefined, reps: 0, mastery: 'New', seededAt });
+    // Both reading-time interactions bootstrap through fsrs.seed(): read_through and lookup.
+    for (const kind of ['read_through', 'lookup'] as const) {
+      const { next } = apply(seeded, { kind, wordId: 'w1', at }, null);
+      expect(next.seededAt).toBe(seededAt); // introduction timestamp survives → countSeededSince intact
+    }
+  });
+
   it('does not mutate the input state', () => {
     const state = st({ stability: 6, mastery: 'Learning' });
     const snapshot = structuredClone(state);

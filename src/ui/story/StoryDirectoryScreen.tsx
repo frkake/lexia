@@ -7,6 +7,7 @@
 
 import type { CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
+import { AssetImage } from '../shared/AssetImage';
 import type { StoryCharacter, StoryPlan } from '../../types/domain';
 
 export interface StoryChapterRow {
@@ -124,7 +125,7 @@ function CharacterPortrait({ character }: { character: StoryCharacter }) {
   return (
     <>
       {url ? (
-        <img src={url} alt={character.name} style={portraitStyle} />
+        <AssetImage src={url} alt={character.name} style={portraitStyle} />
       ) : (
         <div aria-hidden style={{ ...portraitStyle, background: colors.avatarBg }} />
       )}

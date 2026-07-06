@@ -24,10 +24,23 @@ const KIND_LABELS: Record<ExamKind, string> = {
 
 const KINDS: ExamKind[] = ['eiken', 'toeic', 'toefl', 'ielts'];
 
+/**
+ * A-3-1: direct score entry for the numeric exams so a "TOEIC 900" learner can type their concrete
+ * goal instead of snapping to a coarse chip. The raw string is stored on `ExamCriterion.value`; the
+ * domain (`examScale.examToDifficultyTarget`) parses it into a CEFR pivot + sub-band. Ranges mirror
+ * `examScale`'s NUMERIC_RANGE. 英検 uses fixed grades, so it has no numeric input.
+ */
+const SCORE_INPUTS: Record<Exclude<ExamKind, 'eiken'>, { min: number; max: number; step: number; placeholder: string }> = {
+  toeic: { min: 10, max: 990, step: 5, placeholder: '例: 900' },
+  toefl: { min: 0, max: 120, step: 1, placeholder: '例: 90' },
+  ielts: { min: 0, max: 9, step: 0.5, placeholder: '例: 7.0' },
+};
+
 export function ExamLevelPicker({ value, onChange }: ExamLevelPickerProps) {
   const options = examScale.optionsFor(value.kind);
   // Conversion row for whatever CEFR the current selection resolves to.
   const display = examScale.cefrToExam(examScale.examToCefr(value));
+  const scoreInput = value.kind === 'eiken' ? null : SCORE_INPUTS[value.kind];
 
   const switchKind = (kind: ExamKind): void => {
     if (kind === value.kind) return;
@@ -73,15 +86,66 @@ export function ExamLevelPicker({ value, onChange }: ExamLevelPickerProps) {
         })}
       </div>
 
+      {scoreInput ? (
+        <label style={scoreRowStyle}>
+          <span style={scoreLabelStyle}>スコアを直接入力</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            data-testid="exam-score-input"
+            aria-label={`${KIND_LABELS[value.kind]} の目標スコア`}
+            min={scoreInput.min}
+            max={scoreInput.max}
+            step={scoreInput.step}
+            value={value.value}
+            placeholder={scoreInput.placeholder}
+            onChange={(e) => onChange({ kind: value.kind, value: e.target.value })}
+            style={scoreInputStyle}
+          />
+          <span style={scoreHintStyle}>チップは近似値のクイック選択</span>
+        </label>
+      ) : null}
+
       <div
         data-testid="exam-conversion"
         style={{ marginTop: 10, fontFamily: fonts.ui, fontSize: 11, color: colors.faint, lineHeight: 1.6 }}
       >
-        おおよその対応: 英検 {display.eiken} · TOEIC {display.toeic} · TOEFL {display.toefl} · IELTS {display.ielts}
+        CEFR {display.cefr} 相当 — 英検 {display.eiken} · TOEIC {display.toeic} · TOEFL {display.toefl} · IELTS {display.ielts}
       </div>
     </div>
   );
 }
+
+const scoreRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+  marginTop: 10,
+};
+
+const scoreLabelStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 11.5,
+  color: colors.inkSoft,
+};
+
+const scoreInputStyle: CSSProperties = {
+  width: 96,
+  fontFamily: fonts.num,
+  fontSize: 13,
+  color: colors.primaryDeep,
+  background: colors.surfaceCard,
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.control,
+  padding: '7px 10px',
+};
+
+const scoreHintStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 10.5,
+  color: colors.faint,
+};
 
 const kindStyle = (on: boolean): CSSProperties => ({
   fontFamily: fonts.ui,

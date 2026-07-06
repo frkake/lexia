@@ -61,6 +61,38 @@ describe('examScale.cefrToExam', () => {
   });
 });
 
+describe('examScale.examToDifficultyTarget (A-3-1 sub-band)', () => {
+  it('splits the TOEIC B2 band (785–944) into thirds at its boundary scores', () => {
+    // Boundary values from the plan's test方針: 785 / 838 / 900 / 944.
+    expect(examScale.examToDifficultyTarget({ kind: 'toeic', value: '785' })).toMatchObject({ level: 'B2', subBand: 'low' });
+    expect(examScale.examToDifficultyTarget({ kind: 'toeic', value: '838' })).toMatchObject({ level: 'B2', subBand: 'mid' });
+    expect(examScale.examToDifficultyTarget({ kind: 'toeic', value: '900' })).toMatchObject({ level: 'B2', subBand: 'high' });
+    expect(examScale.examToDifficultyTarget({ kind: 'toeic', value: '944' })).toMatchObject({ level: 'B2', subBand: 'high' });
+  });
+
+  it('carries the concrete exam goal as a display label', () => {
+    expect(examScale.examToDifficultyTarget({ kind: 'toeic', value: '900' }).examLabel).toBe('TOEIC 900');
+    expect(examScale.examToDifficultyTarget({ kind: 'eiken', value: '準1' }).examLabel).toBe('英検準1級');
+    expect(examScale.examToDifficultyTarget({ kind: 'toefl', value: '100' }).examLabel).toBe('TOEFL 100');
+    expect(examScale.examToDifficultyTarget({ kind: 'ielts', value: '6.0' }).examLabel).toBe('IELTS 6.0');
+  });
+
+  it('resolves 英検 grades to mid (grades carry no finer band position)', () => {
+    expect(examScale.examToDifficultyTarget({ kind: 'eiken', value: '2' })).toEqual({ level: 'B1', subBand: 'mid', examLabel: '英検2級' });
+  });
+
+  it('keeps the CEFR pivot identical to examToCefr', () => {
+    for (const c of [
+      { kind: 'toeic', value: '800' },
+      { kind: 'toeic', value: '900' },
+      { kind: 'toefl', value: '117' },
+      { kind: 'ielts', value: '9.0' },
+    ] as const) {
+      expect(examScale.examToDifficultyTarget(c).level).toBe(examScale.examToCefr(c));
+    }
+  });
+});
+
 describe('examScale.optionsFor', () => {
   it('returns options in ascending CEFR order that each map back to that CEFR', () => {
     const kinds: ExamKind[] = ['eiken', 'toeic', 'toefl', 'ielts'];

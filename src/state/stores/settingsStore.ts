@@ -8,8 +8,13 @@
 
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
+import { DAILY_REVIEW_LIMIT } from '../../domain/srs/parameters';
 import type { SettingsRepository } from '../../types/ports';
 import type { Settings, SetupConfig, UserId } from '../../types/domain';
+
+/** Per-day review-card ceiling is settable within these bounds (learning-policy.md 設定値表). */
+export const DAILY_REVIEW_LIMIT_MIN = 20;
+export const DAILY_REVIEW_LIMIT_MAX = 200;
 
 export const THEME_KEY = 'lexia.theme';
 export const LOCALE_KEY = 'lexia.locale';
@@ -39,6 +44,8 @@ export interface SettingsState {
   theme: Settings['theme'];
   locale: string;
   lastSetup: SetupConfig;
+  /** Per-day review-card ceiling (C-5c); default `DAILY_REVIEW_LIMIT`, settable 20–200. */
+  dailyReviewLimit: number;
 
   /** Bind the repository + namespace (after the DB opens). */
   configure(repo: SettingsRepository, userId: UserId): void;
@@ -54,6 +61,8 @@ export interface SettingsState {
   setLastSetup(setup: SetupConfig): void;
   setTheme(theme: Settings['theme']): void;
   setLocale(locale: string): void;
+  /** Set the per-day review ceiling; the value is clamped to [20, 200]. */
+  setDailyReviewLimit(limit: number): void;
 }
 
 export interface SettingsStoreDeps {
@@ -88,6 +97,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
         theme: s.theme,
         locale: s.locale,
         lastSetup: s.lastSetup,
+        dailyReviewLimit: s.dailyReviewLimit,
       };
     };
 
@@ -111,6 +121,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
       theme: 'system',
       locale: 'ja',
       lastSetup: DEFAULT_SETUP,
+      dailyReviewLimit: DAILY_REVIEW_LIMIT,
 
       configure(nextRepo, nextUserId) {
         repo = nextRepo;
@@ -132,6 +143,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
                 voiceId: stored.voiceId,
                 rate: stored.rate,
                 lastSetup: stored.lastSetup,
+                ...(stored.dailyReviewLimit !== undefined ? { dailyReviewLimit: stored.dailyReviewLimit } : {}),
               }
             : {}),
         });
@@ -162,6 +174,10 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
       setLocale(locale) {
         storage?.setItem(LOCALE_KEY, locale);
         update({ locale });
+      },
+      setDailyReviewLimit(limit) {
+        const clamped = Math.round(Math.min(DAILY_REVIEW_LIMIT_MAX, Math.max(DAILY_REVIEW_LIMIT_MIN, limit)));
+        update({ dailyReviewLimit: clamped });
       },
     };
   });

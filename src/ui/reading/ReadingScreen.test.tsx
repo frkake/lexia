@@ -111,6 +111,49 @@ describe('<ReadingScreen/>', () => {
     expect(getByRole('alert').textContent).toContain('本文イラストを再生成できませんでした。');
   });
 
+  it('shows a failure banner and regenerate button when the annotation pass failed (F-6)', () => {
+    const passage = makePassage();
+    passage.source.meta.annotationStatus = 'failed';
+    const onRegenerateAnnotation = vi.fn();
+    const { getByTestId } = renderScreen({ passage, onRegenerateAnnotation });
+    expect(getByTestId('annotation-status-banner').textContent).toContain('注釈の生成に失敗しました');
+    fireEvent.click(getByTestId('regenerate-annotation'));
+    expect(onRegenerateAnnotation).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a partial-annotation message when the pass only partly completed (F-6)', () => {
+    const passage = makePassage();
+    passage.source.meta.annotationStatus = 'partial';
+    const { getByTestId } = renderScreen({ passage, onRegenerateAnnotation: vi.fn() });
+    expect(getByTestId('annotation-status-banner').textContent).toContain('注釈の一部だけ生成されました');
+  });
+
+  it('hides the annotation banner when the pass completed (or was never run)', () => {
+    const complete = makePassage();
+    complete.source.meta.annotationStatus = 'complete';
+    const { queryByTestId } = renderScreen({ passage: complete, onRegenerateAnnotation: vi.fn() });
+    expect(queryByTestId('annotation-status-banner')).toBeNull();
+    // Absent status (a gateway/mock without the enrichment) also shows no banner.
+    const { queryByTestId: queryUnset } = renderScreen({ passage: makePassage(), onRegenerateAnnotation: vi.fn() });
+    expect(queryUnset('annotation-status-banner')).toBeNull();
+  });
+
+  it('shows annotation regeneration busy and error states', () => {
+    const passage = makePassage();
+    passage.source.meta.annotationStatus = 'failed';
+    const { getByTestId, getByText } = renderScreen({
+      passage,
+      onRegenerateAnnotation: vi.fn(),
+      regeneratingAnnotation: true,
+      annotationError: '注釈を再生成できませんでした。時間をおいて再試行してください。',
+    });
+    const button = getByTestId('regenerate-annotation') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(getByText('生成しています…')).toBeTruthy();
+    expect(getByText('注釈を再生成できませんでした。時間をおいて再試行してください。')).toBeTruthy();
+  });
+
   it('renders the annotated prose', () => {
     const { getByTestId } = renderScreen({ passage: makePassage() });
     const prose = within(getByTestId('passage-prose'));
@@ -161,6 +204,8 @@ describe('<ReadingScreen/>', () => {
     const { getByText, getByTestId } = renderScreen({ passage: makePassage() });
     expect(getByText('学習ガイド')).toBeTruthy();
     expect(getByTestId('guide-item-word:restless')).toBeTruthy();
+    // D-1: the absorbed notice detail lives in the expand-on-click card body.
+    fireEvent.click(getByTestId('guide-item-word:restless'));
     expect(getByTestId('guide-absorbed-notice-1').textContent).toContain('不安・苛立ちを含む否定的な響き。');
   });
 
@@ -170,6 +215,8 @@ describe('<ReadingScreen/>', () => {
     Element.prototype.scrollIntoView = scrollSpy;
     try {
       const { getByTestId, queryByTestId } = renderScreen({ passage: makePassage() });
+      // Expand the study card so its absorbed notice is rendered, then click it.
+      fireEvent.click(getByTestId('guide-item-word:restless'));
       fireEvent.click(getByTestId('guide-absorbed-notice-1'));
       expect(scrollSpy).toHaveBeenCalledTimes(1);
       expect(queryByTestId('notice-badge-1')).toBeNull();
@@ -184,6 +231,26 @@ describe('<ReadingScreen/>', () => {
     const { getByTestId } = renderScreen({ passage: makePassage(), onCompleteReading });
     fireEvent.click(getByTestId('reading-complete'));
     expect(onCompleteReading).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires a lookup callback when a study word detail is opened (C-5d)', () => {
+    const onOpenWordDetail = vi.fn();
+    const { getByTestId } = renderScreen({ passage: makePassage(), onOpenWordDetail });
+    fireEvent.click(within(getByTestId('passage-prose')).getByText('restless'));
+    expect(onOpenWordDetail).toHaveBeenCalledWith('restless');
+  });
+
+  it('shows read-through completion feedback with credit counts and cannot be re-recorded (C-5d)', async () => {
+    const onCompleteReading = vi.fn().mockResolvedValue({ total: 1, needReview: 0 });
+    const { getByTestId, findByTestId, queryByTestId } = renderScreen({ passage: makePassage(), onCompleteReading });
+    fireEvent.click(getByTestId('reading-complete'));
+    const summary = await findByTestId('reading-completed-summary');
+    expect(summary.textContent).toContain('読了済み ✓');
+    expect(summary.textContent).toContain('1 語にクレジット');
+    expect(summary.textContent).toContain('0 語は要復習');
+    expect(queryByTestId('reading-complete')).toBeNull(); // record button is gone — no re-record
+    expect(getByTestId('reading-completed-review')).toBeTruthy();
+    expect(getByTestId('reading-completed-generate')).toBeTruthy();
   });
 
   it('offers a long-story continuation action when wired', () => {
@@ -279,7 +346,9 @@ describe('<ReadingScreen/> 3-zone layout (feature-flagged, 6.1)', () => {
       studyWords: [{ wordId: 'restless', surface: 'restless', meaningJa: '落ち着かない' }],
     });
     expect(getByText('学習ガイド')).toBeTruthy();
+    // The gloss shows on the collapsed summary; the absorbed notice appears once the card is expanded.
     expect(getByTestId('guide-item-word:restless').textContent).toContain('落ち着かない');
+    fireEvent.click(getByTestId('guide-item-word:restless'));
     expect(getByTestId('guide-absorbed-notice-1')).toBeTruthy();
   });
 
@@ -370,5 +439,87 @@ describe('<ReadingScreen/> 3-zone layout (feature-flagged, 6.1)', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// ── F-2: saved-position restore ──────────────────────────────────────────────
+
+function makeMultiSentencePassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'Long Read', intent: 'daily', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 40 },
+    sentences: Array.from({ length: 8 }, (_, i) => ({ tokens: ['Sentence', String(i), '.'], translationJa: `${i}文目。` })),
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+  };
+  return tokenizer.index('long1', source);
+}
+
+describe('<ReadingScreen/> saved-position restore (F-2)', () => {
+  let scrolled: { el: HTMLElement; opts: unknown }[] = [];
+
+  beforeEach(() => {
+    scrolled = [];
+    // jsdom has no layout/scroll; capture scrollIntoView targets and run rAF synchronously.
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: HTMLElement, opts: unknown) {
+        scrolled.push({ el: this, opts });
+      },
+    });
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 1;
+    });
+  });
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    vi.unstubAllGlobals();
+  });
+
+  it('centers the saved sentence and shows the resume snackbar when reopening mid-passage', () => {
+    act(() => {
+      sessionStore.getState().startPassage(makeMultiSentencePassage(), 1_000);
+      sessionStore.getState().updateProgress(3);
+    });
+    const { getByTestId } = renderScreen(); // no passage prop → uses the session passage
+
+    expect(getByTestId('reading-restore-notice').textContent).toContain('前回の位置から再開しました');
+    const centered = scrolled.find((s) => (s.el.getAttribute('data-sentence-index')) === '3');
+    expect(centered).toBeTruthy();
+    expect(centered!.opts).toMatchObject({ block: 'center' });
+  });
+
+  it('does not show the snackbar when opening at the start (sentence 0)', () => {
+    act(() => {
+      sessionStore.getState().startPassage(makeMultiSentencePassage(), 1_000);
+    });
+    const { queryByTestId } = renderScreen();
+    expect(queryByTestId('reading-restore-notice')).toBeNull();
+  });
+
+  it('"先頭から読む" resets the position to the top and dismisses the snackbar', () => {
+    act(() => {
+      sessionStore.getState().startPassage(makeMultiSentencePassage(), 1_000);
+      sessionStore.getState().updateProgress(3);
+    });
+    const { getByTestId, queryByTestId } = renderScreen();
+
+    act(() => {
+      fireEvent.click(getByTestId('reading-restart-top'));
+    });
+    expect(sessionStore.getState().sentenceIndex).toBe(0);
+    expect(queryByTestId('reading-restore-notice')).toBeNull();
+  });
+
+  it('does not track/restore a standalone passage prop that is not the session passage', () => {
+    // Session holds a DIFFERENT passage at a non-zero position; the prop passage must be untouched.
+    act(() => {
+      sessionStore.getState().startPassage(makeMultiSentencePassage(), 1_000);
+      sessionStore.getState().updateProgress(3);
+    });
+    const { queryByTestId } = renderScreen({ passage: makePassage() });
+    expect(queryByTestId('reading-restore-notice')).toBeNull();
   });
 });

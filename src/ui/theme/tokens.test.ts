@@ -8,6 +8,7 @@ import {
   fonts,
   radius,
 } from './tokens';
+import { contrastRatio, AA_NORMAL_TEXT } from './contrast';
 
 /**
  * These assertions pin the design-token single source of truth (design.md
@@ -62,8 +63,10 @@ describe('design tokens', () => {
     });
   });
 
-  it('groups grammar cues with the blue (collocation) number color', () => {
-    expect(noticeStyle('grammar_pattern').numberColor).toBe('#3D6CB0');
+  it('groups syntax cues (grammar_pattern / sentence_structure) with the purple syntax color (C-4)', () => {
+    expect(noticeStyle('grammar_pattern').numberColor).toBe('#7A57C4');
+    expect(noticeStyle('sentence_structure').numberColor).toBe('#7A57C4');
+    expect(noticeStyle('grammar_pattern').color).toBe('#5B3B94');
   });
 
   it('styles idiom with the terracotta group and phrasal_verb with the blue group', () => {
@@ -118,9 +121,14 @@ describe('cueHighlight (Spotlight Link active styling)', () => {
 
   it('collocation group rings in the deep-blue family', () => {
     expect(cueHighlight('collocation').ring).toBe('#2D518C'); // primaryDeep
-    expect(cueHighlight('grammar_pattern').ring).toBe('#2D518C');
     expect(cueHighlight('phrasal_verb').ring).toBe('#2D518C');
     expect(cueHighlight('collocation').fill).toBe('rgba(61, 108, 176, 0.1)');
+  });
+
+  it('syntax cues ring in the deep-purple family (C-4)', () => {
+    expect(cueHighlight('grammar_pattern').ring).toBe('#5B3B94'); // syntaxDeep
+    expect(cueHighlight('sentence_structure').ring).toBe('#5B3B94');
+    expect(cueHighlight('grammar_pattern').fill).toBe('rgba(122, 87, 196, 0.1)'); // syntax #7A57C4 @ 0.10
   });
 
   it('register group rings in the gray family', () => {
@@ -132,5 +140,35 @@ describe('cueHighlight (Spotlight Link active styling)', () => {
     expect(colors.terracottaDeep).toBe('#A65A41');
     expect(cueHighlight('idiom').ring).toBe('#A65A41');
     expect(cueHighlight('idiom').fill).toBe('rgba(192, 122, 99, 0.1)');
+  });
+});
+
+describe('WCAG AA contrast (D-8)', () => {
+  // The two neutral surfaces every screen paints text on.
+  const surfaces = { surfacePage: colors.surfacePage, surfaceCard: colors.surfaceCard };
+  // Tokens used as body / secondary text on those surfaces. Each must clear AA (4.5:1).
+  const textTokens = ['ink', 'body', 'inkSoft', 'muted', 'faint', 'faint2', 'fainter'] as const;
+
+  for (const token of textTokens) {
+    for (const [surfaceName, surface] of Object.entries(surfaces)) {
+      it(`${token} text clears AA on ${surfaceName}`, () => {
+        expect(contrastRatio(colors[token], surface)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+      });
+    }
+  }
+
+  it('exposes terracottaDeep as an AA-passing error-text token on both surfaces', () => {
+    // Error text should reference terracottaDeep, not terracotta (which is a sub-AA accent).
+    expect(contrastRatio(colors.terracottaDeep, colors.surfacePage)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+    expect(contrastRatio(colors.terracottaDeep, colors.surfaceCard)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+  });
+
+  it('keeps the secondary-grey ramp ordering (muted darkest → fainter lightest)', () => {
+    const lum = (hex: string): number => contrastRatio(hex, '#000000'); // higher = lighter
+    expect(lum(colors.muted)).toBeLessThan(lum(colors.faint2));
+    expect(lum(colors.faint2)).toBeLessThan(lum(colors.faint));
+    expect(lum(colors.faint)).toBeLessThan(lum(colors.fainter));
+    // …and all remain lighter than the darker inkSoft above them in the ramp.
+    expect(lum(colors.inkSoft)).toBeLessThan(lum(colors.muted));
   });
 });

@@ -288,6 +288,23 @@ describe('<PassageRenderer/> sentence-level 2-column grid (3.1)', () => {
     expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('grid');
   });
 
+  it('defaults to the two-column grid with a rendered aside cell (asideEnabled true)', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    expect(getByTestId('sentence-row-0').style.gridTemplateColumns).toBe('minmax(0, 1.6fr) minmax(0, 1fr)');
+    expect(getByTestId('sentence-aside-0')).toBeTruthy();
+  });
+
+  it('collapses to a single full-width column and drops the aside when asideEnabled is false (F-8①)', () => {
+    const { getByTestId, queryByTestId } = render(
+      <PassageRenderer passage={makePassage()} layout="grid" asideEnabled={false} />,
+    );
+    // Right translation column is gone; the English cell spans the whole width.
+    expect(getByTestId('sentence-row-0').style.gridTemplateColumns).toBe('minmax(0, 1fr)');
+    expect(queryByTestId('sentence-aside-0')).toBeNull();
+    expect(queryByTestId('sentence-aside-1')).toBeNull();
+    expect(getByTestId('sentence-en-0')).toBeTruthy();
+  });
+
   it('still defaults to flowing prose when no layout is given (old layout preserved)', () => {
     const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} />);
     expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('prose');
@@ -488,5 +505,245 @@ describe('<PassageRenderer/> Spotlight Link (cue ↔ span)', () => {
     const seg = container.querySelector('[data-cue-index~="1"]') as HTMLElement;
     expect(seg.style.background).toBe('');
     expect(seg.style.boxShadow).toBe('');
+  });
+});
+
+describe('<PassageRenderer/> narrow inline notice popover (D-1 mobile fallback)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('opens an inline popover under the badge instead of scrolling to the rail, preserving scroll', () => {
+    const scrollSpy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} isNarrow />);
+      expect(queryByTestId('inline-notice-popover-1')).toBeNull();
+
+      fireEvent.click(getByTestId('notice-badge-1'));
+      // The cue is pinned (spotlight) and its explanation shows inline — no scroll to the stacked rail.
+      expect(readingUiStore.getState().pinnedCueIndex).toBe(1);
+      expect(scrollSpy).not.toHaveBeenCalled();
+      expect(getByTestId('inline-notice-popover-1').textContent).toContain('不安・苛立ちを含む否定的な響き。');
+
+      // The close button dismisses it.
+      fireEvent.click(getByTestId('inline-notice-close-1'));
+      expect(queryByTestId('inline-notice-popover-1')).toBeNull();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('re-tapping the same badge toggles the popover shut', () => {
+    const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} isNarrow />);
+    fireEvent.click(getByTestId('notice-badge-1'));
+    expect(getByTestId('inline-notice-popover-1')).toBeTruthy();
+    fireEvent.click(getByTestId('notice-badge-1'));
+    expect(queryByTestId('inline-notice-popover-1')).toBeNull();
+  });
+
+  it('keeps the wide-layout behavior (no inline popover, still pins the cue) when not narrow', () => {
+    const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    fireEvent.click(getByTestId('notice-badge-1'));
+    // Wide layout: the badge pins the cue and scrolls to the rail (rail absent here) — never an inline popover.
+    expect(readingUiStore.getState().pinnedCueIndex).toBe(1);
+    expect(queryByTestId('inline-notice-popover-1')).toBeNull();
+  });
+});
+
+/** A phrasal verb ("come up with") the model self-reported in expressionSpans (B-1 / B-2). */
+function makeExpressionPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 9 },
+    sentences: [
+      { tokens: ['We', 'need', 'to', 'come', 'up', 'with', 'a', 'plan', '.'], translationJa: '計画を思いつく必要がある。' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+    expressionSpans: [
+      { span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 6 }, surface: 'come up with', category: 'phrasal_verb', meaningJa: '思いつく' },
+    ],
+  };
+  return tokenizer.index('p-expr', source);
+}
+
+/** An idiom span ("take risks into account") that wraps a NEW target word ("risks"). */
+function makeExpressionWithTargetPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 1, reviewCount: 0, approxWords: 6 },
+    sentences: [{ tokens: ['They', 'take', 'risks', 'into', 'account', '.'], translationJa: 'リスクを考慮に入れる。' }],
+    targetSpans: [
+      { sentenceIndex: 0, tokenStart: 2, tokenEnd: 3, wordId: 'risks', surface: 'risks', masteryDensity: 'new' },
+    ],
+    collocationSpans: [],
+    noticeCues: [],
+    expressionSpans: [
+      { span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 5 }, surface: 'take risks into account', category: 'idiom', meaningJa: '考慮に入れる' },
+    ],
+  };
+  return tokenizer.index('p-expr-target', source);
+}
+
+describe('<PassageRenderer/> expression spans (B-1 / B-2)', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('marks a self-reported expression in-text with its category and connects the full extent', () => {
+    const { container, getByText } = render(<PassageRenderer passage={makeExpressionPassage()} />);
+    const segs = Array.from(container.querySelectorAll('[data-expression-category="phrasal_verb"]'));
+    expect(segs.length).toBeGreaterThan(0);
+    // The whole expression — words + interior gaps — carries the underline channel.
+    expect(segs.map((s) => s.textContent).join('')).toBe('come up with');
+    // Tokens outside the expression are untouched.
+    expect(getByText('plan').closest('[data-expression-category]')).toBeNull();
+  });
+
+  it('surfaces the expression meaningJa as a title (legend-style gloss)', () => {
+    const { container } = render(<PassageRenderer passage={makeExpressionPassage()} />);
+    const seg = container.querySelector('[data-expression-category="phrasal_verb"]') as HTMLElement;
+    expect(seg.getAttribute('title')).toBe('思いつく');
+  });
+
+  it('layers the expression underline over a target inside it without dropping the mastery encoding', () => {
+    const { getByText } = render(<PassageRenderer passage={makeExpressionWithTargetPassage()} />);
+    const risks = getByText('risks');
+    // Target keeps its mastery-density encoding …
+    expect(risks.getAttribute('data-kind')).toBe('new');
+    // … and is additionally wrapped by the expression underline layer.
+    expect(risks.closest('[data-expression-category="idiom"]')).not.toBeNull();
+  });
+
+  it('renders nothing extra for passages generated before expressionSpans existed (back-compat)', () => {
+    const { container } = render(<PassageRenderer passage={makePassage()} />);
+    expect(container.querySelector('[data-expression-category]')).toBeNull();
+  });
+});
+
+/** A three-sentence passage split into two paragraphs (F-8②). */
+function makeParagraphPassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', intent: 'business', level: 'B2', newCount: 0, reviewCount: 0, approxWords: 6 },
+    sentences: [
+      { tokens: ['Alpha', '.'], translationJa: 'ア。', paragraphIndex: 0 },
+      { tokens: ['Beta', '.'], translationJa: 'イ。', paragraphIndex: 0 },
+      { tokens: ['Gamma', '.'], translationJa: 'ウ。', paragraphIndex: 1 },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+  };
+  return tokenizer.index('p-para', source);
+}
+
+describe('<PassageRenderer/> paragraph structure (F-8②)', () => {
+  it('widens the grid row gap only at a paragraph boundary', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makeParagraphPassage()} layout="grid" />);
+    // row-1 is the last sentence of paragraph 0; the next sentence opens paragraph 1 → wide gap.
+    expect(getByTestId('sentence-row-0').style.marginBottom).toBe('14px');
+    expect(getByTestId('sentence-row-1').style.marginBottom).toBe('28px');
+    expect(getByTestId('sentence-row-2').style.marginBottom).toBe('14px');
+  });
+
+  it('keeps uniform grid spacing for passages without paragraphIndex (back-compat)', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    expect(getByTestId('sentence-row-0').style.marginBottom).toBe('14px');
+    expect(getByTestId('sentence-row-1').style.marginBottom).toBe('14px');
+  });
+
+  it('splits the legacy prose into <p> blocks per paragraph', () => {
+    const { container } = render(<PassageRenderer passage={makeParagraphPassage()} />);
+    const paras = Array.from(container.querySelectorAll('p[data-paragraph-index]'));
+    expect(paras.length).toBe(2);
+    expect(paras[0]!.textContent).toContain('Alpha');
+    expect(paras[0]!.textContent).toContain('Beta');
+    expect(paras[1]!.textContent).toContain('Gamma');
+  });
+
+  it('renders prose as a single flow (no <p> blocks) when paragraphIndex is absent (back-compat)', () => {
+    const { container, getByTestId } = render(<PassageRenderer passage={makePassage()} />);
+    expect(getByTestId('passage-prose').getAttribute('data-layout')).toBe('prose');
+    expect(container.querySelector('p')).toBeNull();
+  });
+});
+
+// ── C-4: discontinuous cue lighting (extraSpans) + sentence syntax notes ──────
+/** A discontinuous cue split into a main span ("No sooner") + an extraSpan ("than"). */
+function makeExtraSpanCuePassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', intent: 'business', level: 'C1', newCount: 0, reviewCount: 0, approxWords: 8 },
+    sentences: [
+      { tokens: ['No', 'sooner', 'had', 'we', 'left', 'than', 'it', 'rained', '.'], translationJa: '出るやいなや雨が降った。' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [
+      {
+        index: 1,
+        span: { sentenceIndex: 0, tokenStart: 0, tokenEnd: 2 }, // "No sooner"
+        category: 'grammar_pattern',
+        anchorText: 'No sooner',
+        explanationJa: '〜するやいなや。',
+        extraSpans: [{ sentenceIndex: 0, tokenStart: 5, tokenEnd: 6 }], // "than"
+      },
+    ],
+  };
+  return tokenizer.index('p-extra', source);
+}
+
+/** A passage with a sentence-level syntax note on the first (hard) sentence only. */
+function makeSyntaxNotePassage(): IndexedPassage {
+  const source: PassageOutput = {
+    meta: { title: 'T', intent: 'business', level: 'C1', newCount: 0, reviewCount: 0, approxWords: 12 },
+    sentences: [
+      { tokens: ['No', 'sooner', 'had', 'we', 'left', 'than', 'it', 'rained', '.'], translationJa: '出るやいなや雨が降った。' },
+      { tokens: ['We', 'went', 'home', '.'], translationJa: '家に帰った。' },
+    ],
+    targetSpans: [],
+    collocationSpans: [],
+    noticeCues: [],
+    syntaxNotes: [
+      {
+        sentenceIndex: 0,
+        patternNameJa: '倒置（否定副詞句＋助動詞前置）',
+        structureJa: '主節が倒置している。',
+        readingJa: 'No sooner had we left → 出るやいなや / than it rained → 雨が降った',
+        chunks: [{ tokenStart: 0, tokenEnd: 2, roleJa: '否定副詞句' }],
+      },
+    ],
+  };
+  return tokenizer.index('p-syntax', source);
+}
+
+describe('<PassageRenderer/> C-4 discontinuous cues + syntax notes', () => {
+  beforeEach(() => readingUiStore.getState().reset());
+
+  it('lights BOTH parts of a discontinuous cue (extraSpans) under one cue index, with a single badge', () => {
+    const { getByTestId } = render(<PassageRenderer passage={makeExtraSpanCuePassage()} layout="grid" />);
+    const en = getByTestId('sentence-en-0');
+    const segs = Array.from(en.querySelectorAll('[data-cue-index~="1"]')) as HTMLElement[];
+    const texts = segs.map((s) => s.textContent ?? '');
+    // The "No sooner" head and the split "than" tail both belong to cue 1 (one glow group).
+    expect(texts.some((t) => /No|sooner/.test(t))).toBe(true);
+    expect(texts.some((t) => t.includes('than'))).toBe(true);
+    // Only ONE in-text badge for the whole discontinuous expression (at the main span).
+    expect(en.querySelectorAll('[data-testid="notice-badge-1"]').length).toBe(1);
+  });
+
+  it('renders a 構文 toggle only for sentences with a note, revealing the panel on click (C-4)', () => {
+    const { getByTestId, queryByTestId } = render(<PassageRenderer passage={makeSyntaxNotePassage()} layout="grid" />);
+    // Sentence 0 has a note → toggle present; sentence 1 has none → no toggle.
+    const toggle = getByTestId('syntax-note-toggle-0');
+    expect(queryByTestId('syntax-note-toggle-1')).toBeNull();
+    // Collapsed until clicked.
+    expect(queryByTestId('syntax-note-0')).toBeNull();
+    fireEvent.click(toggle);
+    const panel = getByTestId('syntax-note-0');
+    expect(panel.textContent).toContain('倒置');
+    expect(panel.textContent).toContain('否定副詞句'); // chunk role label
+    expect(panel.textContent).toContain('やいなや'); // readingJa arrow chain
+  });
+
+  it('renders no 構文 toggle for a passage without syntax notes (back-compat)', () => {
+    const { queryByTestId } = render(<PassageRenderer passage={makePassage()} layout="grid" />);
+    expect(queryByTestId('syntax-note-toggle-0')).toBeNull();
   });
 });

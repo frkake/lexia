@@ -51,6 +51,50 @@ function run(env: Env, req: IncomingMessage, res: ServerResponse): Promise<void>
   });
 }
 
+describe('GET /api/health (F-1)', () => {
+  it('reports configured=false and the provider when no key is set (never the key value)', async () => {
+    const { res, status, json } = makeRes();
+    await run({}, makeReq('GET', '/api/health'), res);
+    expect(status()).toBe(200);
+    expect(json()).toEqual({ configured: false, provider: 'openai' });
+  });
+
+  it('reports configured=true for the active provider', async () => {
+    const { res, status, json } = makeRes();
+    await run({ OPENAI_API_KEY: 'sk-real-key' }, makeReq('GET', '/api/health'), res);
+    expect(status()).toBe(200);
+    expect(json()).toEqual({ configured: true, provider: 'openai' });
+  });
+
+  it('rejects a non-GET method with 405', async () => {
+    const { res, status } = makeRes();
+    await run({ OPENAI_API_KEY: 'sk-real-key' }, makeReq('POST', '/api/health', {}), res);
+    expect(status()).toBe(405);
+  });
+});
+
+describe('error responses carry a machine-readable code (F-1)', () => {
+  it('returns { error, code: not_configured } with a 503 when the key is unset', async () => {
+    const { res, status, json } = makeRes();
+    await run(
+      {},
+      makeReq('POST', '/api/passages:generate', {
+        level: 'B1',
+        intent: 'business',
+        newWordRatio: 0.3,
+        wordTarget: 200,
+        contentType: 'article',
+        targetWords: [],
+      }),
+      res,
+    );
+    expect(status()).toBe(503);
+    const body = json() as { error: string; code: string };
+    expect(body.code).toBe('not_configured');
+    expect(typeof body.error).toBe('string');
+  });
+});
+
 describe('POST /api/story:illustrate (Requirement 6.8)', () => {
   it('returns { illustrationUrl } for a valid CharacterIllustrationRequest', async () => {
     const fetchImpl = vi.fn(async () =>

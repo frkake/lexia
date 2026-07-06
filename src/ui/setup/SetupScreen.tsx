@@ -9,10 +9,13 @@
  * route wiring.
  */
 
-import { useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
+import { examScale } from '../../domain/difficulty/examScale';
 import { ExamLevelPicker } from './ExamLevelPicker';
 import { WordTargetSlider } from './WordTargetSlider';
+import { GenerationProgressPanel } from './GenerationProgressPanel';
+import { isGenerationActive, type GenerationPhase } from '../../state/stores/generationProgressStore';
 import { lengthSpec } from '../../domain/generation/lengthSpec';
 import {
   customAdvancedDifficultyForExamTarget,
@@ -43,6 +46,8 @@ export interface SetupScreenProps {
   candidates?: CandidateWord[];
   /** Notice shown when fewer candidates than requested were available (Requirement 5.5). */
   suggestionShortfall?: string | null;
+  /** Notice shown when the daily new-word cap (C-5b) trimmed the new words for this generation. */
+  newWordCapNotice?: string | null;
   /** Seed values (e.g. settingsStore.lastSetup); examTarget may be unset to force a choice. */
   initial?: Partial<SetupConfig>;
   /** Receives the assembled config once required conditions are met. */
@@ -50,15 +55,32 @@ export interface SetupScreenProps {
   /** Refreshes only the auto-selected candidate words; manual additions/exclusions stay local. */
   onRefreshCandidates?: (setup: SetupConfig) => void;
   /**
-   * Clears manual edits (exclusions + additions) so the section returns to a plain auto-selection,
-   * and asks the route to drop the persisted target/excluded words (so past exclusions no longer
-   * suppress suggestions). Receives the setup with `targetWordIds`/`excludedWordIds` emptied.
+   * Notifies the route that the learner cleared the manual word fields (A-2-1). The route drops the
+   * persisted `targetWordIds`/`excludedWordIds` (patching ONLY those two fields — never the level,
+   * sliders, or other unconfirmed form values). No setup is emitted; local word state is reset here.
    */
-  onResetTargetWords?: (setup: SetupConfig) => void;
+  onResetTargetWords?: () => void;
   refreshingCandidates?: boolean;
   candidateRefreshError?: string | null;
   generating?: boolean;
   generationError?: string | null;
+  /**
+   * Live generation progress (D-7). When present it drives the in-place progress panel + Cancel /
+   * 再試行 in place of the plain button, and disables the whole form (`<fieldset disabled>`) while a
+   * run is active. When omitted the screen falls back to the simple `generating`/`generationError`
+   * behaviour (gallery / presentational fixtures).
+   */
+  generationProgress?: GenerationProgressView | null;
+  /** Persistent warning shown above the form when the generation API key is unset (F-1). */
+  configWarning?: string | null;
+}
+
+/** The slice of generationProgressStore the route feeds the setup form (D-7). */
+export interface GenerationProgressView {
+  phase: GenerationPhase;
+  startedAt: number | null;
+  error: string | null;
+  onCancel?: () => void;
 }
 
 const DEFAULT_EXAM: ExamCriterion = { kind: 'eiken', value: '2' };
@@ -127,9 +149,26 @@ function readabilityLabel(value: ReadabilityLevel): string {
   return READABILITY_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
 
+/**
+ * A-3-3: annotate a bare CEFR symbol with the exam grades learners actually recognise, e.g.
+ * `B1（英検2級・TOEIC 550–784 相当）`. C2 is out of the 英検/TOEIC range → 「英検対象外」.
+ */
+function cefrScaleLabel(cefr: Cefr): string {
+  const d = examScale.cefrToExam(cefr);
+  const eiken = d.eiken === 'n/a' ? '英検対象外' : `英検${d.eiken}`;
+  return d.toeic === 'n/a' ? `${cefr}（${eiken}）` : `${cefr}（${eiken}・TOEIC ${d.toeic} 相当）`;
+}
+
+/** A-3-3: the shorter CEFR+英検 form used on the 目標連動 badge, e.g. `B1（英検2級相当）`. */
+function cefrBadgeLabel(cefr: Cefr): string {
+  const d = examScale.cefrToExam(cefr);
+  return d.eiken === 'n/a' ? `${cefr}（英検対象外）` : `${cefr}（英検${d.eiken}相当）`;
+}
+
 export function SetupScreen({
   candidates = [],
   suggestionShortfall = null,
+  newWordCapNotice = null,
   initial,
   onGenerate,
   onRefreshCandidates,
@@ -138,8 +177,29 @@ export function SetupScreen({
   candidateRefreshError = null,
   generating = false,
   generationError = null,
+  generationProgress = null,
+  configWarning = null,
 }: SetupScreenProps) {
-  const candidateIds = useMemo(() => new Set(candidates.map((c) => c.wordId)), [candidates]);
+  // D-7: while a generation is actively in flight the whole form is frozen (`<fieldset disabled>`)
+  // so the push-time snapshot can't drift, and the progress panel replaces the button. `busy` falls
+  // back to the plain `generating` flag when no progress object is supplied (gallery / old callers).
+  const busy = generationProgress ? isGenerationActive(generationProgress.phase) : generating;
+  const showPanel =
+    generationProgress != null &&
+    (isGenerationActive(generationProgress.phase) || generationProgress.phase === 'error');
+  // Case-insensitive candidate keys used to de-dupe manual additions against previewed candidates,
+  // so a word that appears in both never renders as two chips (A-2-1).
+  const candidateKeys = useMemo(
+    () => new Set(candidates.map((c) => c.wordId.trim().toLowerCase())),
+    [candidates],
+  );
+  // A-2-3: excluded words are stored as ids; look up a friendly surface when the word is also a
+  // current candidate, otherwise fall back to the id (a manually-excluded word carries no surface).
+  const candidateSurfaceById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of candidates) map.set(c.wordId, c.surface);
+    return map;
+  }, [candidates]);
   const seededLevelPreset = useMemo(() => initialLevelPreset(initial), [initial]);
 
   const [examTarget, setExamTarget] = useState<ExamCriterion | undefined>(initial?.examTarget);
@@ -152,9 +212,19 @@ export function SetupScreen({
   const [genre, setGenre] = useState<StoryGenre>(initial?.storyOptions?.genre ?? 'fantasy');
   const [homageTitle, setHomageTitle] = useState<string>(initial?.storyOptions?.homageTitle ?? '');
   const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.excludedWordIds ?? []));
-  const [added, setAdded] = useState<string[]>(
-    () => (initial?.targetWordIds ?? []).filter((id) => !candidateIds.has(id)),
-  );
+  // Manual additions are seeded from the persisted setup (now manual-only, A-1-1) and re-filtered
+  // whenever previewed candidates arrive so an overlap collapses to a single candidate chip.
+  const [added, setAdded] = useState<string[]>(() => [...(initial?.targetWordIds ?? [])]);
+  useEffect(() => {
+    setAdded((prev) => {
+      // Drop manual additions that overlap a previewed candidate. Return the SAME reference when
+      // nothing changes so React bails out of the update — otherwise `.filter()` would always yield a
+      // fresh array and, when `candidates` is omitted (default `[]` recreated each render → an
+      // unstable `candidateKeys`), the effect would re-fire on every render and loop forever.
+      const next = prev.filter((id) => !candidateKeys.has(id.trim().toLowerCase()));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [candidateKeys]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
   const [attempted, setAttempted] = useState(false);
@@ -165,8 +235,18 @@ export function SetupScreen({
     vocabularyLevel !== levelPreset.vocabularyLevel || readabilityLevel !== levelPreset.readabilityLevel;
 
   const targetWordIds = useMemo(() => {
-    const ids = candidates.filter((c) => !excluded.has(c.wordId)).map((c) => c.wordId);
-    for (const id of added) if (!ids.includes(id)) ids.push(id);
+    // Non-excluded previewed candidates first, then manual additions — merged case-insensitively so
+    // the same word never lands twice (A-2-1). Candidates is empty by default (no prefill).
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    const push = (id: string): void => {
+      const key = id.trim().toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      ids.push(id);
+    };
+    for (const c of candidates) if (!excluded.has(c.wordId)) push(c.wordId);
+    for (const id of added) push(id);
     return ids;
   }, [candidates, excluded, added]);
 
@@ -179,6 +259,18 @@ export function SetupScreen({
       else next.add(wordId);
       return next;
     });
+
+  // A-2-3: lift a word out of the exclusion set (from the "除外中の単語" list) so it can be suggested
+  // and auto-selected again on the next generation. "すべて解除" clears the whole set at once.
+  const includeExcluded = (wordId: string): void =>
+    setExcluded((prev) => {
+      if (!prev.has(wordId)) return prev;
+      const next = new Set(prev);
+      next.delete(wordId);
+      return next;
+    });
+  const clearExcluded = (): void => setExcluded(new Set());
+  const excludedLabel = (wordId: string): string => candidateSurfaceById.get(wordId) ?? wordId;
 
   const removeAdded = (wordId: string): void => setAdded((prev) => prev.filter((x) => x !== wordId));
 
@@ -230,18 +322,14 @@ export function SetupScreen({
   const hasManualEdits = excluded.size > 0 || added.length > 0;
 
   const resetTargetWords = (): void => {
-    // Clear local edits so every auto candidate is selected again and no manual word remains.
+    // Reset only the two manual word fields (A-2-1): clear local additions + exclusions and tell the
+    // route to drop them from the persisted setup. No form values are emitted, so the level/sliders
+    // and other unconfirmed inputs can never be silently committed by pressing リセット.
     setExcluded(new Set());
     setAdded([]);
     setDraft('');
     setAdding(false);
-    // buildSetup reads the (now-stale) memoized selection, so emit the cleared selection directly:
-    // all current candidates, no exclusions. The route drops these from the persisted setup too.
-    onResetTargetWords?.({
-      ...buildSetup(examTarget ?? DEFAULT_EXAM),
-      targetWordIds: candidates.map((c) => c.wordId),
-      excludedWordIds: [],
-    });
+    onResetTargetWords?.();
   };
 
   const generate = (): void => {
@@ -263,6 +351,16 @@ export function SetupScreen({
         </div>
 
         <div style={{ padding: '0 40px 36px', display: 'flex', flexDirection: 'column', gap: 30 }}>
+          {configWarning ? (
+            <div role="alert" data-testid="config-warning" style={configWarningStyle}>
+              {configWarning}
+            </div>
+          ) : null}
+
+          {/* D-7: freeze every field while a generation is running so the push-time snapshot can't
+              drift. A native disabled <fieldset> disables all nested controls at once; the footer
+              (progress panel / Cancel / 再試行) stays OUTSIDE it so those stay clickable. */}
+          <fieldset disabled={busy} style={fieldsetStyle}>
           {/* Learning intent (single-select) */}
           <section>
             <Label text="学びたい内容" hint="目的・題材" />
@@ -301,7 +399,9 @@ export function SetupScreen({
               <Label text="高度設定" hint="目標レベルのカスタム" mb={0} />
               <div style={advancedStatusWrapStyle}>
                 <span data-testid="advanced-level-mode" style={advancedStatusStyle(hasCustomLevel)}>
-                  {hasCustomLevel ? 'カスタム' : `目標連動 ${levelPreset.vocabularyLevel} / ${readabilityLabel(levelPreset.readabilityLevel)}`}
+                  {hasCustomLevel
+                    ? 'カスタム'
+                    : `目標連動 ${cefrBadgeLabel(levelPreset.vocabularyLevel)} / ${readabilityLabel(levelPreset.readabilityLevel)}`}
                 </span>
                 {hasCustomLevel ? (
                   <button type="button" data-testid="reset-advanced-level" onClick={resetLevelPreset} style={advancedResetStyle}>
@@ -322,7 +422,7 @@ export function SetupScreen({
                 >
                   {CEFR_LEVELS.map((level) => (
                     <option key={level} value={level}>
-                      {level}
+                      {cefrScaleLabel(level)}
                     </option>
                   ))}
                 </select>
@@ -432,7 +532,7 @@ export function SetupScreen({
           {/* Target words */}
           <section>
             <div style={targetHeaderStyle}>
-              <Label text="今回織り込む単語" hint="未学習・苦手から自動提案" mb={0} />
+              <Label text="今回織り込む単語" hint="任意 — 未指定なら自動選択" mb={0} />
               {onRefreshCandidates || onResetTargetWords ? (
                 <div style={targetActionsStyle}>
                   {onResetTargetWords ? (
@@ -440,9 +540,9 @@ export function SetupScreen({
                       type="button"
                       data-testid="reset-candidates"
                       onClick={resetTargetWords}
-                      disabled={!hasManualEdits || refreshingCandidates || generating}
-                      title="手動で追加・除外した単語を消して自動提案に戻します"
-                      style={resetButtonStyle(!hasManualEdits || refreshingCandidates || generating)}
+                      disabled={!hasManualEdits || refreshingCandidates || busy}
+                      title="手動で追加・除外した単語を消して自動選択に戻します（学習履歴は消えません）"
+                      style={resetButtonStyle(!hasManualEdits || refreshingCandidates || busy)}
                     >
                       リセット
                     </button>
@@ -452,22 +552,30 @@ export function SetupScreen({
                       type="button"
                       data-testid="refresh-candidates"
                       onClick={refreshCandidates}
-                      disabled={refreshingCandidates || generating}
+                      disabled={refreshingCandidates || busy}
                       aria-busy={refreshingCandidates}
-                      style={refreshButtonStyle(refreshingCandidates || generating)}
+                      style={refreshButtonStyle(refreshingCandidates || busy)}
                     >
-                      {refreshingCandidates ? '更新中…' : '単語を更新'}
+                      {refreshingCandidates ? '更新中…' : candidates.length === 0 ? '自動選択をプレビュー' : '単語を更新'}
                     </button>
                   ) : null}
                 </div>
               ) : null}
             </div>
             <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 12 }}>
-              指定しない場合は、選んだレベルと趣向に合わせた文章を生成します
+              指定しない場合は、復習が必要な単語と新しい単語を自動で選んで織り込みます
             </div>
             {suggestionShortfall ? (
               <div style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.terracotta, marginBottom: 12 }}>
                 {suggestionShortfall}
+              </div>
+            ) : null}
+            {newWordCapNotice ? (
+              <div
+                data-testid="new-word-cap-notice"
+                style={{ fontFamily: fonts.ui, fontSize: 12, color: colors.faint, marginBottom: 12 }}
+              >
+                {newWordCapNotice}
               </div>
             ) : null}
             {candidateRefreshError ? (
@@ -485,27 +593,34 @@ export function SetupScreen({
                     type="button"
                     data-testid={`target-${c.wordId}`}
                     aria-pressed={!off}
+                    aria-label={off ? `${c.surface} の除外を戻す` : `${c.surface} を除外`}
                     onClick={() => toggleExclude(c.wordId)}
                     style={targetChipStyle(off)}
-                    title={reason ?? undefined}
+                    title={off ? '除外中 — クリックで戻す' : 'クリックで除外（もう一度で戻す）'}
                   >
                     {c.surface}
                     {reason ? <span style={targetReasonStyle}>{reason}</span> : null}
+                    <span aria-hidden="true" style={chipActionIconStyle}>{off ? '↩' : '×'}</span>
                   </button>
                 );
               })}
-              {added.map((w) => (
-                <button
-                  key={`added-${w}`}
-                  type="button"
-                  data-testid={`target-${w}`}
-                  aria-pressed
-                  onClick={() => removeAdded(w)}
-                  style={targetChipStyle(false)}
-                >
-                  {w}
-                </button>
-              ))}
+              {added
+                .filter((w) => !candidateKeys.has(w.trim().toLowerCase()))
+                .map((w) => (
+                  <button
+                    key={`added-${w}`}
+                    type="button"
+                    data-testid={`target-added-${w}`}
+                    aria-pressed
+                    aria-label={`${w} を削除`}
+                    onClick={() => removeAdded(w)}
+                    style={targetChipStyle(false)}
+                    title="クリックで削除"
+                  >
+                    {w}
+                    <span aria-hidden="true" style={chipActionIconStyle}>×</span>
+                  </button>
+                ))}
               {adding ? (
                 <form aria-label="単語を追加するフォーム" onSubmit={commitAdd} style={{ display: 'inline-flex', gap: 6 }}>
                   <input aria-label="追加する単語" autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} style={addInputStyle} />
@@ -519,7 +634,38 @@ export function SetupScreen({
                 </button>
               )}
             </div>
+
+            {/* A-2-3: excluded words are otherwise invisible after a revisit (they only suppress
+                suggestions), so surface them in a collapsible list with per-word and bulk un-exclude. */}
+            {excluded.size > 0 ? (
+              <details data-testid="excluded-words" style={excludedDetailsStyle}>
+                <summary style={excludedSummaryStyle}>除外中の単語 ({excluded.size})</summary>
+                <div style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, margin: '8px 0 10px' }}>
+                  除外した単語は候補・自動選択から外れます。解除すると次回の生成から候補に戻ります。
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {[...excluded].map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      data-testid={`excluded-${id}`}
+                      aria-label={`${excludedLabel(id)} の除外を解除`}
+                      title="クリックで除外を解除"
+                      onClick={() => includeExcluded(id)}
+                      style={excludedChipStyle}
+                    >
+                      {excludedLabel(id)}
+                      <span aria-hidden="true" style={chipActionIconStyle}>↩</span>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" data-testid="clear-excluded" onClick={clearExcluded} style={clearExcludedStyle}>
+                  すべて解除
+                </button>
+              </details>
+            ) : null}
           </section>
+          </fieldset>
 
           {attempted && missing.length > 0 ? (
             <div role="alert" style={alertStyle}>
@@ -527,15 +673,32 @@ export function SetupScreen({
             </div>
           ) : null}
 
-          {generationError ? (
-            <div role="alert" style={alertStyle}>
-              {generationError}
-            </div>
-          ) : null}
-
-          <button type="button" onClick={generate} disabled={generating} aria-busy={generating} style={generateButtonStyle(generating)}>
-            {generating ? '生成しています…' : '文章を生成する'}
-          </button>
+          {showPanel ? (
+            <GenerationProgressPanel
+              phase={generationProgress!.phase}
+              startedAt={generationProgress!.startedAt}
+              error={generationProgress!.error}
+              onCancel={generationProgress!.onCancel}
+              onRetry={generate}
+            />
+          ) : (
+            <>
+              {generationError ? (
+                <div role="alert" style={alertStyle}>
+                  {generationError}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={generate}
+                disabled={generating}
+                aria-busy={generating}
+                style={generateButtonStyle(generating)}
+              >
+                {generating ? '生成しています…' : '文章を生成する'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -550,6 +713,17 @@ function Label({ text, hint, mb = 12 }: { text: string; hint?: string; mb?: numb
     </div>
   );
 }
+
+/** Layout-neutral reset so the wrapping <fieldset> lays sections out exactly like the old <div>. */
+const fieldsetStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 30,
+  border: 'none',
+  margin: 0,
+  padding: 0,
+  minInlineSize: 0,
+};
 
 const cardStyle: CSSProperties = {
   width: '100%',
@@ -634,7 +808,8 @@ const targetChipStyle = (off: boolean): CSSProperties => ({
   fontSize: 14,
   color: off ? colors.faint : colors.primaryDeep,
   background: off ? '#F4F6F9' : '#EAF0F8',
-  border: `1px solid ${off ? colors.borderControl : colors.primaryBorder}`,
+  // A-2-4: a dashed border reinforces the struck-through "除外中" state alongside the ↩ affordance.
+  border: `1px ${off ? 'dashed' : 'solid'} ${off ? colors.borderControl : colors.primaryBorder}`,
   borderRadius: radius.chip,
   padding: '6px 12px',
   cursor: 'pointer',
@@ -645,6 +820,57 @@ const targetReasonStyle: CSSProperties = {
   fontFamily: fonts.ui,
   fontSize: 10.5,
   color: colors.faint,
+};
+
+/** A-2-4: the trailing ×/↩ affordance icon that shows a chip is removable/restorable on click. */
+const chipActionIconStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  lineHeight: 1,
+  opacity: 0.7,
+};
+
+const excludedDetailsStyle: CSSProperties = {
+  marginTop: 14,
+  padding: '10px 12px',
+  background: colors.surfaceSubtle,
+  border: `1px solid ${colors.borderCard}`,
+  borderRadius: radius.control,
+};
+
+const excludedSummaryStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 12.5,
+  fontWeight: 600,
+  color: colors.inkSoft,
+  cursor: 'pointer',
+};
+
+const excludedChipStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: fonts.serif,
+  fontSize: 14,
+  color: colors.inkSoft,
+  background: colors.surfaceCard,
+  border: `1px dashed ${colors.borderControl}`,
+  borderRadius: radius.chip,
+  padding: '6px 12px',
+  cursor: 'pointer',
+};
+
+const clearExcludedStyle: CSSProperties = {
+  marginTop: 10,
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 600,
+  color: colors.inkSoft,
+  background: 'transparent',
+  border: `1px solid ${colors.borderControl}`,
+  borderRadius: radius.chip,
+  padding: '5px 12px',
+  cursor: 'pointer',
 };
 
 const addChipStyle: CSSProperties = {
@@ -766,6 +992,17 @@ const alertStyle: CSSProperties = {
   border: `1px solid ${colors.terracottaBorder}`,
   borderRadius: radius.control,
   padding: '11px 14px',
+};
+
+const configWarningStyle: CSSProperties = {
+  fontFamily: fonts.ui,
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: colors.terracotta,
+  background: '#FBF3F0',
+  border: `1px solid ${colors.terracottaBorder}`,
+  borderRadius: radius.control,
+  padding: '12px 15px',
 };
 
 const generateButtonStyle = (busy: boolean): CSSProperties => ({

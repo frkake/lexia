@@ -3,10 +3,15 @@
  *
  * Every scheduling / validation rule reads its constants from here; no other module
  * may redefine them (design.md "FsrsScheduler → Implementation Notes": one settings
- * module). Two groups:
+ * module). The product-loop policy these encode — passive-recall weighting, review
+ * load limits, new-word cap, leech threshold — is specified in `docs/learning-policy.md`
+ * (the "設定値" table); its ◎-marked rows are reconciled against these exports by
+ * `parameters.policy.test.ts`. Three groups:
  *  - FSRS-6 defaults & stage thresholds (published algorithm constants).
+ *  - Learning-loop policy limits (canonical values from learning-policy.md §設定値).
  *  - "Unvalidated" product constants — estimates to be re-tuned against real data
- *    (design.md "Monitoring"); kept here, clearly labelled, never inlined elsewhere.
+ *    (calibration procedure: learning-policy.md §較正); kept here, clearly labelled,
+ *    never inlined elsewhere.
  */
 
 import type { Rating } from '../../types/domain';
@@ -57,23 +62,42 @@ export const FIRST_DISPLAY_LADDER_MS: Record<Rating, number> = {
   4: 10 * DAY_MS,
 };
 
+// ── Learning-loop policy limits (canonical: docs/learning-policy.md §設定値) ──
+// ◎ CI-reconciled product constants for the review / generation loop. C-5b/C-5c
+// read these from here (single source of truth); parameters.policy.test.ts checks
+// they still match the policy document's 設定値 table.
+
+/** Max review cards surfaced in one session (load design; policy principle 7). */
+export const SESSION_REVIEW_LIMIT = 20;
+
+/** Max review cards graded per day; overflow rolls to the next day (settable 20–200). */
+export const DAILY_REVIEW_LIMIT = 60;
+
+/** Max new words introduced per day; the newWordRatio slider is clamped to this. */
+export const DAILY_NEW_WORD_LIMIT = 12;
+
+/** Lapse count at/above which a word is treated as a leech (elaboration mode). */
+export const LEECH_LAPSE_THRESHOLD = 6;
+
 // ── Unvalidated product constants (re-tune with real data) ───────────────────
 
 /**
  * Passive-recall damping: a tap-free read-through grades as a damped Good,
  * `S' = S + PASSIVE_RECALL_DECAY · (S_good − S)` (design.md "RecallEventService").
- * UNVALIDATED — estimate.
+ * UNVALIDATED — estimate. 較正手順: learning-policy.md §較正.
  */
 export const PASSIVE_RECALL_DECAY = 0.5;
 
 /**
  * Cooldown window for passage-origin updates of the same word, preventing
  * double-counting with a same-day explicit review. UNVALIDATED — estimate.
+ * 較正手順: learning-policy.md §較正.
  */
 export const DAILY_COOLDOWN_MS = DAY_MS;
 
 /**
  * Allowed ratio of out-of-band (above target CEFR level) tokens in a generated
  * passage before the generation is repaired/regenerated. UNVALIDATED — estimate.
+ * 較正手順: learning-policy.md §較正.
  */
 export const CEFR_OUT_OF_BAND_TOLERANCE = 0.15;

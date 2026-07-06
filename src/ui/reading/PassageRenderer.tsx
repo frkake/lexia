@@ -17,9 +17,11 @@
  * wrappers render no ink.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { AnnotatedSpan, type AnnotationKind } from '../shared/AnnotatedSpan';
+import { InlineNoticePopover } from './InlineNoticePopover';
+import { SyntaxNotePanel } from './SyntaxNotePanel';
 import { noticeStyle, cueHighlight, colors, fonts } from '../theme/tokens';
 import { readingUiStore, useEffectiveCue } from '../../state/stores/readingUiStore';
 import type {
@@ -28,11 +30,46 @@ import type {
   IndexedToken,
   TargetSpan,
   CollocationSpan,
+  ExpressionSpan,
   NoticeCue,
   TokenId,
 } from '../../types/domain';
 
 const BASE_PROSE_PX = 19;
+
+/**
+ * Expression highlight (B-1 / B-2): idioms / phrasal verbs / set phrases the model self-reported in
+ * `expressionSpans` get a dashed underline in the idiom-family terracotta hue — a single learnable
+ * "formulaic language" marker, deliberately distinct from the mastery underlines (solid/dotted blue,
+ * grey) and the collocation tint (blue fill), so all three encodings stay readable when they overlap.
+ * The underline is a text-decoration channel (unused by any other leaf), so it layers additively over
+ * the existing target/collocation/cue rendering without touching that logic.
+ */
+const expressionSegStyle: CSSProperties = {
+  textDecoration: `underline dashed ${colors.terracotta}`,
+  textDecorationThickness: '1.5px',
+  textUnderlineOffset: '4px',
+};
+
+/** F-8②: paragraph block spacing for the legacy prose layout. */
+const proseParagraphStyle: CSSProperties = { margin: '0 0 1em' };
+
+/** C-4: the small purple「構文」toggle shown under a hard sentence in the grid layout. */
+const syntaxToggleStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '.03em',
+  color: colors.syntaxDeep,
+  background: '#EFE9F7',
+  border: `1px solid #E3DAF2`,
+  borderRadius: 5,
+  padding: '2px 8px',
+  cursor: 'pointer',
+};
 
 /** Reading layout: legacy flowing prose, or the sentence-unit 2-column grid (Requirement 3.1). */
 export type PassageLayout = 'prose' | 'grid';
@@ -50,6 +87,17 @@ export interface PassageRendererProps {
   renderAfterSentence?: (sentenceIndex: number) => ReactNode;
   /** Right-cell content for the GRID layout: the sentence's Japanese translation (3.1). */
   renderAside?: (sentenceIndex: number) => ReactNode;
+  /**
+   * GRID layout only (F-8①): when false (translation off), the right translation column is dropped
+   * and the English text spans the full container width as a single column. Defaults to true.
+   */
+  asideEnabled?: boolean;
+  /**
+   * D-1 mobile fallback: on a narrow viewport the rail is stacked far below the prose, so tapping an
+   * in-text notice badge opens an inline popover under the badge (no scroll) instead of scrolling to
+   * the rail item. Defaults to false (wide layout scrolls to the rail as before).
+   */
+  isNarrow?: boolean;
   /** 'prose' (default, legacy) keeps flowing prose; 'grid' is the new sentence-unit 2-column layout. */
   layout?: PassageLayout;
   /** Lowercase wordId -> unified guide item anchor id. Only the first target occurrence is anchored. */
@@ -75,6 +123,8 @@ export function PassageRenderer({
   onSelectWord,
   renderAfterSentence,
   renderAside,
+  asideEnabled = true,
+  isNarrow = false,
   layout = 'prose',
   guideAnchorIdByWordKey,
   guideTargetIdByCueIndex,
@@ -87,6 +137,20 @@ export function PassageRenderer({
   const activeCueIndex = useEffectiveCue();
   // Roving tabindex over the in-text badges: one tab stop, arrows move between them.
   const [rovingPos, setRovingPos] = useState(0);
+  // D-1 mobile fallback: which cue's inline popover is open (narrow layout only). Reset per passage.
+  const [popoverCueIndex, setPopoverCueIndex] = useState<number | null>(null);
+  useEffect(() => setPopoverCueIndex(null), [passage.passageId]);
+  // C-4: sentence-level syntax notes keyed by sentence index, and which are expanded (grid layout).
+  const syntaxNoteBySentence = new Map((source.syntaxNotes ?? []).map((n) => [n.sentenceIndex, n] as const));
+  const [expandedSyntaxNotes, setExpandedSyntaxNotes] = useState<Set<number>>(() => new Set());
+  useEffect(() => setExpandedSyntaxNotes(new Set()), [passage.passageId]);
+  const toggleSyntaxNote = (sentenceIndex: number): void =>
+    setExpandedSyntaxNotes((prev) => {
+      const next = new Set(prev);
+      if (next.has(sentenceIndex)) next.delete(sentenceIndex);
+      else next.add(sentenceIndex);
+      return next;
+    });
 
   const proseStyle: CSSProperties = {
     fontFamily: fonts.serifJp,
@@ -185,6 +249,12 @@ export function PassageRenderer({
 
     const pin = (): void => {
       readingUiStore.getState().setPinned(cue.index);
+      // Narrow: open/close the inline popover under the badge instead of scrolling to the stacked rail
+      // (which would jump the reader far down the page and lose their reading position).
+      if (isNarrow) {
+        setPopoverCueIndex((prev) => (prev === cue.index ? null : cue.index));
+        return;
+      }
       if (typeof document !== 'undefined') {
         document
           .getElementById(guideTargetIdByCueIndex?.[cue.index] ?? `notice-item-${cue.index}`)
@@ -214,7 +284,7 @@ export function PassageRenderer({
       }
     };
 
-    return (
+    const badge = (
       <span
         key={`badge-${cue.index}`}
         // `id` is the scroll target NoticeRail jumps to; `scrollMarginTop` keeps the badge clear of
@@ -258,6 +328,18 @@ export function PassageRenderer({
         }}
       >
         {displayIndex}
+      </span>
+    );
+
+    // Wide layout: the bare badge (click scrolls to the rail). Narrow: wrap it in a relative anchor so
+    // the inline popover can hang under it without reflowing the surrounding prose.
+    if (!isNarrow) return badge;
+    return (
+      <span key={`badge-wrap-${cue.index}`} style={{ position: 'relative', display: 'inline' }}>
+        {badge}
+        {popoverCueIndex === cue.index ? (
+          <InlineNoticePopover cue={cue} displayIndex={displayIndex} onClose={() => setPopoverCueIndex(null)} />
+        ) : null}
       </span>
     );
   }
@@ -322,16 +404,51 @@ export function PassageRenderer({
     const { sentenceIndex, tokens } = sentence;
     const targets = source.targetSpans.filter((s) => s.sentenceIndex === sentenceIndex);
     const collocations = source.collocationSpans.filter((s) => s.sentenceIndex === sentenceIndex);
+    // B-1 / B-2 self-reported idioms / phrasal verbs / set phrases in this sentence, indexed per token.
+    const exprByToken = new Map<number, ExpressionSpan>();
+    for (const e of (source.expressionSpans ?? []).filter((s) => s.span.sentenceIndex === sentenceIndex)) {
+      for (let t = e.span.tokenStart; t < e.span.tokenEnd; t += 1) exprByToken.set(t, e);
+    }
+    const exprAt = (i: number): ExpressionSpan | undefined => exprByToken.get(i);
+    const exprAtGap = (prevIdx: number, curIdx: number): ExpressionSpan | undefined => {
+      const e = exprByToken.get(prevIdx);
+      return e && e === exprByToken.get(curIdx) ? e : undefined;
+    };
+    /** Layer the dashed expression underline over a leaf (or gap) that sits inside an expression. */
+    const decorateExpr = (node: ReactNode, e: ExpressionSpan | undefined, key: string): ReactNode => {
+      if (!e) return node;
+      return (
+        <span
+          key={key}
+          className="expression-seg"
+          data-expression-category={e.category}
+          title={e.meaningJa || undefined}
+          style={expressionSegStyle}
+        >
+          {node}
+        </span>
+      );
+    };
     const cuesByEnd = new Map<number, NoticeCue[]>();
     const cuesByToken = new Map<number, number[]>();
+    const lightToken = (token: number, cueIndex: number): void => {
+      const ids = cuesByToken.get(token) ?? [];
+      if (!ids.includes(cueIndex)) ids.push(cueIndex);
+      cuesByToken.set(token, ids);
+    };
     for (const cue of source.noticeCues.filter((c) => c.span.sentenceIndex === sentenceIndex)) {
       const list = cuesByEnd.get(cue.span.tokenEnd) ?? [];
       list.push(cue);
       cuesByEnd.set(cue.span.tokenEnd, list);
-      for (let t = cue.span.tokenStart; t < cue.span.tokenEnd; t += 1) {
-        const ids = cuesByToken.get(t) ?? [];
-        ids.push(cue.index);
-        cuesByToken.set(t, ids);
+      for (let t = cue.span.tokenStart; t < cue.span.tokenEnd; t += 1) lightToken(t, cue.index);
+    }
+    // C-4: light the extra contiguous parts of a DISCONTINUOUS expression (e.g. the「than」half of
+    // "no sooner ... than") under the SAME cue index — no extra badge, so both parts glow as one unit
+    // when the cue is active. extraSpans may live in this sentence even if the badge sits elsewhere.
+    for (const cue of source.noticeCues) {
+      for (const extra of cue.extraSpans ?? []) {
+        if (extra.sentenceIndex !== sentenceIndex) continue;
+        for (let t = extra.tokenStart; t < extra.tokenEnd; t += 1) lightToken(t, cue.index);
       }
     }
     const cueIdsAt = (i: number): number[] => cuesByToken.get(i) ?? [];
@@ -354,12 +471,16 @@ export function PassageRenderer({
     /** A space between two tokens; tagged as a cue segment when both sides share a cue (continuity). */
     const gapNode = (prevIdx: number, curIdx: number, withinChip: boolean, key: string): ReactNode => {
       const ids = intersect(cueIdsAt(prevIdx), cueIdsAt(curIdx));
-      if (ids.length === 0) return ' ';
-      return (
-        <span key={key} className="cue-seg" data-cue-index={ids.join(' ')} style={segStyle(ids, withinChip)}>
-          {' '}
-        </span>
-      );
+      const base: ReactNode =
+        ids.length === 0 ? (
+          ' '
+        ) : (
+          <span key={key} className="cue-seg" data-cue-index={ids.join(' ')} style={segStyle(ids, withinChip)}>
+            {' '}
+          </span>
+        );
+      // Keep the expression underline continuous across the space between two of its tokens.
+      return decorateExpr(base, exprAtGap(prevIdx, curIdx), `xgap-${key}`);
     };
 
     const emitGapBefore = (token: IndexedToken, curIdx: number): void => {
@@ -381,16 +502,20 @@ export function PassageRenderer({
         if (t && t.tokenEnd <= end) {
           inner.push(
             wrapCue(
-              <AnnotatedSpan
-                key={tok.tokenId}
-                kind={densityKind(t)}
-                active={isActive(tokens, t.tokenStart, t.tokenEnd)}
-                lineAnchorId={lineAnchorForTarget(t)}
-                onSelect={onSelectWord ? () => onSelectWord(t.wordId) : undefined}
-                title={t.wordId}
-              >
-                {t.surface}
-              </AnnotatedSpan>,
+              decorateExpr(
+                <AnnotatedSpan
+                  key={tok.tokenId}
+                  kind={densityKind(t)}
+                  active={isActive(tokens, t.tokenStart, t.tokenEnd)}
+                  lineAnchorId={lineAnchorForTarget(t)}
+                  onSelect={onSelectWord ? () => onSelectWord(t.wordId) : undefined}
+                  title={t.wordId}
+                >
+                  {t.surface}
+                </AnnotatedSpan>,
+                exprAt(t.tokenStart),
+                `ix-${tok.tokenId}`,
+              ),
               cueIdsForRange(t.tokenStart, t.tokenEnd),
               true,
               `iseg-${tok.tokenId}`,
@@ -403,9 +528,13 @@ export function PassageRenderer({
         } else {
           inner.push(
             wrapCue(
-              <span key={tok.tokenId} style={{ fontStyle: 'italic' }}>
-                {tok.text}
-              </span>,
+              decorateExpr(
+                <span key={tok.tokenId} style={{ fontStyle: 'italic' }}>
+                  {tok.text}
+                </span>,
+                exprAt(i),
+                `ix-${tok.tokenId}`,
+              ),
               cueIdsAt(i),
               true,
               `iseg-${tok.tokenId}`,
@@ -458,16 +587,20 @@ export function PassageRenderer({
         emitGapBefore(tok, i);
         out.push(
           wrapCue(
-            <AnnotatedSpan
-              key={tok.tokenId}
-              kind={densityKind(target)}
-              active={isActive(tokens, target.tokenStart, target.tokenEnd)}
-              lineAnchorId={lineAnchorForTarget(target)}
-              onSelect={onSelectWord ? () => onSelectWord(target.wordId) : undefined}
-              title={target.wordId}
-            >
-              {target.surface || surface(target.tokenStart, target.tokenEnd)}
-            </AnnotatedSpan>,
+            decorateExpr(
+              <AnnotatedSpan
+                key={tok.tokenId}
+                kind={densityKind(target)}
+                active={isActive(tokens, target.tokenStart, target.tokenEnd)}
+                lineAnchorId={lineAnchorForTarget(target)}
+                onSelect={onSelectWord ? () => onSelectWord(target.wordId) : undefined}
+                title={target.wordId}
+              >
+                {target.surface || surface(target.tokenStart, target.tokenEnd)}
+              </AnnotatedSpan>,
+              exprAt(target.tokenStart),
+              `x-${tok.tokenId}`,
+            ),
             cueIdsForRange(target.tokenStart, target.tokenEnd),
             false,
             `seg-${tok.tokenId}`,
@@ -481,7 +614,14 @@ export function PassageRenderer({
         continue;
       }
       emitGapBefore(tok, i);
-      out.push(wrapCue(<span key={tok.tokenId}>{tok.text}</span>, cueIdsAt(i), false, `seg-${tok.tokenId}`));
+      out.push(
+        wrapCue(
+          decorateExpr(<span key={tok.tokenId}>{tok.text}</span>, exprAt(i), `x-${tok.tokenId}`),
+          cueIdsAt(i),
+          false,
+          `seg-${tok.tokenId}`,
+        ),
+      );
       lastCharEnd = tok.charEnd;
       emitBadges(i + 1);
       i += 1;
@@ -499,43 +639,104 @@ export function PassageRenderer({
     // construction — a sentence's translation can only land in its own row's right cell (3.1/3.2).
     return (
       <div data-testid="passage-prose" data-layout="grid" style={{ ...proseStyle, display: 'block' }}>
-        {passage.sentences.map((sentence) => (
+        {passage.sentences.map((sentence, i) => {
+          // F-8②: widen the gap after a row when the next sentence opens a new paragraph. Passages
+          // generated before paragraphIndex existed keep the uniform 14px spacing (all undefined).
+          const nextSentence = passage.sentences[i + 1];
+          const curPara = source.sentences[sentence.sentenceIndex]?.paragraphIndex;
+          const nextPara = nextSentence ? source.sentences[nextSentence.sentenceIndex]?.paragraphIndex : undefined;
+          const paragraphBreak = curPara !== undefined && nextPara !== undefined && nextPara !== curPara;
+          return (
           <div
             key={sentence.sentenceIndex}
             data-testid={`sentence-row-${sentence.sentenceIndex}`}
+            data-sentence-index={sentence.sentenceIndex}
+            data-paragraph-index={curPara}
             className="sentence-row"
             style={{
               display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)',
+              gridTemplateColumns: asideEnabled ? 'minmax(0, 1.6fr) minmax(0, 1fr)' : 'minmax(0, 1fr)',
               columnGap: 26,
               alignItems: 'start',
-              marginBottom: 14,
+              marginBottom: paragraphBreak ? 28 : 14,
             }}
           >
             <div data-testid={`sentence-en-${sentence.sentenceIndex}`} className="sentence-en" style={{ minWidth: 0 }}>
               {renderSentence(sentence)}
+              {(() => {
+                // C-4: a「構文」toggle for a hard sentence, revealing its SyntaxNotePanel below the text.
+                const note = syntaxNoteBySentence.get(sentence.sentenceIndex);
+                if (!note) return null;
+                const open = expandedSyntaxNotes.has(sentence.sentenceIndex);
+                return (
+                  <div style={{ marginTop: 4 }}>
+                    <button
+                      type="button"
+                      data-testid={`syntax-note-toggle-${sentence.sentenceIndex}`}
+                      aria-expanded={open}
+                      onClick={() => toggleSyntaxNote(sentence.sentenceIndex)}
+                      style={syntaxToggleStyle}
+                    >
+                      構文 {open ? '▾' : '▸'}
+                    </button>
+                    {open ? (
+                      <SyntaxNotePanel note={note} tokens={source.sentences[sentence.sentenceIndex]?.tokens ?? []} />
+                    ) : null}
+                  </div>
+                );
+              })()}
             </div>
-            <div
-              data-testid={`sentence-aside-${sentence.sentenceIndex}`}
-              className="sentence-aside"
-              style={{ minWidth: 0 }}
-            >
-              {renderAside ? renderAside(sentence.sentenceIndex) : null}
-            </div>
+            {asideEnabled ? (
+              <div
+                data-testid={`sentence-aside-${sentence.sentenceIndex}`}
+                className="sentence-aside"
+                style={{ minWidth: 0 }}
+              >
+                {renderAside ? renderAside(sentence.sentenceIndex) : null}
+              </div>
+            ) : null}
           </div>
-        ))}
+          );
+        })}
       </div>
     );
   }
 
+  // Legacy flowing prose. F-8②: when the passage carries paragraphIndex, split it into <p> blocks at
+  // each discourse break; passages generated before paragraphIndex existed render as one flow.
+  const renderProseSentence = (sentence: IndexedSentence, trailingSpace: boolean): ReactNode => (
+    <span key={sentence.sentenceIndex} data-sentence-index={sentence.sentenceIndex}>
+      {renderSentence(sentence)}
+      {renderAfterSentence ? renderAfterSentence(sentence.sentenceIndex) : null}
+      {trailingSpace ? ' ' : null}
+    </span>
+  );
+
+  const hasParagraphs = source.sentences.some((s) => s.paragraphIndex !== undefined);
+  if (!hasParagraphs) {
+    return (
+      <div data-testid="passage-prose" data-layout="prose" style={proseStyle}>
+        {passage.sentences.map((sentence) =>
+          renderProseSentence(sentence, sentence.sentenceIndex < passage.sentences.length - 1),
+        )}
+      </div>
+    );
+  }
+
+  const paragraphs: IndexedSentence[][] = [];
+  let prevPara: number | undefined;
+  for (const [i, sentence] of passage.sentences.entries()) {
+    const pIdx = source.sentences[sentence.sentenceIndex]?.paragraphIndex;
+    if (i === 0 || pIdx !== prevPara) paragraphs.push([sentence]);
+    else paragraphs[paragraphs.length - 1]!.push(sentence);
+    prevPara = pIdx;
+  }
   return (
     <div data-testid="passage-prose" data-layout="prose" style={proseStyle}>
-      {passage.sentences.map((sentence) => (
-        <span key={sentence.sentenceIndex}>
-          {renderSentence(sentence)}
-          {renderAfterSentence ? renderAfterSentence(sentence.sentenceIndex) : null}
-          {sentence.sentenceIndex < passage.sentences.length - 1 ? ' ' : null}
-        </span>
+      {paragraphs.map((group, gi) => (
+        <p key={`para-${gi}`} data-paragraph-index={gi} style={proseParagraphStyle}>
+          {group.map((sentence, si) => renderProseSentence(sentence, si < group.length - 1))}
+        </p>
       ))}
     </div>
   );

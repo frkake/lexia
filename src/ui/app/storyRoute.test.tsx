@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -23,9 +23,11 @@ import { AppProvider } from './AppContext';
 import { createContainer, degradingTts } from './container';
 import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
+import { isImageRef } from '../../infra/persistence/imageStore';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { createSessionStore } from '../../state/stores/sessionStore';
 import { createSettingsStore } from '../../state/stores/settingsStore';
+import { generationProgressStore } from '../../state/stores/generationProgressStore';
 import type { ContentGateway, StoryGateway } from '../../types/ports';
 import type { GenerationRequest, PassageOutput, StoryPlan, UserId } from '../../types/domain';
 
@@ -97,6 +99,13 @@ function deferred<T>() {
 }
 
 describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)', () => {
+  // The generationProgressStore is an app-wide singleton (D-7). A test that ends on Home with a failed
+  // generation leaves it in the `error` phase (the Home SetupScreen panel owns that error), which would
+  // otherwise hide the 「文章を生成する」button in the next test. Reset it between tests for isolation.
+  beforeEach(() => {
+    generationProgressStore.getState().reset();
+  });
+
   it('shows the plan-confirm gate for a story and generates a chapter only after confirmation', async () => {
     const userId = 'story_route_user' as UserId;
     const db = new LexiaDb(userId);
@@ -446,6 +455,109 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     expect(passages.map((p) => p.passage.meta.storyRef?.chapterIndex)).toEqual([0, 1]);
   });
 
+  it('re-selects a continuing chapter\'s words, avoiding earlier chapters but letting due words reappear (A-1-4)', async () => {
+    const userId = 'story_route_reselect_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    const now = 5_000_000;
+    await repos.stories.put({ storyId: LONG_PLAN.storyId, userId, createdAt: 1_000, plan: LONG_PLAN });
+    // Chapter 0 wove in two words: 'ancient' (never reviewed) and 'reviewed' (a due review word).
+    const chapterZero: PassageOutput = {
+      ...chapterPassage(0, '星の少女 第一章'),
+      targetSpans: [
+        { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1, wordId: 'ancient', surface: 'ancient', masteryDensity: 'new' },
+        { sentenceIndex: 1, tokenStart: 0, tokenEnd: 1, wordId: 'reviewed', surface: 'reviewed', masteryDensity: 'review' },
+      ],
+    };
+    await repos.passages.put({ passageId: 'story_1:0', userId, createdAt: 1_000, passage: chapterZero });
+    // 'reviewed' has been learned (stability set) and is due now → it may reappear across chapters.
+    await repos.scheduling.upsert({
+      userId,
+      wordId: 'reviewed',
+      level: 'B1',
+      stability: 12,
+      difficulty: 5,
+      reps: 3,
+      lapses: 0,
+      learningStep: 0,
+      lastReviewAt: now - 100,
+      dueAt: now - 1,
+      lastSource: 'review',
+      mastery: 'Consolidating',
+      reappearCount: 1,
+    });
+
+    let capturedReq: GenerationRequest | null = null;
+    let capturedExclude: string[] = [];
+    const reselectingContent: ContentGateway = {
+      generatePassage: async (req) => {
+        capturedReq = req;
+        return { passage: chapterPassage(1, '星の少女 第二章'), stopReason: 'end_turn' };
+      },
+      getWordData: async () => {
+        throw new Error('unused');
+      },
+      suggestWords: async ({ exclude }) => {
+        capturedExclude = [...(exclude ?? [])];
+        return ['brandnew'];
+      },
+    };
+    const session = createSessionStore();
+    session.getState().startPassage(tokenizer.index('story_1:0', chapterZero), now);
+    const settings = createSettingsStore();
+    // A home generation left a manual word behind; it must NOT bleed into the story continuation.
+    settings.getState().setLastSetup({
+      examTarget: { kind: 'eiken', value: '2' },
+      intent: 'daily',
+      newWordRatio: 0.3,
+      wordTarget: 400,
+      contentType: 'long_story',
+      targetWordIds: ['legacy'],
+      excludedWordIds: [],
+    });
+    const container = await createContainer(userId, {
+      db,
+      content: reselectingContent,
+      story: { planStory: async () => LONG_PLAN, extendStoryPlan: async (req) => ({ ...req.plan }) },
+      tts: degradingTts,
+      now: () => now,
+      settings,
+      session,
+    });
+    const twoChapterPlan: StoryPlan = {
+      ...LONG_PLAN,
+      chapters: [
+        { index: 0, headingJa: '第一章', beatJa: '旅立ち' },
+        { index: 1, headingJa: '第二章', beatJa: '星の門' },
+      ],
+    };
+    await repos.stories.put({ storyId: twoChapterPlan.storyId, userId, createdAt: 1_000, plan: twoChapterPlan });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/s/story_1/0'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText('続きを生成')).toBeTruthy();
+    fireEvent.click(screen.getByText('続きを生成'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/1'), { timeout: 5_000 });
+
+    const wovenIds = (capturedReq as unknown as GenerationRequest).targetWords.map((w) => w.wordId);
+    // The review-due 'reviewed' reappears; a freshly-suggested word joins it …
+    expect(wovenIds).toContain('reviewed');
+    expect(wovenIds).toContain('brandnew');
+    // … the earlier chapter's never-reviewed 'ancient' is NOT re-woven …
+    expect(wovenIds).not.toContain('ancient');
+    // … and the home setup's manual word never contaminates the continuation (targetWordIds reset).
+    expect(wovenIds).not.toContain('legacy');
+    // The avoid list also reaches the LLM new-word exclusion so it never re-proposes 'ancient'.
+    expect(capturedExclude).toContain('ancient');
+  });
+
   it('advances the URL to an already-generated next chapter without regenerating', async () => {
     const userId = 'story_route_existing_next_user' as UserId;
     const db = new LexiaDb(userId);
@@ -501,5 +613,85 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     await waitFor(() => expect(screen.getAllByText('星の少女 第二章').length).toBeGreaterThan(0));
     // No regeneration happened — the existing chapter was reused.
     expect(generateCalls).toBe(0);
+  });
+
+  it('persists character images that finish AFTER confirmation instead of discarding them (E-3(d))', async () => {
+    const userId = 'story_route_confirm_race_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+
+    // The full-body image for the (only) character is held until AFTER we confirm the plan — so the
+    // confirmed story is first written WITHOUT the pair, mirroring "執筆開始 pressed before art is done".
+    const fullBody = deferred<string>();
+    const portraitData = `data:image/png;base64,${Buffer.from('mia-portrait').toString('base64')}`;
+    const fullBodyData = `data:image/png;base64,${Buffer.from('mia-fullbody').toString('base64')}`;
+    let illustrationCalls = 0;
+    const racingStoryGateway: StoryGateway = {
+      planStory: async () => PLAN,
+      illustrateCharacter: async (req) => {
+        illustrationCalls += 1;
+        if (req.variant === 'full_body') return fullBody.promise;
+        return portraitData;
+      },
+    };
+    const container = await createContainer(userId, {
+      db,
+      content: contentGateway,
+      story: racingStoryGateway,
+      tts: degradingTts,
+      now: () => 1_000_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '学習をはじめる' })).toBeTruthy();
+    fireEvent.click(screen.getByTestId('content-type-short_story'));
+    fireEvent.click(screen.getByText('文章を生成する'));
+
+    // The gate is up while the character's full-body art is still generating (portrait not reached yet).
+    expect(await screen.findByText('星の少女')).toBeTruthy();
+    expect(screen.getByTestId('character-portrait-loading')).toBeTruthy();
+
+    // Confirm early → the story is persisted WITHOUT the character illustration (still in flight).
+    fireEvent.click(screen.getByText('この設定で執筆する'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/s/story_1/0'), { timeout: 5_000 });
+    await waitFor(async () => expect(await repos.stories.get('story_1')).toBeDefined());
+    expect((await repos.stories.get('story_1'))?.plan.characters[0]!.fullBodyIllustrationUrl).toBeUndefined();
+
+    // Now the art finishes. E-3(d): it is saved onto the confirmed story (via the images table),
+    // rather than being dropped by the (dismissed) confirmation gate.
+    await act(async () => {
+      fullBody.resolve(fullBodyData);
+      await fullBody.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(async () => {
+      const character = (await repos.stories.get('story_1'))!.plan.characters[0]!;
+      expect(isImageRef(character.fullBodyIllustrationUrl)).toBe(true);
+      expect(isImageRef(character.portraitIllustrationUrl)).toBe(true);
+      expect(character.fullBodyIllustrationUrl).not.toBe(character.portraitIllustrationUrl);
+    }, { timeout: 5_000 });
+    // The bytes landed in the images table (portrait + full-body = 2 rows), not inline on the record.
+    expect(await repos.images.all(userId)).toHaveLength(2);
+
+    // Acceptance: opening the character detail page does NOT auto-regenerate — the stored pair is
+    // complete, so no further image calls are made (only the original full_body + portrait ran).
+    const callsAfterSave = illustrationCalls;
+    expect(callsAfterSave).toBe(2);
+    await act(async () => {
+      await router.navigate('/s/story_1/characters/0');
+    });
+    expect(await screen.findByRole('heading', { name: 'Mia' })).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(illustrationCalls).toBe(callsAfterSave);
   });
 });

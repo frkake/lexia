@@ -6,18 +6,99 @@
 
 import { useMemo, useState, type CSSProperties } from 'react';
 import { colors, fonts, radius } from '../theme/tokens';
+import { AssetImage } from '../shared/AssetImage';
 import { passageSearch, INTENT_LABELS } from '../../domain/library/passageSearch';
 import type { LibraryEntry } from '../../domain/library/passageSearch';
 import type { PassageRecord } from '../../types/ports';
+import type { PassageMeta, ReadingProgress } from '../../types/domain';
 
 export interface LibraryScreenProps {
   passages: PassageRecord[];
   storyTitles?: Record<string, string>;
+  /** D-4: reading progress by passageId (article → its id, story → its latest chapter id). */
+  progress?: Record<string, ReadingProgress>;
   onOpenArticle?: (passageId: string) => void;
   onOpenStory?: (storyId: string) => void;
 }
 
-export function LibraryScreen({ passages, storyTitles = {}, onOpenArticle, onOpenStory }: LibraryScreenProps) {
+/** D-4: 作成日を M/D で表示。 */
+function shortDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * D-4: 96×64 thumbnail — prefers the passage's downscaled `sceneThumbnailUrl` (D-4 第2段), falls back
+ * to the full-size `sceneIllustrationUrl`, else a category-tinted initial placeholder. `AssetImage`
+ * resolves a `lexia-image:` ref (D7) to an object URL and passes plain data/http URLs straight through.
+ */
+function Thumbnail({ src, initial, kind }: { src?: string; initial: string; kind: 'article' | 'story' }) {
+  if (src) {
+    return <AssetImage src={src} alt="" aria-hidden style={thumbImageStyle} />;
+  }
+  const tint = kind === 'story' ? { bg: colors.greenBg, fg: colors.greenDeep } : { bg: colors.surfaceBlue, fg: colors.primary };
+  return (
+    <div aria-hidden style={{ ...thumbPlaceholderStyle, background: tint.bg, color: tint.fg }}>
+      {initial}
+    </div>
+  );
+}
+
+/** D-4: read-state marker — 読了✓ / {percent}% (続きから強調) / 未読. */
+function StatusMarker({ progress }: { progress?: ReadingProgress }) {
+  if (progress?.status === 'completed') {
+    return <span data-testid="status-completed" style={statusDoneStyle}>読了 ✓</span>;
+  }
+  if (progress?.status === 'in_progress') {
+    return (
+      <span data-testid="status-progress" style={statusProgressStyle}>
+        続きから {progress.percent}%
+      </span>
+    );
+  }
+  return <span data-testid="status-unread" style={statusUnreadStyle}>未読</span>;
+}
+
+/** D-4: an article/story card — thumbnail + title + meta + read-state, one shared shape. */
+function LibraryCard({
+  kind,
+  title,
+  thumbSrc,
+  meta,
+  badge,
+  progress,
+  onOpen,
+}: {
+  kind: 'article' | 'story';
+  title: string;
+  thumbSrc?: string;
+  meta: string;
+  badge?: string;
+  progress?: ReadingProgress;
+  onOpen: () => void;
+}) {
+  const initial = title.trim().charAt(0).toUpperCase() || '?';
+  return (
+    <button type="button" className="interactive-row" onClick={onOpen} style={cardStyle(progress?.status === 'in_progress')}>
+      <Thumbnail src={thumbSrc} initial={initial} kind={kind} />
+      <div style={cardBodyStyle}>
+        <div style={cardTitleRowStyle}>
+          <span style={titleStyle}>{title}</span>
+          {badge ? <span style={storyBadgeStyle}>{badge}</span> : null}
+        </div>
+        <span style={metaStyle}>{meta}</span>
+      </div>
+      <StatusMarker progress={progress} />
+    </button>
+  );
+}
+
+/** D-4: article meta line —「INTENT · CEFR · N語 · M/D」. */
+function articleMeta(meta: PassageMeta, createdAt: number): string {
+  return [INTENT_LABELS[meta.intent], meta.level, `${meta.approxWords}語`, shortDate(createdAt)].join(' · ');
+}
+
+export function LibraryScreen({ passages, storyTitles = {}, progress = {}, onOpenArticle, onOpenStory }: LibraryScreenProps) {
   const [query, setQuery] = useState('');
   const results = useMemo<LibraryEntry[]>(
     () => passageSearch(passages, query, storyTitles),
@@ -49,35 +130,29 @@ export function LibraryScreen({ passages, storyTitles = {}, onOpenArticle, onOpe
             {isSearching ? '該当する文章がありません' : 'まだ文章がありません。ホームで最初の文章を生成しましょう。'}
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 18 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 18 }}>
             {results.map((entry) =>
               entry.kind === 'article' ? (
-                <button
+                <LibraryCard
                   key={entry.passage.passageId}
-                  type="button"
-                  onClick={() => onOpenArticle?.(entry.passage.passageId)}
-                  style={rowStyle}
-                >
-                  <span style={titleStyle}>{entry.passage.passage.meta.title}</span>
-                  <span style={metaStyle}>
-                    {INTENT_LABELS[entry.passage.passage.meta.intent]} · {entry.passage.passage.meta.level}
-                  </span>
-                </button>
+                  kind="article"
+                  title={entry.passage.passage.meta.title}
+                  thumbSrc={entry.passage.passage.meta.sceneThumbnailUrl ?? entry.passage.passage.meta.sceneIllustrationUrl}
+                  meta={articleMeta(entry.passage.passage.meta, entry.passage.createdAt)}
+                  progress={progress[entry.passage.passageId]}
+                  onOpen={() => onOpenArticle?.(entry.passage.passageId)}
+                />
               ) : (
-                <button
+                <LibraryCard
                   key={entry.storyId}
-                  type="button"
-                  onClick={() => onOpenStory?.(entry.storyId)}
-                  style={rowStyle}
-                >
-                  <span style={titleStyle}>
-                    <span aria-hidden style={{ color: colors.primary, marginRight: 8 }}>
-                      ▸
-                    </span>
-                    {entry.title}
-                  </span>
-                  <span style={metaStyle}>物語 · 全{entry.chapterCount}章</span>
-                </button>
+                  kind="story"
+                  title={entry.title}
+                  thumbSrc={entry.latest.passage.meta.sceneThumbnailUrl ?? entry.latest.passage.meta.sceneIllustrationUrl}
+                  meta={[INTENT_LABELS[entry.latest.passage.meta.intent], entry.latest.passage.meta.level, shortDate(entry.latest.createdAt)].join(' · ')}
+                  badge={`物語 · 全${entry.chapterCount}章`}
+                  progress={progress[entry.latest.passageId]}
+                  onOpen={() => onOpenStory?.(entry.storyId)}
+                />
               ),
             )}
           </div>
@@ -107,22 +182,96 @@ const searchStyle: CSSProperties = {
   padding: '12px 14px',
 };
 
-const rowStyle: CSSProperties = {
+// D-4: card row — left thumbnail, title/meta body, right read-state. in_progress gets a primary
+// left accent border so「続きから」cards stand out. `content-visibility` keeps a 100-item list smooth.
+const cardStyle = (inProgress: boolean): CSSProperties => ({
   display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: 16,
+  alignItems: 'center',
+  gap: 14,
   width: '100%',
   textAlign: 'left',
   background: colors.surfaceCard,
   border: `1px solid ${colors.borderCard}`,
+  borderLeft: inProgress ? `3px solid ${colors.primary}` : `1px solid ${colors.borderCard}`,
   borderRadius: radius.card,
-  padding: '16px 18px',
+  padding: '12px 16px',
   cursor: 'pointer',
+  contentVisibility: 'auto',
+  containIntrinsicSize: 'auto 76px',
+});
+
+const thumbBaseStyle: CSSProperties = {
+  width: 96,
+  height: 64,
+  flex: 'none',
+  borderRadius: 8,
+  overflow: 'hidden',
 };
 
-const titleStyle: CSSProperties = { fontFamily: fonts.serifJp, fontSize: 17, color: colors.ink };
-const metaStyle: CSSProperties = { fontFamily: fonts.ui, fontSize: 12, color: colors.faint, flex: 'none' };
+const thumbImageStyle: CSSProperties = {
+  ...thumbBaseStyle,
+  objectFit: 'cover',
+  display: 'block',
+  background: colors.surfaceSubtle,
+};
+
+const thumbPlaceholderStyle: CSSProperties = {
+  ...thumbBaseStyle,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontFamily: fonts.serif,
+  fontSize: 26,
+  fontWeight: 600,
+};
+
+const cardBodyStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+};
+
+const cardTitleRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+};
+
+const titleStyle: CSSProperties = {
+  fontFamily: fonts.serifJp,
+  fontSize: 17,
+  color: colors.ink,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  maxWidth: '100%',
+};
+const metaStyle: CSSProperties = { fontFamily: fonts.ui, fontSize: 12, color: colors.faint };
+
+const storyBadgeStyle: CSSProperties = {
+  flex: 'none',
+  fontFamily: fonts.ui,
+  fontSize: 11,
+  fontWeight: 600,
+  color: colors.primary,
+  background: colors.surfaceBlue,
+  borderRadius: radius.chip,
+  padding: '2px 8px',
+};
+
+const statusBaseStyle: CSSProperties = {
+  flex: 'none',
+  fontFamily: fonts.ui,
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const statusDoneStyle: CSSProperties = { ...statusBaseStyle, color: colors.green };
+const statusProgressStyle: CSSProperties = { ...statusBaseStyle, color: colors.primary };
+const statusUnreadStyle: CSSProperties = { ...statusBaseStyle, color: colors.faint, fontWeight: 400 };
 
 const emptyStyle: CSSProperties = {
   marginTop: 40,

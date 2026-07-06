@@ -14,7 +14,7 @@ function snapshot(): DashboardSnapshot {
     dueTodayCount: 8,
     mastery: { new: 298, learning: 384, consolidating: 347, mastered: 211, total: 1240 },
     reading: [{ passageId: 'p1', title: 'The Restless Boardroom', level: 'B2', percent: 62, sentenceIndex: 5 }],
-    weekly: Array.from({ length: 7 }, (_, i) => ({ dayStartMs: TODAY - (6 - i) * DAY_MS, reviewCount: i })),
+    weekly: Array.from({ length: 7 }, (_, i) => ({ dayStartMs: TODAY - (6 - i) * DAY_MS, reviewCount: i, readingCount: 6 - i })),
     dueList: [
       { wordId: 'mitigate', dueAt: TODAY, mastery: 'Learning' },
       { wordId: 'leverage', dueAt: TODAY + DAY_MS, mastery: 'Consolidating' },
@@ -60,6 +60,13 @@ describe('<DashboardScreen/>', () => {
   it('charts the weekly activity with seven bars (10.4)', () => {
     const { getByTestId } = renderScreen();
     expect(within(getByTestId('weekly-bars')).getAllByTestId(/weekly-bar-/).length).toBe(7);
+  });
+
+  it('splits each weekly bar into review and reading segments (F-3)', () => {
+    // Fixture day #5 has reviewCount=5 and readingCount=1 → both series present.
+    const { getByTestId } = renderScreen();
+    expect(getByTestId('weekly-review-5')).toBeTruthy();
+    expect(getByTestId('weekly-reading-5')).toBeTruthy();
   });
 
   it('lists due words with glosses and starts review (10.5)', () => {

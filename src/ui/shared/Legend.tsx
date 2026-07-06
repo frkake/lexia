@@ -42,6 +42,10 @@ export function Legend() {
         'コロケーション',
       )}
       {item(
+        <span style={{ width: 18, borderBottom: `2px dashed ${colors.terracotta}` }} />,
+        'イディオム・定型表現',
+      )}
+      {item(
         <span
           style={{
             display: 'inline-flex',
@@ -59,6 +63,25 @@ export function Legend() {
           1
         </span>,
         '気づき（右に解説）',
+      )}
+      {item(
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 15,
+            height: 15,
+            borderRadius: '50%',
+            background: colors.syntax,
+            color: '#fff',
+            fontSize: 9,
+            fontWeight: 700,
+          }}
+        >
+          1
+        </span>,
+        '読み方の気づき（構文）',
       )}
     </div>
   );

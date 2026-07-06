@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sessionPlanner } from './sessionPlanner';
+import { SESSION_REVIEW_LIMIT } from '../srs/parameters';
 import type { SchedulingRepository } from '../../types/ports';
 import type { UserId, WordSchedulingState, SetupConfig, WordData } from '../../types/domain';
 
@@ -87,6 +88,23 @@ describe('SessionPlanner.planReviewQueue', () => {
     const queue = await sessionPlanner.planReviewQueue(mockRepo(states), U, 1_000);
     expect(queue.map((s) => s.wordId)).toEqual(['b', 'a']);
   });
+
+  it('caps the queue at SESSION_REVIEW_LIMIT, due-soonest first (C-5b)', async () => {
+    const states = Array.from({ length: SESSION_REVIEW_LIMIT + 5 }, (_, i) =>
+      sched(`w${i}`, { dueAt: i, stability: 5 }),
+    );
+    const queue = await sessionPlanner.planReviewQueue(mockRepo(states), U, 10_000);
+    expect(queue).toHaveLength(SESSION_REVIEW_LIMIT);
+    expect(queue.map((s) => s.wordId)).toEqual(states.slice(0, SESSION_REVIEW_LIMIT).map((s) => s.wordId));
+  });
+
+  it('excludes seeded New words (stability undefined) even when dueAt has elapsed (C-5b / isDueForReview)', async () => {
+    const seeded = sched('seed', { dueAt: 100 });
+    delete seeded.stability;
+    const learned = sched('learned', { dueAt: 200, stability: 4 });
+    const queue = await sessionPlanner.planReviewQueue(mockRepo([seeded, learned]), U, 1_000);
+    expect(queue.map((s) => s.wordId)).toEqual(['learned']);
+  });
 });
 
 describe('SessionPlanner.buildRequest', () => {
@@ -103,6 +121,13 @@ describe('SessionPlanner.buildRequest', () => {
     expect((req as { themes?: unknown }).themes).toBeUndefined(); // legacy field gone
     // w2 excluded; w1 + w3 remain.
     expect(req.targetWords.map((t) => t.wordId)).toEqual(['w1', 'w3']);
+  });
+
+  it('injects the exam sub-band + label into levelDetail for the passage prompt (A-3-1)', () => {
+    const req = sessionPlanner.buildRequest(setup, []); // eiken 準1 → B2, grade → mid
+    expect(req.levelDetail).toEqual({ subBand: 'mid', examLabel: '英検準1級' });
+    const toeic900 = sessionPlanner.buildRequest({ ...setup, examTarget: { kind: 'toeic', value: '900' } }, []);
+    expect(toeic900.levelDetail).toEqual({ subBand: 'high', examLabel: 'TOEIC 900' });
   });
 
   it('lets advanced settings override vocabulary level and sentence-structure readability separately', () => {
@@ -160,7 +185,7 @@ describe('SessionPlanner.buildRequest', () => {
       register: 'neutral',
       connotation: 'positive',
       frequency: 3,
-      core: { meaningsJa: [], examples: [], collocations: ['stay resilient'], synonymNuances: [] },
+      core: { meaningsJa: [], examples: [], collocations: [{ id: 'stay-resilient', pattern: 'stay resilient', type: 'Adv+V', slotExamples: [], glossJa: '', l1Contrast: false }], synonymNuances: [] },
     };
     const req = sessionPlanner.buildRequest(setup, [], { w1: word });
     const w1 = req.targetWords.find((t) => t.wordId === 'w1')!;

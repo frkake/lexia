@@ -33,13 +33,13 @@ describe('ports', () => {
     const repo: ReviewLogRepository = {
       append: async () => {},
       since: async () => [],
-      lastPassageUpdate: async () => undefined,
+      lastUpdate: async () => undefined,
     };
     // The read subset must be assignable from the full repository.
     const reader: ReviewLogReader = repo;
-    expect(reader.lastPassageUpdate).toBe(repo.lastPassageUpdate);
+    expect(reader.lastUpdate).toBe(repo.lastUpdate);
     // No mutation method other than append is exposed.
-    expect(Object.keys(repo).sort()).toEqual(['append', 'lastPassageUpdate', 'since']);
+    expect(Object.keys(repo).sort()).toEqual(['append', 'lastUpdate', 'since']);
   });
 
   it('ContentGateway generates passages and fetches word data', () => {

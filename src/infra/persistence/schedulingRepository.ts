@@ -31,4 +31,13 @@ export class DexieSchedulingRepository implements SchedulingRepository {
       .limit(limit)
       .toArray();
   }
+
+  /** Count this learner's rows seeded at/after `from` (seededAt is non-indexed → scan by userId). */
+  countSeededSince(userId: UserId, from: number): Promise<number> {
+    return this.db.scheduling
+      .where('userId')
+      .equals(userId)
+      .filter((s) => s.seededAt !== undefined && s.seededAt >= from)
+      .count();
+  }
 }

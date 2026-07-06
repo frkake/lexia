@@ -17,7 +17,7 @@ import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { SessionStore } from '../stores/sessionStore';
 import type { SettingsStore } from '../stores/settingsStore';
 import type { PassageRepository, ProgressRepository, SettingsRepository } from '../../types/ports';
-import type { IndexedPassage, UserId } from '../../types/domain';
+import type { IndexedPassage, ReadingProgress, UserId } from '../../types/domain';
 
 export interface RestoreDeps {
   passages: PassageRepository;
@@ -25,18 +25,31 @@ export interface RestoreDeps {
   session: SessionStore;
 }
 
-/** Reopen the most-recent in-progress passage at its saved position (null if none). */
-export async function restoreReadingSession(deps: RestoreDeps, userId: UserId): Promise<IndexedPassage | null> {
-  const inProgress = await deps.progress.byStatus(userId, 'in_progress'); // newest-started first
-  const latest = inProgress[0];
+/**
+ * Reopen the most-recently-opened in-progress passage at its saved position (null if none). Stamps
+ * `lastOpenedAt = now` so the revisit counts as an open and the passage stays at the head of the
+ * "続きを読む" ordering. `startedAt` is preserved from the saved row.
+ */
+export async function restoreReadingSession(
+  deps: RestoreDeps,
+  userId: UserId,
+  now: number,
+): Promise<IndexedPassage | null> {
+  const inProgress = await deps.progress.byStatus(userId, 'in_progress');
+  let latest: ReadingProgress | undefined;
+  for (const p of inProgress) {
+    if (!latest || p.lastOpenedAt > latest.lastOpenedAt) latest = p;
+  }
   if (!latest) return null;
 
   const record = await deps.passages.get(latest.passageId);
   if (!record) return null;
 
   const passage = tokenizer.index(record.passageId, record.passage);
-  deps.session.getState().startPassage(passage, latest.startedAt);
+  deps.session.getState().startPassage(passage, latest.startedAt, now);
   deps.session.getState().updateProgress(latest.sentenceIndex);
+  const progress = deps.session.getState().toReadingProgress(userId);
+  if (progress) await deps.progress.upsert(progress);
   return passage;
 }
 
@@ -61,20 +74,30 @@ export interface OpenPassageDeps {
  * record, re-indexes it with the shared tokenizer, starts the session, and seeks to the learner's
  * saved sentence position. Returns null (session untouched) when the passage is missing or owned by
  * another learner — the route renders a "not found" state rather than crashing.
+ *
+ * Stamps `lastOpenedAt = now` on the progress row (F-2) so opening a passage — from the library, a
+ * shared URL, or the CONTINUE card — moves it to the head of the "続きを読む" ordering. `startedAt` and
+ * a prior `completed` status are preserved so reopening a finished passage doesn't reset it.
  */
 export async function openPassage(
   deps: OpenPassageDeps,
   userId: UserId,
   passageId: string,
+  now: number,
 ): Promise<IndexedPassage | null> {
   const record = await deps.passages.get(passageId);
   if (!record || record.userId !== userId) return null;
 
   const passage = tokenizer.index(record.passageId, record.passage);
-  const now = record.createdAt;
-  deps.session.getState().startPassage(passage, now);
-
   const saved = await deps.progress.get(userId, passageId);
-  if (saved) deps.session.getState().updateProgress(saved.sentenceIndex);
+  // Preserve the original start; only lastOpenedAt (openedAt) advances to now.
+  deps.session.getState().startPassage(passage, saved?.startedAt ?? record.createdAt, now);
+  if (saved) {
+    deps.session.getState().updateProgress(saved.sentenceIndex);
+    if (saved.status === 'completed') deps.session.getState().markCompleted(saved.completedAt ?? now);
+  }
+
+  const progress = deps.session.getState().toReadingProgress(userId);
+  if (progress) await deps.progress.upsert(progress);
   return passage;
 }

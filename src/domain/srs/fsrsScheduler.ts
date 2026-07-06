@@ -175,6 +175,11 @@ function seed(
     mastery: 'Learning',
     reappearCount: prior?.reappearCount ?? 0,
     ...(prior?.level ? { level: prior.level } : {}),
+    // Carry the New-word introduction timestamp (C-5b) and the suspended flag (C-5d) across the
+    // seed so a fresh word's first reading-time interaction cannot silently reset the per-day
+    // new-word budget or un-suspend a known-declared word.
+    ...(prior?.seededAt !== undefined ? { seededAt: prior.seededAt } : {}),
+    ...(prior?.suspended !== undefined ? { suspended: prior.suspended } : {}),
   };
 }
 

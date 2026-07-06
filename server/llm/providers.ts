@@ -12,15 +12,23 @@
  */
 
 import type {
+  AnnotationResult,
+  AnnotationStatus,
   CharacterIllustrationRequest,
+  ExpressionCategory,
   GenerationRequest,
   GenerationResponse,
   NoticeCue,
   PassageAnnotationRequest,
   PassageIllustrationRequest,
   PassageOutput,
+  ReviewSentenceRequest,
   Sentence,
+  SentenceSyntaxNote,
+  SpanRef,
   StopReason,
+  SyntaxPattern,
+  SyntaxSpan,
   StoryPlan,
   StoryPlanExtensionRequest,
   StoryPlanRequest,
@@ -32,6 +40,8 @@ import {
   ANNOTATION_CATEGORIES,
   ANNOTATION_JSON_SCHEMA,
   PASSAGE_JSON_SCHEMA,
+  REVIEW_SENTENCE_JSON_SCHEMA,
+  REVIEW_SENTENCE_MAX_TOKENS,
   STORY_PLAN_EXTENSION_JSON_SCHEMA,
   STORY_PLAN_JSON_SCHEMA,
   WORD_DATA_JSON_SCHEMA,
@@ -41,6 +51,7 @@ import {
   buildCharacterIllustrationPrompt,
   buildPassageMessages,
   buildPassageIllustrationPrompt,
+  buildReviewSentenceMessages,
   buildStoryPlanExtensionMessages,
   buildStoryPlanMessages,
   buildSuggestionMessages,
@@ -50,14 +61,25 @@ import {
   storyPlanExtensionMaxTokens,
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
+import { structureCollocations, structureMore } from '../../src/domain/wordData/structuredWordData';
 
 export type Env = Record<string, string | undefined>;
+
+/**
+ * Machine-readable failure code the proxy attaches to error responses so the client can show a
+ * cause-specific message instead of a generic "try again later". `not_configured` = the API key is
+ * missing; `rate_limited` = upstream 429; `upstream_auth` = upstream rejected the key (401/403);
+ * `upstream_error` = any other upstream/transport failure.
+ */
+export type ProviderErrorCode = 'not_configured' | 'rate_limited' | 'upstream_auth' | 'upstream_error';
 
 /** HTTP status the proxy will return; mirrors HttpContentGateway.kindForStatus. */
 export class ProviderError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Optional machine-readable cause the client maps to a specific ContentGatewayError kind. */
+    readonly code?: ProviderErrorCode,
   ) {
     super(message);
     this.name = 'ProviderError';
@@ -80,25 +102,67 @@ function requireKey(env: Env, provider: Provider): string {
   const key = provider === 'anthropic' ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY;
   if (!key || !key.trim() || key.includes('...')) {
     const name = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-    throw new ProviderError(503, `Generation API not configured: ${name} is missing. Set it in .env.`);
+    throw new ProviderError(
+      503,
+      `Generation API not configured: ${name} is missing. Set it in .env.`,
+      'not_configured',
+    );
   }
   return key.trim();
 }
 
-function modelFor(env: Env, provider: Provider): string {
+/** Configuration probe backing GET /api/health. Reports whether the active provider has a usable key. */
+export function healthStatus(env: Env): { configured: boolean; provider: Provider } {
+  const provider = resolveProvider(env);
+  const key = provider === 'anthropic' ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY;
+  const configured = Boolean(key && key.trim() && !key.includes('...'));
+  return { configured, provider };
+}
+
+/**
+ * Per-task generation parameters. Text generation wants a creative temperature and can point at a
+ * different model than the low-temperature annotation/word-data passes, all switchable via env
+ * (`LLM_MODEL_PASSAGE` / `LLM_MODEL_ANNOTATION` / `LLM_MODEL_WORDPACK`).
+ */
+type Task = 'passage' | 'annotation' | 'wordpack' | 'story';
+
+/** Task → optional model-override env var; unset tasks fall back to OPENAI_MODEL / ANTHROPIC_MODEL. */
+const TASK_MODEL_ENV: Partial<Record<Task, string>> = {
+  passage: 'LLM_MODEL_PASSAGE',
+  annotation: 'LLM_MODEL_ANNOTATION',
+  wordpack: 'LLM_MODEL_WORDPACK',
+};
+
+function modelFor(env: Env, provider: Provider, task?: Task): string {
+  const overrideKey = task ? TASK_MODEL_ENV[task] : undefined;
+  const taskOverride = overrideKey ? env[overrideKey]?.trim() : undefined;
+  if (taskOverride) return taskOverride;
   if (provider === 'anthropic') return env.ANTHROPIC_MODEL?.trim() || 'claude-opus-4-8';
   return env.OPENAI_MODEL?.trim() || 'gpt-4o';
 }
 
-/** Map an upstream HTTP status to the status the proxy returns to the client. */
-function mapUpstreamStatus(status: number): number {
-  if (status === 429) return 429; // rate_limited
-  return 503; // auth / overload / 5xx / anything else -> "service unavailable"
+/** Reasoning models (o-series, gpt-5 series) reject a custom `temperature`, so omit it for them. */
+function acceptsTemperature(model: string): boolean {
+  const m = model.trim().toLowerCase();
+  return !(/^o\d/.test(m) || m.startsWith('gpt-5'));
+}
+
+/** Map an upstream HTTP failure to the status + machine-readable code the proxy returns. */
+function mapUpstream(status: number): { status: number; code: ProviderErrorCode } {
+  if (status === 429) return { status: 429, code: 'rate_limited' }; // rate_limited
+  if (status === 401 || status === 403) return { status: 503, code: 'upstream_auth' }; // bad/rejected key
+  return { status: 503, code: 'upstream_error' }; // overload / 5xx / anything else
 }
 
 interface CallResult {
   text: string;
   stopReason: StopReason;
+}
+
+/** Optional per-call task parameters (temperature + task-specific model selection). */
+interface CallOptions {
+  temperature?: number;
+  task?: Task;
 }
 
 /** One structured-JSON completion. `schema` drives Anthropic's output_config; OpenAI uses json_object. */
@@ -110,51 +174,67 @@ async function callModel(
   maxTokens: number,
   schema: unknown,
   schemaName: string,
+  options: CallOptions = {},
 ): Promise<CallResult> {
   const provider = resolveProvider(env);
   const apiKey = requireKey(env, provider);
-  const model = modelFor(env, provider);
+  const model = modelFor(env, provider, options.task);
+  const { temperature } = options;
 
   let response: Response;
   try {
-    response =
-      provider === 'anthropic'
-        ? await fetchImpl(ANTHROPIC_URL, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': apiKey,
-              'anthropic-version': ANTHROPIC_VERSION,
-            },
-            body: JSON.stringify({
-              model,
-              max_tokens: maxTokens,
-              system,
-              messages: [{ role: 'user', content: user }],
-              output_config: { format: { type: 'json_schema', schema } },
-            }),
-          })
-        : await fetchImpl(OPENAI_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-              model,
-              max_tokens: maxTokens,
-              messages: [
-                { role: 'system', content: system },
-                { role: 'user', content: user },
-              ],
-              // Structured Outputs: constrain the reply to the exact schema (no wrapper / missing fields).
-              response_format: { type: 'json_schema', json_schema: { name: schemaName, schema, strict: true } },
-            }),
-          });
+    if (provider === 'anthropic') {
+      const body: Record<string, unknown> = {
+        model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: 'user', content: user }],
+        output_config: { format: { type: 'json_schema', schema } },
+      };
+      if (temperature !== undefined) body.temperature = temperature;
+      response = await fetchImpl(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify(body),
+      });
+    } else {
+      const body: Record<string, unknown> = {
+        model,
+        // New OpenAI model series require `max_completion_tokens`; gpt-4o accepts it too, so sending
+        // it (instead of the deprecated `max_tokens`) lets OPENAI_MODEL point at a newer model
+        // without a 400 while staying backward-compatible.
+        max_completion_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        // Structured Outputs: constrain the reply to the exact schema (no wrapper / missing fields).
+        response_format: { type: 'json_schema', json_schema: { name: schemaName, schema, strict: true } },
+      };
+      // Reasoning models (o-series / gpt-5) reject a custom temperature, so only send it otherwise.
+      if (temperature !== undefined && acceptsTemperature(model)) body.temperature = temperature;
+      response = await fetchImpl(OPENAI_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+      });
+    }
   } catch (cause) {
-    throw new ProviderError(503, `Generation API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`);
+    throw new ProviderError(
+      503,
+      `Generation API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`,
+      'upstream_error',
+    );
   }
 
   if (!response.ok) {
     const detail = await safeText(response);
-    throw new ProviderError(mapUpstreamStatus(response.status), `${provider} API error ${response.status}: ${detail}`);
+    const mapped = mapUpstream(response.status);
+    throw new ProviderError(mapped.status, `${provider} API error ${response.status}: ${detail}`, mapped.code);
   }
 
   const body = (await response.json()) as unknown;
@@ -261,7 +341,15 @@ function normalizeSentence(raw: Raw): Sentence {
   const translationJa = typeof raw.translationJa === 'string' ? raw.translationJa : '';
   const rawSpans = asArray<RawTranslationSpan>(raw.translationSpans);
   const translationSpans = reanchorTranslationSpans(translationJa, rawSpans);
-  return { tokens, translationJa, ...(translationSpans ? { translationSpans } : {}) };
+  // paragraphIndex (F-8②): carried through when the model supplies it; absent ⇒ single-paragraph
+  // fallback in the reader (back-compat with passages generated before this field).
+  const paragraphIndex = typeof raw.paragraphIndex === 'number' ? raw.paragraphIndex : undefined;
+  return {
+    tokens,
+    translationJa,
+    ...(translationSpans ? { translationSpans } : {}),
+    ...(paragraphIndex !== undefined ? { paragraphIndex } : {}),
+  };
 }
 
 /** Ensure arrays exist and request-owned meta stays authoritative for the validator/UI. */
@@ -270,6 +358,8 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
   const targetSpans = asArray<PassageOutput['targetSpans'][number]>(core.targetSpans);
   const collocationSpans = asArray<PassageOutput['collocationSpans'][number]>(core.collocationSpans);
   const noticeCues = asArray<PassageOutput['noticeCues'][number]>(core.noticeCues);
+  const expressionSpans = asArray<RawExpressionSpan>(core.expressionSpans);
+  const syntaxSpans = normalizeSyntaxSpans(asArray<RawSyntaxSpan>(core.syntaxSpans), sentences.length);
   const metaIn = (core.meta && typeof core.meta === 'object' ? core.meta : {}) as Partial<PassageOutput['meta']>;
   const distinct = new Map(targetSpans.map((s) => [s.wordId, s.masteryDensity]));
   const newCount = [...distinct.values()].filter((d) => d === 'new').length;
@@ -288,7 +378,14 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
         : sentences.reduce((n, s) => n + (Array.isArray(s.tokens) ? s.tokens.length : 0), 0),
     ...(storyRef ? { storyRef } : {}),
   };
-  return reanchorSpans({ meta, sentences, targetSpans, collocationSpans, noticeCues });
+  const reanchored = reanchorSpans(
+    { meta, sentences, targetSpans, collocationSpans, noticeCues },
+    req.targetWords,
+    expressionSpans,
+  );
+  // syntaxSpans (B-3) need no re-anchoring — they carry a verbatim anchorText, not a token span. Always
+  // attach (possibly empty) on new-pipeline passages so the validator's readability gates run.
+  return { ...reanchored, syntaxSpans };
 }
 
 interface Loc {
@@ -306,8 +403,17 @@ function renderSlice(tokens: string[], start: number, end: number): string {
 function findRun(tokens: string[], surface: string, from: number): [number, number] | null {
   const target = surface.trim().toLowerCase();
   if (!target) return null;
+  // Whole-sentence anchor (C-4): a sentence_structure cue may quote the ENTIRE sentence. Match it
+  // directly so the full [0, tokens.length) span is returned. (Only meaningful from the sentence start.)
+  if (from === 0 && tokens.length > 0 && renderSlice(tokens, 0, tokens.length) === target) {
+    return [0, tokens.length];
+  }
+  // No run-length cap (C-4): clause- and sentence-spanning anchors were unlocatable at the old 6-token
+  // limit, so their cues were silently dropped. The `rendered.length > target.length` guard still bounds
+  // each inner scan — the render grows monotonically with `end`, so once it overshoots the target no
+  // longer run can match — keeping the search from diverging on a long anchor.
   for (let start = from; start < tokens.length; start += 1) {
-    for (let end = start + 1; end <= Math.min(tokens.length, start + 6); end += 1) {
+    for (let end = start + 1; end <= tokens.length; end += 1) {
       const rendered = renderSlice(tokens, start, end);
       if (rendered === target) return [start, end];
       if (rendered.length > target.length) break; // run already overshoots the target
@@ -375,15 +481,119 @@ function locateAnchor(
   return null;
 }
 
+/** An expressionSpan as the model emits it: a verbatim surface + nested span (server re-derives). */
+type RawExpressionSpan = {
+  span?: { sentenceIndex?: number; tokenStart?: number; tokenEnd?: number };
+  surface?: string;
+  category?: string;
+  meaningJa?: string;
+};
+
+const EXPRESSION_CATEGORY_SET = new Set<ExpressionCategory>(['idiom', 'phrasal_verb', 'set_phrase']);
+
+/** A self-reported syntactic construction as the model emits it (B-3): sentenceIndex + a verbatim
+ * anchorText snippet (no token span — a construction may be discontinuous, so the client validator
+ * checks anchorText verbatim rather than re-deriving a span). */
+type RawSyntaxSpan = {
+  sentenceIndex?: number;
+  pattern?: string;
+  anchorText?: string;
+  noteJa?: string;
+};
+
+const SYNTAX_PATTERN_SET = new Set<SyntaxPattern>([
+  'nonrestrictive_relative',
+  'participial',
+  'inversion',
+  'cleft',
+  'subjunctive',
+  'appositive',
+  'other',
+]);
+
+/**
+ * Carry the model's self-reported syntaxSpans through to the domain shape (B-3). Unlike target /
+ * collocation / expression spans, a SyntaxSpan has no token span to re-anchor — it references a
+ * sentence + a verbatim anchorText, which the PassageValidator checks in place. Drop entries with an
+ * unknown pattern, an out-of-range sentenceIndex, or an empty anchorText; keep an empty array so the
+ * validator's readability gates run on new-pipeline passages (mirrors expressionSpans).
+ */
+function normalizeSyntaxSpans(raw: RawSyntaxSpan[], sentenceCount: number): SyntaxSpan[] {
+  const out: SyntaxSpan[] = [];
+  for (const s of raw) {
+    const pattern = s.pattern as SyntaxPattern | undefined;
+    const anchorText = typeof s.anchorText === 'string' ? s.anchorText.trim() : '';
+    if (
+      typeof s.sentenceIndex !== 'number' ||
+      s.sentenceIndex < 0 ||
+      s.sentenceIndex >= sentenceCount ||
+      !pattern ||
+      !SYNTAX_PATTERN_SET.has(pattern) ||
+      !anchorText
+    ) {
+      continue;
+    }
+    out.push({
+      sentenceIndex: s.sentenceIndex,
+      pattern,
+      anchorText,
+      noteJa: typeof s.noteJa === 'string' ? s.noteJa : '',
+    });
+  }
+  return out;
+}
+
+/** Strip fullwidth/halfwidth angle-bracket slot markers from a collocation pattern, leaving the head
+ * form (e.g. "accept ＜提案・招待＞" → "accept", "＜経済が＞ recover" → "recover"). */
+function collocationHeadForm(pattern: string): string {
+  return pattern
+    .replace(/＜[^＞]*＞/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resolve a collocationId to the surface text to locate in the passage, per design decision D4's
+ * "id ⇄ 旧文字列" fallback: for structured word data whose core.collocations entries carry a stable
+ * `id` (C-3's CollocationEntry), return the entry's locatable surface — a legacy verbatim surface
+ * field if present, otherwise the `pattern` with its ＜slot＞ markers stripped to the head form (the
+ * pattern itself is not verbatim in the passage). For legacy plain-string collocations (and anything
+ * unmatched) the collocationId IS the surface, so it is returned unchanged.
+ */
+function collocationSurfaceFor(collocationId: string, targetWords: GenerationRequest['targetWords']): string {
+  for (const t of targetWords) {
+    const colls = (t.attributes as { core?: { collocations?: unknown } } | undefined)?.core?.collocations;
+    if (!Array.isArray(colls)) continue;
+    for (const c of colls) {
+      if (c && typeof c === 'object' && (c as { id?: unknown }).id === collocationId) {
+        const entry = c as { text?: unknown; surface?: unknown; phrase?: unknown; collocation?: unknown; pattern?: unknown };
+        const legacy = entry.text ?? entry.surface ?? entry.phrase ?? entry.collocation;
+        if (typeof legacy === 'string' && legacy.trim()) return legacy;
+        if (typeof entry.pattern === 'string') {
+          const head = collocationHeadForm(entry.pattern);
+          if (head) return head;
+        }
+      }
+    }
+  }
+  return collocationId; // legacy: the id itself is the collocation surface string
+}
+
 /**
  * Models reliably miscount the token indices of their own spans (the prose is correct but
  * [tokenStart,tokenEnd) points at the wrong tokens, which the PassageValidator rejects as
  * surface_mismatch). Re-derive each span's indices by locating its declared text in the passage
- * so the client validator + renderer + TTS see correct spans. Target/collocation spans relocate by
- * their `surface`/`collocationId`. Notice cues are NOT produced here — they come from the separate
- * annotation pass (annotatePassage); generation leaves noticeCues empty.
+ * so the client validator + renderer + TTS see correct spans. Target/expression spans relocate by
+ * their `surface`; collocation spans by the surface resolved from `collocationId` (D4). Notice cues
+ * are NOT produced here — they come from the separate annotation pass (annotatePassage); generation
+ * leaves noticeCues empty.
  */
-function reanchorSpans(passage: PassageOutput): PassageOutput {
+function reanchorSpans(
+  passage: PassageOutput,
+  targetWords: GenerationRequest['targetWords'],
+  rawExpressionSpans: RawExpressionSpan[] = [],
+): PassageOutput {
   const usedTarget = new Set<string>();
   const targetSpans = passage.targetSpans
     .map((span) => {
@@ -398,15 +608,32 @@ function reanchorSpans(passage: PassageOutput): PassageOutput {
   const usedColl = new Set<string>();
   const collocationSpans = passage.collocationSpans
     .map((span) => {
-      const loc = locate(passage.sentences, span.collocationId, span.sentenceIndex, usedColl);
+      const surface = collocationSurfaceFor(span.collocationId, targetWords);
+      const loc = locate(passage.sentences, surface, span.sentenceIndex, usedColl);
       if (!loc) return null;
       usedColl.add(`${loc.sentenceIndex}:${loc.tokenStart}`);
       return { ...span, ...loc };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);
 
+  // Expression spans (idioms / phrasal verbs / set phrases, B-1/B-2) relocate by their verbatim
+  // `surface`; drop ones with an unknown category or an unlocatable surface.
+  const usedExpr = new Set<string>();
+  const expressionSpans = rawExpressionSpans
+    .map((raw) => {
+      const surface = typeof raw.surface === 'string' ? raw.surface : '';
+      const category = raw.category as ExpressionCategory | undefined;
+      if (!surface || !category || !EXPRESSION_CATEGORY_SET.has(category)) return null;
+      const prefer = typeof raw.span?.sentenceIndex === 'number' ? raw.span.sentenceIndex : 0;
+      const loc = locate(passage.sentences, surface, prefer, usedExpr);
+      if (!loc) return null;
+      usedExpr.add(`${loc.sentenceIndex}:${loc.tokenStart}`);
+      return { span: loc, surface, category, meaningJa: typeof raw.meaningJa === 'string' ? raw.meaningJa : '' };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+
   // Notices are produced by the separate annotation pass (annotatePassage), not by generation.
-  return { ...passage, targetSpans, collocationSpans, noticeCues: [] };
+  return { ...passage, targetSpans, collocationSpans, noticeCues: [], expressionSpans };
 }
 
 export async function generatePassage(
@@ -423,6 +650,7 @@ export async function generatePassage(
     maxTokensForWordTarget(req.wordTarget),
     PASSAGE_JSON_SCHEMA,
     'passage_output',
+    { temperature: 0.8, task: 'passage' },
   );
   // Pass refusal/max_tokens straight through so the orchestrator can regenerate.
   if (stopReason === 'refusal' || stopReason === 'max_tokens') {
@@ -462,7 +690,10 @@ export async function getWordData(
 ): Promise<WordData> {
   const { system, user } = buildWordMessages(wordId);
   // Larger budget than before: the rich `more` attributes need more output tokens.
-  const { text } = await callModel(env, fetchImpl, system, user, 1800, WORD_DATA_JSON_SCHEMA, 'word_data');
+  const { text } = await callModel(env, fetchImpl, system, user, 1800, WORD_DATA_JSON_SCHEMA, 'word_data', {
+    temperature: 0.4,
+    task: 'wordpack',
+  });
   const parsed = parseJson<Partial<WordData>>(text, 'word data');
   if (!parsed.headword || !parsed.core) {
     throw new ProviderError(502, 'Generation API returned incomplete word data.');
@@ -488,38 +719,24 @@ function normalizeMemoryTips(value: unknown): WordData['memoryTips'] | undefined
 }
 
 /**
- * Drop null/empty `more` fields so stored WordData matches the optional domain shape and the
- * validator's grounding rule (empty ⇒ absent) stays consistent with what the UI renders.
+ * Structure the rich attributes (C-1/2/3) and drop null/empty `more` fields so stored WordData
+ * matches the optional domain shape and the validator's grounding rule (empty ⇒ absent) stays
+ * consistent with what the UI renders. `structureCollocations`/`structureMore` accept both the new
+ * structured shape and the legacy shape, so a model that still emits bare strings is lifted rather
+ * than rejected (the same lift the client applies to legacy cache rows).
  */
 function normalizeWordData(parsed: Partial<WordData>, wordId: string): WordData {
   const data = { ...parsed, wordId } as WordData;
   const memoryTips = normalizeMemoryTips((parsed as { memoryTips?: unknown }).memoryTips);
   if (memoryTips) data.memoryTips = memoryTips;
   else delete (data as { memoryTips?: unknown }).memoryTips;
-  const more = pruneEmpty((parsed as { more?: unknown }).more);
-  if (more && Object.keys(more).length > 0) data.more = more as WordData['more'];
+  if (data.core) {
+    data.core = { ...data.core, collocations: structureCollocations((data.core as { collocations?: unknown }).collocations) };
+  }
+  const more = structureMore((parsed as { more?: unknown }).more);
+  if (more) data.more = more;
   else delete (data as { more?: unknown }).more;
   return data;
-}
-
-/** Recursively strip null/empty values; returns undefined when nothing meaningful remains. */
-function pruneEmpty(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-    if (v == null) continue;
-    if (Array.isArray(v)) {
-      if (v.length > 0) out[key] = v;
-    } else if (typeof v === 'object') {
-      const inner = pruneEmpty(v);
-      if (inner && Object.keys(inner).length > 0) out[key] = inner;
-    } else if (typeof v === 'string') {
-      if (v.trim().length > 0) out[key] = v;
-    } else {
-      out[key] = v;
-    }
-  }
-  return out;
 }
 
 /** Propose base-form lemmas to teach for a level + theme (used when no targets are picked). */
@@ -546,6 +763,36 @@ export async function suggestWords(
     if (out.length >= count) break;
   }
   return out;
+}
+
+/**
+ * Generate ONE fresh review-context sentence for a word (C-5c). Lightweight, low-token task; the
+ * client uses it as the third material tier and treats any failure (or an empty/off-topic reply) as
+ * a fall-through to the bare-headword card.
+ */
+export async function reviewSentence(
+  env: Env,
+  req: ReviewSentenceRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<string> {
+  const { system, user } = buildReviewSentenceMessages({
+    headword: req.headword,
+    level: req.level,
+    meaningJa: req.meaningJa,
+    collocations: req.collocations,
+  });
+  const { text } = await callModel(
+    env,
+    fetchImpl,
+    system,
+    user,
+    REVIEW_SENTENCE_MAX_TOKENS,
+    REVIEW_SENTENCE_JSON_SCHEMA,
+    'review_sentence',
+    { temperature: 0.7, task: 'passage' },
+  );
+  const parsed = parseJson<{ sentence?: unknown }>(text, 'review sentence');
+  return typeof parsed.sentence === 'string' ? parsed.sentence.trim() : '';
 }
 
 /** Monotonic-ish story id (server-side; the client persists it under this key). */
@@ -577,6 +824,7 @@ export async function planStory(
     storyPlanMaxTokens(),
     STORY_PLAN_JSON_SCHEMA,
     'story_plan',
+    { temperature: 0.7, task: 'story' },
   );
   if (stopReason === 'refusal') throw new ProviderError(502, 'Story plan generation was refused.');
   const parsed = parseJson<Partial<StoryPlan>>(text, 'story plan');
@@ -627,6 +875,7 @@ export async function extendStoryPlan(
     storyPlanExtensionMaxTokens(additionalChapters),
     STORY_PLAN_EXTENSION_JSON_SCHEMA,
     'story_plan_extension',
+    { temperature: 0.7, task: 'story' },
   );
   if (stopReason === 'refusal') throw new ProviderError(502, 'Story plan extension was refused.');
   const parsed = parseJson<{ synopsisJa?: unknown; chapters?: unknown }>(text, 'story plan extension');
@@ -650,127 +899,311 @@ export async function extendStoryPlan(
 
 // ── Image illustration (Requirement 6.8 + passage scene enrichment) ──────────
 //
-// Image generation is a SEPARATE provider axis from text: Anthropic has no image API, so
-// `IMAGE_PROVIDER` (default "openai"; "gemini"/"google" -> Imagen) is resolved independently of
-// LLM_PROVIDER. Images come back as base64 and are returned as `data:` URLs the client stores inline
-// with the passage/story data (there is no CDN). Failures raise ProviderError like the text path so
-// the caller can degrade to no illustration.
+// Image generation is a SEPARATE provider axis from text: Anthropic has no image API, so the image
+// provider is resolved independently of LLM_PROVIDER. Providers are declared ONCE in a descriptor
+// table (endpoint / key env / default model / capability flags / MIME / wire family) so adding a
+// fourth provider is one record — not five scattered if/else arms (design decision D8: the same
+// "descriptor table + per-task env" shape the text path uses for TASK_MODEL_ENV).
+//
+// Two USE PROFILES sit on top of the provider axis: `fast` (character art rendered while the learner
+// waits at the story confirmation gate — speed matters) and `quality` (article scene art / one-off
+// assets read slowly — crispness matters). Each profile picks its own provider + model + OpenAI
+// `quality` hint via env (IMAGE_PROVIDER_FAST/_QUALITY, IMAGE_MODEL_FAST/_QUALITY), each falling
+// back to the legacy single IMAGE_PROVIDER / IMAGE_MODEL, then the descriptor default. Images come
+// back as base64 and are returned as `data:` URLs the client stores inline (there is no CDN).
+// Failures raise ProviderError like the text path so the caller can degrade to no illustration.
 
-type ImageProvider = 'openai' | 'gemini';
+/** Speed-vs-quality use profile. `fast` = character art during the confirmation gate; `quality` = article scene art. */
+export type ImageProfile = 'fast' | 'quality';
 
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
-const GEMINI_IMAGE_MODEL_DEFAULT = 'imagen-3.0-generate-002';
-const OPENAI_IMAGE_MODEL_DEFAULT = 'gpt-image-1';
+type ImageProvider = 'openai' | 'grok' | 'gemini';
 
-function resolveImageProvider(env: Env): ImageProvider {
-  const raw = (env.IMAGE_PROVIDER ?? 'openai').trim().toLowerCase();
-  return raw === 'gemini' || raw === 'google' || raw === 'imagen' ? 'gemini' : 'openai';
+/** Declarative description of one image provider so the fetch/parse logic stays provider-agnostic. */
+interface ImageProviderSpec {
+  /** Wire-shape family: `openai` = OpenAI-compatible `/images/generations`; `gemini` = Imagen `:predict`. */
+  family: 'openai' | 'gemini';
+  /** Endpoint the request is POSTed to (Gemini appends `/{model}:predict`). */
+  baseUrl: string;
+  /** Env var(s) holding the API key, tried in order (first non-empty, non-placeholder wins). */
+  keyEnvNames: readonly string[];
+  /** Default model when no IMAGE_MODEL* override is set. */
+  defaultModel: string;
+  /** Whether the provider accepts an OpenAI `size` field. */
+  supportsSize: boolean;
+  /** Whether the provider accepts an OpenAI `quality` field. */
+  supportsQuality: boolean;
+  /** MIME of the returned base64 payload, used to build the `data:` URL (Grok returns JPEG, not PNG). */
+  mime: string;
+}
+
+const IMAGE_PROVIDER_SPECS: Record<ImageProvider, ImageProviderSpec> = {
+  openai: {
+    family: 'openai',
+    baseUrl: 'https://api.openai.com/v1/images/generations',
+    keyEnvNames: ['OPENAI_API_KEY'],
+    defaultModel: 'gpt-image-1',
+    supportsSize: true,
+    supportsQuality: true,
+    mime: 'image/png',
+  },
+  grok: {
+    // xAI Grok images: OpenAI-compatible endpoint, but no size/quality params and returns JPEG.
+    family: 'openai',
+    baseUrl: 'https://api.x.ai/v1/images/generations',
+    keyEnvNames: ['XAI_API_KEY', 'GROK_API_KEY'],
+    defaultModel: 'grok-2-image',
+    supportsSize: false,
+    supportsQuality: false,
+    mime: 'image/jpeg',
+  },
+  gemini: {
+    family: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+    keyEnvNames: ['GEMINI_API_KEY'],
+    defaultModel: 'imagen-3.0-generate-002',
+    supportsSize: false,
+    supportsQuality: false,
+    mime: 'image/png',
+  },
+};
+
+/** Map a raw IMAGE_PROVIDER value (or alias) to a known provider, or `undefined` if unrecognized. */
+function imageProviderAlias(raw: string): ImageProvider | undefined {
+  const v = raw.trim().toLowerCase();
+  if (v === '' || v === 'openai') return 'openai';
+  if (v === 'grok' || v === 'xai') return 'grok';
+  if (v === 'gemini' || v === 'google' || v === 'imagen') return 'gemini';
+  return undefined;
+}
+
+/**
+ * Resolve the provider for a use profile: IMAGE_PROVIDER_FAST/_QUALITY, else the legacy IMAGE_PROVIDER,
+ * else openai. An unrecognized value is NOT silently coerced to openai — it throws 503 so a `.env`
+ * typo (e.g. `IMAGE_PROVIDER=grk`) surfaces immediately instead of quietly using the wrong provider.
+ */
+function resolveImageProvider(env: Env, profile: ImageProfile): ImageProvider {
+  const profileVar = profile === 'fast' ? env.IMAGE_PROVIDER_FAST : env.IMAGE_PROVIDER_QUALITY;
+  const raw = (profileVar ?? env.IMAGE_PROVIDER ?? 'openai').trim();
+  const resolved = imageProviderAlias(raw);
+  if (!resolved) {
+    throw new ProviderError(
+      503,
+      `Unknown IMAGE_PROVIDER: "${raw}". Use one of: openai, grok, gemini.`,
+      'not_configured',
+    );
+  }
+  return resolved;
 }
 
 /** The configured key for the active image provider, or throw 503 so the UI shows "unavailable". */
-function requireImageKey(env: Env, provider: ImageProvider): string {
-  // OpenAI image generation reuses OPENAI_API_KEY; Gemini/Imagen uses its own GEMINI_API_KEY.
-  const key = provider === 'gemini' ? env.GEMINI_API_KEY : env.OPENAI_API_KEY;
-  if (!key || !key.trim() || key.includes('...')) {
-    const name = provider === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY';
-    throw new ProviderError(503, `Image API not configured: ${name} is missing. Set it in .env.`);
+export function requireImageKey(env: Env, provider: ImageProvider): string {
+  const spec = IMAGE_PROVIDER_SPECS[provider];
+  for (const name of spec.keyEnvNames) {
+    const key = env[name];
+    if (key && key.trim() && !key.includes('...')) return key.trim();
   }
-  return key.trim();
+  throw new ProviderError(
+    503,
+    `Image API not configured: ${spec.keyEnvNames.join(' or ')} is missing. Set it in .env.`,
+    'not_configured',
+  );
 }
 
-function imageModelFor(env: Env, provider: ImageProvider): string {
-  const configured = env.IMAGE_MODEL?.trim();
-  if (configured) return configured;
-  return provider === 'gemini' ? GEMINI_IMAGE_MODEL_DEFAULT : OPENAI_IMAGE_MODEL_DEFAULT;
+/** Model for a use profile: IMAGE_MODEL_FAST/_QUALITY, else legacy IMAGE_MODEL, else the descriptor default. */
+function imageModelFor(env: Env, provider: ImageProvider, profile: ImageProfile): string {
+  const profileModel = (profile === 'fast' ? env.IMAGE_MODEL_FAST : env.IMAGE_MODEL_QUALITY)?.trim();
+  if (profileModel) return profileModel;
+  const legacy = env.IMAGE_MODEL?.trim();
+  if (legacy) return legacy;
+  return IMAGE_PROVIDER_SPECS[provider].defaultModel;
 }
 
-interface ImageGenerationOptions {
+/** Startup diagnostic for one use profile: what the `.env` resolves to, so a typo/missing key is visible. */
+export interface ImageConfigDiagnostic {
+  profile: ImageProfile;
+  /** Resolved provider, or `'unknown'` when the configured value is a typo (surfaces as a startup warning + 503). */
+  provider: ImageProvider | 'unknown';
+  /** The raw configured provider value (for typo diagnostics); never a secret. */
+  rawProvider: string;
+  /** Env var reported for the key (`''` when the provider is unknown). */
+  keyEnvName: string;
+  /** Length of the present key (0 when absent) — never the value. */
+  keyLength: number;
+  /** Resolved model (`''` when the provider is unknown). */
+  model: string;
+  status: 'ok' | 'missing_key' | 'placeholder_key' | 'unknown_provider';
+}
+
+/**
+ * Resolve the fast + quality image profiles from env WITHOUT throwing, so the dev/preview startup
+ * banner can surface a typo'd IMAGE_PROVIDER or a missing key up-front (the request path still throws
+ * 503). Reads the same descriptor table as the request path, so the two never drift.
+ */
+export function describeImageConfig(env: Env): ImageConfigDiagnostic[] {
+  return (['fast', 'quality'] as const).map((profile): ImageConfigDiagnostic => {
+    const profileVar = profile === 'fast' ? env.IMAGE_PROVIDER_FAST : env.IMAGE_PROVIDER_QUALITY;
+    const rawProvider = (profileVar ?? env.IMAGE_PROVIDER ?? 'openai').trim();
+    const provider = imageProviderAlias(rawProvider);
+    if (!provider) {
+      return { profile, provider: 'unknown', rawProvider, keyEnvName: '', keyLength: 0, model: '', status: 'unknown_provider' };
+    }
+    const spec = IMAGE_PROVIDER_SPECS[provider];
+    let keyEnvName = spec.keyEnvNames[0]!;
+    let keyLength = 0;
+    let status: ImageConfigDiagnostic['status'] = 'missing_key';
+    // Mirror requireImageKey's selection: prefer the first non-empty, NON-placeholder key so the
+    // banner reports whatever the request path would actually use. A placeholder key is only a
+    // fallback — requireImageKey skips it (`!key.includes('...')`) and falls through to the next
+    // env name, so reporting it as the active key here would falsely flag a working provider.
+    let placeholder: { name: string; length: number } | undefined;
+    for (const name of spec.keyEnvNames) {
+      const key = env[name];
+      if (!key || !key.trim()) continue;
+      if (key.includes('...')) {
+        if (!placeholder) placeholder = { name, length: key.length };
+        continue;
+      }
+      keyEnvName = name;
+      keyLength = key.length;
+      status = 'ok';
+      break;
+    }
+    if (status !== 'ok' && placeholder) {
+      // Every candidate key was empty or a placeholder — the request path would 503, so surface the
+      // placeholder that the operator most likely intended to replace.
+      keyEnvName = placeholder.name;
+      keyLength = placeholder.length;
+      status = 'placeholder_key';
+    }
+    return { profile, provider, rawProvider, keyEnvName, keyLength, model: imageModelFor(env, provider, profile), status };
+  });
+}
+
+/**
+ * Pick the use profile for a request: an explicit body `imagePreference` ('fast'/'quality') wins;
+ * otherwise the endpoint's use-based default (character art = fast, scene art = quality). Kept as one
+ * function so the two illustrate endpoints share the exact same precedence instead of duplicating it.
+ */
+export function resolveImageProfile(
+  body: { imagePreference?: ImageProfile } | null | undefined,
+  endpointDefault: ImageProfile,
+): ImageProfile {
+  const pref = body?.imagePreference;
+  return pref === 'fast' || pref === 'quality' ? pref : endpointDefault;
+}
+
+/** Target geometry per illustration kind: OpenAI `size`, Gemini `aspectRatio`, and a prompt suffix for size-less providers. */
+interface ImageGeometry {
   openAiSize: string;
   geminiAspectRatio: string;
-  quality?: 'low' | 'medium' | 'high' | 'auto';
+  /** Appended to the prompt for OpenAI-compatible providers that ignore `size` (Grok) to steer aspect via wording. */
+  aspectPromptSuffix: string;
 }
+
+const FULL_BODY_ASPECT_SUFFIX =
+  'Compose the image as a vertical 3:4 portrait-orientation full-body illustration with the character fully in frame.';
+const PORTRAIT_ASPECT_SUFFIX = 'Compose the image as a square 1:1 head-and-shoulders portrait, centered.';
+const SCENE_ASPECT_SUFFIX = 'Compose the image in a wide 16:9 landscape format, like a book illustration spread.';
 
 async function generateImageDataUrl(
   env: Env,
   prompt: string,
   fetchImpl: typeof fetch,
-  options: ImageGenerationOptions,
+  profile: ImageProfile,
+  geometry: ImageGeometry,
 ): Promise<string> {
-  const provider = resolveImageProvider(env);
+  const provider = resolveImageProvider(env, profile);
+  const spec = IMAGE_PROVIDER_SPECS[provider];
   const apiKey = requireImageKey(env, provider);
-  const model = imageModelFor(env, provider);
+  const model = imageModelFor(env, provider, profile);
+  // Size-less OpenAI-compatible providers (Grok) can't take a `size` param, so steer aspect in words.
+  const appendAspect = spec.family === 'openai' && !spec.supportsSize;
+  const finalPrompt = appendAspect ? `${prompt}\n\n${geometry.aspectPromptSuffix}` : prompt;
 
   let response: Response;
   try {
-    response =
-      provider === 'gemini'
-        ? await fetchImpl(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                instances: [{ prompt }],
-                parameters: { sampleCount: 1, aspectRatio: options.geminiAspectRatio },
-              }),
-            },
-          )
-        : await fetchImpl(OPENAI_IMAGE_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-              model,
-              prompt,
-              n: 1,
-              size: options.openAiSize,
-              quality: options.quality ?? 'low',
-            }),
-          });
+    if (spec.family === 'gemini') {
+      response = await fetchImpl(
+        `${spec.baseUrl}/${model}:predict?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            instances: [{ prompt }],
+            parameters: { sampleCount: 1, aspectRatio: geometry.geminiAspectRatio },
+          }),
+        },
+      );
+    } else {
+      // OpenAI-compatible providers (openai, grok). Only send fields the provider supports.
+      const requestBody: Record<string, unknown> = { model, prompt: finalPrompt, n: 1 };
+      if (spec.supportsSize) requestBody.size = geometry.openAiSize;
+      if (spec.supportsQuality) requestBody.quality = profile === 'quality' ? 'high' : 'low';
+      response = await fetchImpl(spec.baseUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(requestBody),
+      });
+    }
   } catch (cause) {
-    throw new ProviderError(503, `Image API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`);
+    throw new ProviderError(
+      503,
+      `Image API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`,
+      'upstream_error',
+    );
   }
 
   if (!response.ok) {
     const detail = await safeText(response);
-    throw new ProviderError(mapUpstreamStatus(response.status), `${provider} image API error ${response.status}: ${detail}`);
+    const mapped = mapUpstream(response.status);
+    throw new ProviderError(mapped.status, `${provider} image API error ${response.status}: ${detail}`, mapped.code);
   }
 
-  const body = (await response.json()) as unknown;
-  const b64 = provider === 'gemini' ? parseGeminiImage(body) : parseOpenAiImage(body);
+  const responseBody = (await response.json()) as unknown;
+  const b64 = spec.family === 'gemini' ? parseGeminiImage(responseBody) : parseOpenAiImage(responseBody);
   if (!b64) throw new ProviderError(502, `${provider} image API returned no image.`);
-  return `data:image/png;base64,${b64}`;
+  return `data:${spec.mime};base64,${b64}`;
 }
 
 /**
- * Generate one character illustration, returning a `data:image/png;base64,...` URL (Requirement 6.8).
- * OpenAI hits the Images endpoint (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint
- * (`predictions[].bytesBase64Encoded`, key as query param per the REST contract). Small size + low
- * quality keep the data URL light since it lands in IndexedDB.
+ * Generate one character illustration, returning a `data:<mime>;base64,...` URL (Requirement 6.8).
+ * Defaults to the `fast` profile — character art is rendered while the learner waits at the story
+ * confirmation gate, so speed beats crispness. OpenAI/Grok hit an OpenAI-compatible Images endpoint
+ * (`b64_json`); Gemini/Imagen hits the model `:predict` endpoint (`predictions[].bytesBase64Encoded`,
+ * key as query param per the REST contract).
  */
 export async function illustrateCharacter(
   env: Env,
   req: CharacterIllustrationRequest,
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+  profile: ImageProfile = 'fast',
 ): Promise<string> {
   const prompt = buildCharacterIllustrationPrompt(req);
   const variant = req.variant ?? 'full_body';
-  return generateImageDataUrl(env, prompt, fetchImpl, {
-    openAiSize: variant === 'portrait' ? '1024x1024' : '1024x1536',
-    geminiAspectRatio: variant === 'portrait' ? '1:1' : '3:4',
-  });
+  const geometry: ImageGeometry =
+    variant === 'portrait'
+      ? { openAiSize: '1024x1024', geminiAspectRatio: '1:1', aspectPromptSuffix: PORTRAIT_ASPECT_SUFFIX }
+      : { openAiSize: '1024x1536', geminiAspectRatio: '3:4', aspectPromptSuffix: FULL_BODY_ASPECT_SUFFIX };
+  return generateImageDataUrl(env, prompt, fetchImpl, profile, geometry);
 }
 
-/** Generate one passage-level scene illustration as a `data:image/png;base64,...` URL. */
+/**
+ * Generate one passage-level scene illustration as a `data:<mime>;base64,...` URL. Defaults to the
+ * `quality` profile — article scene art is read slowly, so crispness is worth the extra latency.
+ */
 export async function illustratePassage(
   env: Env,
   req: PassageIllustrationRequest,
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+  profile: ImageProfile = 'quality',
 ): Promise<string> {
   const prompt = buildPassageIllustrationPrompt(req);
-  return generateImageDataUrl(env, prompt, fetchImpl, {
+  const geometry: ImageGeometry = {
     openAiSize: '1536x1024',
     geminiAspectRatio: '16:9',
-  });
+    aspectPromptSuffix: SCENE_ASPECT_SUFFIX,
+  };
+  return generateImageDataUrl(env, prompt, fetchImpl, profile, geometry);
 }
 
 function parseOpenAiImage(body: unknown): string | undefined {
@@ -788,9 +1221,38 @@ type RawCue = {
   category?: NoticeCue['category'];
   anchorText?: string;
   explanationJa?: string;
+  detailJa?: string | null;
+  anchorTextParts?: string[] | null;
 };
 
 const ANNOTATION_CATEGORY_SET = new Set<string>(ANNOTATION_CATEGORIES);
+
+/**
+ * Locate the extra contiguous parts of a DISCONTINUOUS expression (C-4) within the anchor's sentence,
+ * after the main part, in reading order. `parts` is the model's `anchorTextParts` (which includes the
+ * first part); the part(s) equal to `anchorText` are skipped since the main `span` already covers them.
+ */
+function resolveExtraSpans(
+  sentences: PassageOutput['sentences'],
+  main: Loc,
+  anchorText: string,
+  parts: string[],
+): SpanRef[] {
+  const toks = sentences[main.sentenceIndex]?.tokens;
+  if (!Array.isArray(toks)) return [];
+  const target = anchorText.trim().toLowerCase();
+  const extras: SpanRef[] = [];
+  let from = main.tokenEnd; // subsequent parts follow the main part in the same sentence
+  for (const rawPart of parts) {
+    const part = typeof rawPart === 'string' ? rawPart.trim() : '';
+    if (!part || part.toLowerCase() === target) continue; // skip the main part
+    const run = findRun(toks, part, from);
+    if (!run) continue;
+    extras.push({ sentenceIndex: main.sentenceIndex, tokenStart: run[0], tokenEnd: run[1] });
+    from = run[1];
+  }
+  return extras;
+}
 
 /**
  * Turn the annotation model's raw cues into grounded NoticeCues: re-derive each span from its
@@ -806,12 +1268,18 @@ function anchorCues(sentences: PassageOutput['sentences'], raw: RawCue[]): Notic
       if (!anchorText || !category || !ANNOTATION_CATEGORY_SET.has(category)) return null;
       const loc = locateAnchor(sentences, anchorText, cue.span?.sentenceIndex ?? 0, cue.span?.tokenStart ?? 0);
       if (!loc) return null;
+      const detailJa = typeof cue.detailJa === 'string' && cue.detailJa.trim() ? cue.detailJa.trim() : undefined;
+      const extraSpans = Array.isArray(cue.anchorTextParts)
+        ? resolveExtraSpans(sentences, loc, anchorText, cue.anchorTextParts)
+        : [];
       return {
         index: 0,
         span: loc,
         category,
         anchorText,
         explanationJa: typeof cue.explanationJa === 'string' ? cue.explanationJa : '',
+        ...(detailJa ? { detailJa } : {}),
+        ...(extraSpans.length > 0 ? { extraSpans } : {}),
       };
     })
     .filter((c): c is NoticeCue => c !== null)
@@ -824,26 +1292,229 @@ function anchorCues(sentences: PassageOutput['sentences'], raw: RawCue[]): Notic
     .map((cue, i) => ({ ...cue, index: i + 1 }));
 }
 
-/** Second LLM pass: exhaustively annotate a finished passage with in-text notice cues. */
-export async function annotatePassage(
+/**
+ * Sentences per annotation request (F-6 本命). Passages longer than this are annotated in parallel
+ * contiguous slices so a long passage's later sentences still get「気づき」cues — the old single
+ * request flat-lined near 24 sentences and truncated the whole reply to an empty array. Each chunk
+ * carries absolute sentence indices plus its share of REQUIRED COVERAGE.
+ */
+const ANNOTATION_CHUNK_SENTENCES = 20;
+
+/** How many annotation chunks are in flight at once. A very long passage is annotated in waves so we
+ * never fan out an unbounded number of simultaneous upstream calls. */
+const ANNOTATION_CHUNK_CONCURRENCY = 4;
+
+/**
+ * Split an annotation request into contiguous ≤`chunkSize`-sentence slices (F-6). A passage at or
+ * under the limit stays a single whole-passage request (no chunk framing, so short passages behave
+ * exactly as before). Longer passages become slices that keep ABSOLUTE `sentenceIndex` values on
+ * their spans and set `sentenceIndexBase`, so `buildAnnotationMessages` numbers sentences absolutely,
+ * distributes each coverage item to the slice that contains it, and the model copies absolute indices.
+ */
+export function planAnnotationChunks(req: PassageAnnotationRequest, chunkSize: number): PassageAnnotationRequest[] {
+  const total = req.sentences.length;
+  if (total <= chunkSize) return [req];
+  const chunks: PassageAnnotationRequest[] = [];
+  for (let start = 0; start < total; start += chunkSize) {
+    const end = Math.min(start + chunkSize, total);
+    chunks.push({
+      level: req.level,
+      // C-4: carry the readability band + writer-flagged hard sentences into each slice so every slice
+      // emits its share of sentenceNotes (buildAnnotationMessages filters the hard list to the slice).
+      readabilityLevel: req.readabilityLevel,
+      hardSentenceIndexes: req.hardSentenceIndexes,
+      sentences: req.sentences.slice(start, end),
+      sentenceIndexBase: start,
+      targetSpans: (req.targetSpans ?? []).filter((s) => s.sentenceIndex >= start && s.sentenceIndex < end),
+      collocationSpans: (req.collocationSpans ?? []).filter((s) => s.sentenceIndex >= start && s.sentenceIndex < end),
+      expressionSpans: (req.expressionSpans ?? []).filter((s) => s.span.sentenceIndex >= start && s.span.sentenceIndex < end),
+    });
+  }
+  return chunks;
+}
+
+/**
+ * Recover the complete objects of a named top-level array from a truncated (max_tokens) reply (F-6
+ * partial recovery). The model streamed a valid PREFIX of `"<key>":[ {…}, {…}, {…<cut off>` — scan the
+ * array, keeping every object that closed cleanly and discarding the final partial one. Returns [] if
+ * the array can't be located. String contents (which may contain braces) are skipped correctly.
+ */
+function salvageObjectArray<T>(text: string, keyName: string): T[] {
+  const key = text.indexOf(`"${keyName}"`);
+  if (key < 0) return [];
+  const arrStart = text.indexOf('[', key);
+  if (arrStart < 0) return [];
+  const out: T[] = [];
+  let depth = 0; // object-brace depth; 0 = between top-level objects
+  let objStart = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = arrStart + 1; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      if (depth === 0) objStart = i;
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0 && objStart >= 0) {
+        try {
+          out.push(JSON.parse(text.slice(objStart, i + 1)) as T);
+        } catch {
+          // Skip an object we somehow can't parse; keep the ones we already recovered.
+        }
+        objStart = -1;
+      }
+    } else if (ch === ']' && depth === 0) {
+      break; // array closed cleanly — nothing was truncated
+    }
+  }
+  return out;
+}
+
+/** Salvage the closed noticeCue objects from a truncated annotation reply (F-6 partial recovery). */
+export function salvageCues(text: string): RawCue[] {
+  return salvageObjectArray<RawCue>(text, 'noticeCues');
+}
+
+/** A sentenceNote as the model emits it (C-4); server clamps token ranges + drops out-of-range notes. */
+type RawSentenceNote = {
+  sentenceIndex?: number;
+  patternNameJa?: string;
+  structureJa?: string;
+  readingJa?: string;
+  chunks?: { tokenStart?: number; tokenEnd?: number; roleJa?: string }[];
+};
+
+/**
+ * Ground the model's raw sentenceNotes (C-4) against the FULL passage: keep only notes whose
+ * `sentenceIndex` exists and that carry a pattern label, clamp each chunk's half-open token range to
+ * the sentence's own token count (dropping empty/inverted ranges), and de-duplicate by sentence
+ * (first note per sentence wins). Notes carry absolute sentence indices, so no re-anchoring is needed.
+ */
+function normalizeSentenceNotes(raw: RawSentenceNote[], sentences: PassageOutput['sentences']): SentenceSyntaxNote[] {
+  const seen = new Set<number>();
+  const out: SentenceSyntaxNote[] = [];
+  for (const note of raw) {
+    const sentenceIndex = note?.sentenceIndex;
+    if (typeof sentenceIndex !== 'number' || !Number.isInteger(sentenceIndex)) continue;
+    const sentence = sentences[sentenceIndex];
+    if (!sentence || seen.has(sentenceIndex)) continue;
+    const patternNameJa = typeof note.patternNameJa === 'string' ? note.patternNameJa.trim() : '';
+    if (!patternNameJa) continue;
+    const tokenCount = sentence.tokens.length;
+    const chunks: SentenceSyntaxNote['chunks'] = [];
+    for (const c of Array.isArray(note.chunks) ? note.chunks : []) {
+      const start = typeof c?.tokenStart === 'number' ? Math.max(0, Math.trunc(c.tokenStart)) : NaN;
+      const end = typeof c?.tokenEnd === 'number' ? Math.min(tokenCount, Math.trunc(c.tokenEnd)) : NaN;
+      const roleJa = typeof c?.roleJa === 'string' ? c.roleJa.trim() : '';
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || !roleJa) continue;
+      chunks.push({ tokenStart: start, tokenEnd: end, roleJa });
+    }
+    seen.add(sentenceIndex);
+    out.push({
+      sentenceIndex,
+      patternNameJa,
+      structureJa: typeof note.structureJa === 'string' ? note.structureJa.trim() : '',
+      readingJa: typeof note.readingJa === 'string' ? note.readingJa.trim() : '',
+      chunks,
+    });
+  }
+  return out.sort((a, b) => a.sentenceIndex - b.sentenceIndex);
+}
+
+/** Combine per-chunk statuses (F-6): all complete ⇒ complete, all failed ⇒ failed, otherwise partial
+ * (some slices contributed cues, some didn't — the reader still gets the survivors). */
+function mergeAnnotationStatus(statuses: AnnotationStatus[]): AnnotationStatus {
+  if (statuses.every((s) => s === 'complete')) return 'complete';
+  if (statuses.every((s) => s === 'failed')) return 'failed';
+  return 'partial';
+}
+
+/** Run `fn` over `items` with at most `limit` in flight, preserving input order in the results. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      results[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** Annotate one slice (or the whole passage). Returns raw cues (indices are re-anchored by the caller
+ * against the FULL passage) plus the slice's outcome status. */
+async function annotateChunk(
   env: Env,
-  req: PassageAnnotationRequest,
-  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
-): Promise<NoticeCue[]> {
-  if (!Array.isArray(req.sentences) || req.sentences.length === 0) return [];
-  const { system, user } = buildAnnotationMessages(req);
+  fetchImpl: typeof fetch,
+  chunk: PassageAnnotationRequest,
+): Promise<{ raw: RawCue[]; notes: RawSentenceNote[]; status: AnnotationStatus }> {
+  const { system, user } = buildAnnotationMessages(chunk);
   const { text, stopReason } = await callModel(
     env,
     fetchImpl,
     system,
     user,
-    annotationMaxTokens(req.sentences.length),
+    annotationMaxTokens(chunk.sentences.length),
     ANNOTATION_JSON_SCHEMA,
     'passage_annotation',
+    { temperature: 0.3, task: 'annotation' },
   );
-  // Refusal / truncation yield no usable annotations; degrade to none rather than failing.
-  if (stopReason === 'refusal' || stopReason === 'max_tokens') return [];
-  const parsed = parseJson<{ noticeCues?: unknown }>(text, 'annotation');
+  const base = chunk.sentenceIndexBase ?? 0;
+  if (stopReason === 'refusal') {
+    console.warn(`[annotate] refusal (base=${base}, ${chunk.sentences.length} sentences)`);
+    return { raw: [], notes: [], status: 'failed' };
+  }
+  if (stopReason === 'max_tokens') {
+    // Partial recovery: salvage the cues (and any complete sentenceNotes) that streamed before the cut.
+    const salvaged = salvageCues(text);
+    const notes = salvageObjectArray<RawSentenceNote>(text, 'sentenceNotes');
+    console.warn(`[annotate] truncated (base=${base}): salvaged ${salvaged.length} cue(s), ${notes.length} note(s)`);
+    return { raw: salvaged, notes, status: salvaged.length > 0 ? 'partial' : 'failed' };
+  }
+  const parsed = parseJson<{ noticeCues?: unknown; sentenceNotes?: unknown }>(text, 'annotation');
   const raw = Array.isArray(parsed.noticeCues) ? (parsed.noticeCues as RawCue[]) : [];
-  return anchorCues(req.sentences, raw);
+  const notes = Array.isArray(parsed.sentenceNotes) ? (parsed.sentenceNotes as RawSentenceNote[]) : [];
+  return { raw, notes, status: 'complete' };
+}
+
+/**
+ * Second LLM pass: exhaustively annotate a finished passage with in-text notice cues (F-6 本命).
+ * Long passages are split into ≤20-sentence slices annotated in parallel and merged, so late
+ * sentences still get cues and a single slice's truncation no longer wipes the whole passage. Each
+ * slice's cues are re-anchored against the FULL passage (their spans carry absolute indices) and the
+ * survivors are renumbered in global reading order. `status` is `partial` when some slices dropped
+ * out (or a slice was salvaged from a truncated reply) so the reader can offer a regenerate.
+ */
+export async function annotatePassage(
+  env: Env,
+  req: PassageAnnotationRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<AnnotationResult> {
+  if (!Array.isArray(req.sentences) || req.sentences.length === 0) {
+    return { noticeCues: [], status: 'complete', sentenceNotes: [] };
+  }
+  const chunks = planAnnotationChunks(req, ANNOTATION_CHUNK_SENTENCES);
+  const results = await mapWithConcurrency(chunks, ANNOTATION_CHUNK_CONCURRENCY, (chunk) =>
+    annotateChunk(env, fetchImpl, chunk),
+  );
+  const raw = results.flatMap((r) => r.raw);
+  // sentenceNotes carry absolute indices; merge across slices and ground against the full passage.
+  const sentenceNotes = normalizeSentenceNotes(results.flatMap((r) => r.notes), req.sentences);
+  return {
+    noticeCues: anchorCues(req.sentences, raw),
+    status: mergeAnnotationStatus(results.map((r) => r.status)),
+    sentenceNotes,
+  };
 }

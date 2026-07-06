@@ -15,6 +15,7 @@ import type {
   GenerationRequest,
   PassageAnnotationRequest,
   PassageIllustrationRequest,
+  ReviewSentenceRequest,
   StoryPlanExtensionRequest,
   StoryPlanRequest,
   WordSuggestionRequest,
@@ -25,19 +26,24 @@ import {
   annotatePassage,
   generatePassage,
   getWordData,
+  healthStatus,
   illustrateCharacter,
   illustratePassage,
   extendStoryPlan,
   planStory,
+  resolveImageProfile,
+  reviewSentence,
   suggestWords,
 } from './providers';
 
 type Next = (err?: unknown) => void;
 
+const HEALTH_PATH = '/api/health';
 const GENERATE_PATH = '/api/passages:generate';
 const ANNOTATE_PATH = '/api/passages:annotate';
 const ILLUSTRATE_PASSAGE_PATH = '/api/passages:illustrate';
 const SUGGEST_PATH = '/api/words:suggest';
+const REVIEW_SENTENCE_PATH = '/api/review:sentence';
 const STORY_PLAN_PATH = '/api/story:plan';
 const STORY_EXTEND_PATH = '/api/story:extend';
 const STORY_ILLUSTRATE_PATH = '/api/story:illustrate';
@@ -54,6 +60,13 @@ export function createApiHandler(getEnv: () => Env) {
 }
 
 async function route(req: IncomingMessage, res: ServerResponse, path: string, env: Env): Promise<void> {
+  if (path === HEALTH_PATH) {
+    if (req.method !== 'GET') return sendStatus(res, 405, 'method not allowed');
+    // Config probe for the startup banner: reports whether the active provider has a key, never
+    // the key value itself.
+    return sendJson(res, 200, healthStatus(env));
+  }
+
   if (path === GENERATE_PATH) {
     if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
     const body = await readJson<GenerationRequest>(req);
@@ -70,8 +83,12 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     if (!body || !Array.isArray(body.sentences) || !body.level) {
       throw new ProviderError(400, 'Invalid PassageAnnotationRequest body.');
     }
-    const noticeCues = await annotatePassage(env, body);
-    return sendJson(res, 200, { noticeCues });
+    const result = await annotatePassage(env, body);
+    return sendJson(res, 200, {
+      noticeCues: result.noticeCues,
+      annotationStatus: result.status,
+      sentenceNotes: result.sentenceNotes ?? [],
+    });
   }
 
   if (path === ILLUSTRATE_PASSAGE_PATH) {
@@ -80,7 +97,8 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     if (!body || !body.title || !body.intent || !body.level || !Array.isArray(body.sentences)) {
       throw new ProviderError(400, 'Invalid PassageIllustrationRequest body.');
     }
-    const illustrationUrl = await illustratePassage(env, body);
+    // Scene art is read slowly → default to the `quality` profile unless the body pins a preference.
+    const illustrationUrl = await illustratePassage(env, body, undefined, resolveImageProfile(body, 'quality'));
     return sendJson(res, 200, { illustrationUrl });
   }
 
@@ -92,6 +110,16 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     }
     const words = await suggestWords(env, { ...body, count: body.count || 6 });
     return sendJson(res, 200, { words });
+  }
+
+  if (path === REVIEW_SENTENCE_PATH) {
+    if (req.method !== 'POST') return sendStatus(res, 405, 'method not allowed');
+    const body = await readJson<ReviewSentenceRequest>(req);
+    if (!body || !body.headword || !body.level) {
+      throw new ProviderError(400, 'Invalid ReviewSentenceRequest body.');
+    }
+    const sentence = await reviewSentence(env, body);
+    return sendJson(res, 200, { sentence });
   }
 
   if (path === STORY_PLAN_PATH) {
@@ -120,7 +148,8 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
     if (!body || !body.name || !body.role || !body.descriptionJa || !body.genre) {
       throw new ProviderError(400, 'Invalid CharacterIllustrationRequest body.');
     }
-    const illustrationUrl = await illustrateCharacter(env, body);
+    // Character art is rendered while the learner waits at the confirmation gate → default to `fast`.
+    const illustrationUrl = await illustrateCharacter(env, body, undefined, resolveImageProfile(body, 'fast'));
     return sendJson(res, 200, { illustrationUrl });
   }
 
@@ -174,7 +203,9 @@ function sendError(res: ServerResponse, error: unknown): void {
     return;
   }
   if (error instanceof ProviderError) {
-    sendJson(res, error.status, { error: error.message });
+    // Attach the machine-readable `code` (e.g. not_configured) so the client can show a
+    // cause-specific message rather than a generic "try again later".
+    sendJson(res, error.status, error.code ? { error: error.message, code: error.code } : { error: error.message });
     return;
   }
   const message = error instanceof Error ? error.message : 'internal error';

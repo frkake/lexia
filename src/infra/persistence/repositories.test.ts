@@ -76,6 +76,19 @@ describe('SchedulingRepository', () => {
     expect(await repo.lowStability(userId, 1)).toHaveLength(1);
     db.close();
   });
+
+  it('countSeededSince counts this user’s rows seeded at/after the cutoff (C-5b)', async () => {
+    const { db, userId } = await freshDb();
+    const repo = createRepositories(db).scheduling;
+    await repo.upsert(sched(userId, 'today1', { seededAt: 5_000 }));
+    await repo.upsert(sched(userId, 'today2', { seededAt: 9_000 }));
+    await repo.upsert(sched(userId, 'yesterday', { seededAt: 1_000 }));
+    await repo.upsert(sched(userId, 'legacy')); // no seededAt → never counted
+    expect(await repo.countSeededSince!(userId, 4_000)).toBe(2); // today1 + today2
+    expect(await repo.countSeededSince!(userId, 500)).toBe(3); // all three seeded rows
+    expect(await repo.countSeededSince!('other' as UserId, 0)).toBe(0); // namespaced by user
+    db.close();
+  });
 });
 
 describe('ReviewLogRepository (append-only)', () => {
@@ -94,15 +107,15 @@ describe('ReviewLogRepository (append-only)', () => {
     db.close();
   });
 
-  it('lastPassageUpdate returns the latest passage-origin timestamp for a word', async () => {
+  it('lastUpdate returns the latest timestamp of ANY source for a word (cross-source cooldown, C-5d)', async () => {
     const { db, userId } = await freshDb();
     const repo = createRepositories(db).reviewLog;
-    await repo.append({ userId, wordId: 'w1', rating: 3, source: 'review', at: 5 });
-    await repo.append({ userId, wordId: 'w1', rating: 2, source: 'passage', at: 40 });
     await repo.append({ userId, wordId: 'w1', rating: 2, source: 'passage', at: 25 });
+    await repo.append({ userId, wordId: 'w1', rating: 1, source: 'review', at: 40 }); // latest, review-origin
+    await repo.append({ userId, wordId: 'w1', rating: 2, source: 'passage', at: 10 });
 
-    expect(await repo.lastPassageUpdate(userId, 'w1')).toBe(40);
-    expect(await repo.lastPassageUpdate(userId, 'w2')).toBeUndefined();
+    expect(await repo.lastUpdate(userId, 'w1')).toBe(40);
+    expect(await repo.lastUpdate(userId, 'w2')).toBeUndefined();
     db.close();
   });
 });
@@ -188,6 +201,7 @@ describe('ProgressRepository', () => {
       percent: status === 'completed' ? 100 : 40,
       status,
       startedAt,
+      lastOpenedAt: startedAt,
     });
     await repo.upsert(mk('p1', 'in_progress', 10));
     await repo.upsert(mk('p2', 'completed', 20));
@@ -249,6 +263,32 @@ describe('WordCacheRepository', () => {
     await repo.put(userId, word);
     expect((await repo.get(userId, 'w1'))?.headword).toBe('resilient');
     expect(await repo.all(userId)).toHaveLength(1);
+    db.close();
+  });
+
+  it('round-trips schemaVersion / enrichmentPending metadata and clears it on re-put (D2)', async () => {
+    const { db, userId } = await freshDb();
+    const repo = createRepositories(db).wordCache;
+    const word = {
+      wordId: 'w1',
+      headword: 'resilient',
+      ipa: '',
+      pos: ['adj'],
+      register: 'neutral',
+      connotation: 'positive',
+      frequency: 3,
+      core: { meaningsJa: ['回復力のある'], examples: [], collocations: [], synonymNuances: [] },
+    };
+    await repo.put(userId, word, { schemaVersion: 1, enrichmentPending: true });
+    const pending = await repo.get(userId, 'w1');
+    expect(pending?.schemaVersion).toBe(1);
+    expect(pending?.enrichmentPending).toBe(true);
+
+    // Re-put without the flag replaces the whole row, dropping enrichmentPending.
+    await repo.put(userId, word, { schemaVersion: 1 });
+    const cleared = await repo.get(userId, 'w1');
+    expect(cleared?.schemaVersion).toBe(1);
+    expect(cleared?.enrichmentPending).toBeUndefined();
     db.close();
   });
 });

@@ -48,6 +48,16 @@ export default tseslint.config(
   {
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
+      // Honor the `_`-prefix convention for intentionally-unused bindings
+      // (e.g. placeholder parameters that document a future extension point).
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
     },
   },
   // L0 types: no framework/persistence/network, no imports from any other layer.

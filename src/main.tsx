@@ -15,6 +15,16 @@ import { createContainer } from './ui/app/container';
 import { AppProvider } from './ui/app/AppContext';
 import { hydrateSettings, restoreReadingSession } from './state/controllers/sessionBootstrap';
 import { ANONYMOUS_USER_ID } from './infra/auth/authAdapter';
+// F-7: self-hosted design fonts (@fontsource, font-display: swap). The variable
+// families ship one file with unicode-range subsetting, so the CJK subsets
+// lazy-load per glyph; IBM Plex Sans pins the 400/500/600/700 weights we use.
+import '@fontsource-variable/newsreader/index.css';
+import '@fontsource/ibm-plex-sans/400.css';
+import '@fontsource/ibm-plex-sans/500.css';
+import '@fontsource/ibm-plex-sans/600.css';
+import '@fontsource/ibm-plex-sans/700.css';
+import '@fontsource-variable/noto-sans-jp/index.css';
+import '@fontsource-variable/noto-serif-jp/index.css';
 import './ui/theme/global.css';
 
 async function bootstrap(): Promise<void> {
@@ -29,6 +39,7 @@ async function bootstrap(): Promise<void> {
   await restoreReadingSession(
     { passages: container.repos.passages, progress: container.repos.progress, session: container.session },
     userId,
+    container.now(),
   );
 
   const queryClient = new QueryClient();

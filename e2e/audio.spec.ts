@@ -16,7 +16,7 @@ test.describe('audio follow-along', () => {
 
   test('seeking moves the follow-along highlight to the spoken token', async ({ page }) => {
     await generateFromSetup(page);
-    await page.waitForURL(/\/read$/);
+    await page.waitForURL(/\/p\//);
     // Audio readied (the player is enabled once the TimingMap arrives).
     await expect(page.getByRole('button', { name: '再生', exact: true })).toBeEnabled();
     await ensureSeekable(page);
@@ -32,7 +32,7 @@ test.describe('audio follow-along', () => {
 
   test('the rate control cycles the playback speed', async ({ page }) => {
     await generateFromSetup(page);
-    await page.waitForURL(/\/read$/);
+    await page.waitForURL(/\/p\//);
     await expect(page.getByRole('button', { name: '再生', exact: true })).toBeEnabled();
 
     await page.getByRole('button', { name: '再生速度 1倍' }).click();

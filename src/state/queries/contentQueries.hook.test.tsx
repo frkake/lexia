@@ -7,7 +7,6 @@ import { useWordData, useGeneratePassage } from './contentQueries';
 import { ok, err } from '../../types/result';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import type { GenerationOrchestrator } from '../../domain/generation/generationOrchestrator';
-import type { ContentGateway } from '../../types/ports';
 import type { GenerationRequest, IndexedPassage, WordData } from '../../types/domain';
 
 const word: WordData = {
@@ -47,20 +46,19 @@ function makeWrapper(client: QueryClient) {
 }
 
 describe('useWordData', () => {
-  it('fetches word data and de-duplicates identical requests via the cache', async () => {
-    const getWordData = vi.fn(async () => word);
-    const gateway: ContentGateway = { getWordData, generatePassage: vi.fn() };
+  it('loads word data via the injected loader and de-duplicates identical requests via the cache', async () => {
+    const loadWordData = vi.fn(async () => word);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = makeWrapper(client);
 
-    const first = renderHook(() => useWordData(gateway, 'w1'), { wrapper });
+    const first = renderHook(() => useWordData(loadWordData, 'w1'), { wrapper });
     await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
     expect(first.result.current.data?.headword).toBe('resilient');
 
-    // A second consumer of the same key reads from cache — no extra fetch.
-    const second = renderHook(() => useWordData(gateway, 'w1'), { wrapper });
+    // A second consumer of the same key reads from cache — no extra load (staleTime Infinity).
+    const second = renderHook(() => useWordData(loadWordData, 'w1'), { wrapper });
     await waitFor(() => expect(second.result.current.isSuccess).toBe(true));
-    expect(getWordData).toHaveBeenCalledTimes(1);
+    expect(loadWordData).toHaveBeenCalledTimes(1);
   });
 });
 

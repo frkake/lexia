@@ -70,13 +70,42 @@ export const wordCardData: WordData = {
   core: {
     meaningsJa: ['回復力のある', '立ち直りが早い'],
     examples: [{ en: 'a resilient economy', ja: '回復力のある経済' }],
-    collocations: ['remain resilient', 'a resilient system'],
+    collocations: [
+      { id: 'remain-resilient', pattern: '＜人・組織が＞ remain resilient', type: 'Adv+V', slotExamples: ['economy', 'community', 'system'], glossJa: '困難の中でも粘り強くあり続ける', l1Contrast: false },
+      { id: 'resilient-system', pattern: 'a resilient ＜システム・構造＞', type: 'Adj+N', slotExamples: ['system', 'network', 'infrastructure'], glossJa: '障害から復旧しやすい仕組み', l1Contrast: false },
+    ],
     synonymNuances: ['tough より内面的な強さを含意'],
   },
   more: {
-    etymology: { prefix: 're-', root: 'salire（跳ねる）' },
-    semanticNetwork: { synonyms: ['tough', 'hardy'], antonyms: ['fragile'], hypernyms: [], hyponyms: [], related: ['adaptable'] },
+    etymology: {
+      parts: [
+        { form: 're-', surfaceIn: 're', meaningJa: '再び' },
+        { form: 'sili', surfaceIn: 'sili', meaningJa: '跳ぶ' },
+        { form: '-ent', surfaceIn: 'ent', meaningJa: '〜の性質' },
+      ],
+      bridgeJa: 're-（再び）+ sili（跳ぶ ← ラテン語 salire）+ -ent（〜の性質）→ 跳ね返って元に戻る → 回復力がある。',
+      cognates: [
+        { word: 'salient', noteJa: '跳び出る → 目立つ' },
+        { word: 'result', noteJa: '跳ね返ってくる → 結果' },
+      ],
+      sourceJa: 'ラテン語 salire「跳ぶ」',
+    },
+    semanticNetwork: [
+      { word: 'tough', relation: 'synonym', noteJa: 'より口語的で外面的' },
+      { word: 'hardy', relation: 'synonym', noteJa: '耐久性寄り' },
+      { word: 'fragile', relation: 'antonym', noteJa: '壊れやすい' },
+      { word: 'adaptable', relation: 'related', noteJa: '環境に合わせて変わる' },
+    ],
     wordFamily: ['resilience', 'resiliently'],
+    idioms: [
+      {
+        expression: 'bounce back',
+        meaningJa: '（困難から）立ち直る',
+        originJa: 'ボールが跳ね返るイメージ → 落ち込みから元の状態へ戻る → 「立ち直る」の意味に。',
+        exampleEn: 'She bounced back after the setback.',
+        exampleJa: '挫折の後、彼女は立ち直った。',
+      },
+    ],
     grammarPatterns: ['resilient to X'],
     metaphor: '叩かれても元に戻るバネのようなイメージ。',
     commonErrors: ['×resilent（綴り）'],
@@ -86,6 +115,7 @@ export const wordCardData: WordData = {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 const WEEKLY_COUNTS = [3, 5, 2, 8, 4, 6, 9];
+const WEEKLY_READING_COUNTS = [1, 0, 3, 2, 5, 1, 4];
 
 export const dashboardSnapshot: DashboardSnapshot = {
   dueTodayCount: 12,
@@ -94,7 +124,11 @@ export const dashboardSnapshot: DashboardSnapshot = {
     { passageId: 'p1', title: '交渉のテーブルで', level: 'B2', percent: 45, sentenceIndex: 3 },
     { passageId: 'p2', title: '四半期レビュー', level: 'B1', percent: 20, sentenceIndex: 1 },
   ],
-  weekly: WEEKLY_COUNTS.map((reviewCount, i) => ({ dayStartMs: TODAY - (6 - i) * DAY_MS, reviewCount })),
+  weekly: WEEKLY_COUNTS.map((reviewCount, i) => ({
+    dayStartMs: TODAY - (6 - i) * DAY_MS,
+    reviewCount,
+    readingCount: WEEKLY_READING_COUNTS[i]!,
+  })),
   dueList: [
     { wordId: 'decisive', dueAt: TODAY, mastery: 'Learning' },
     { wordId: 'cordial', dueAt: TODAY, mastery: 'Consolidating' },

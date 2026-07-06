@@ -18,6 +18,7 @@ import { HttpStoryGateway } from '../../infra/content/storyGatewayHttp';
 import { TtsSynthesisAdapter, type TtsBackend } from '../../infra/tts/ttsSynthesisAdapter';
 import { HttpTtsBackend } from '../../infra/tts/ttsBackendHttp';
 import { JsonSyncAdapter } from '../../infra/sync/exportImport';
+import { createCefrDictionary } from '../../infra/cefr/cefrDictionary';
 import {
   createGenerationOrchestrator,
   type GenerationOrchestrator,
@@ -100,6 +101,11 @@ export async function createContainer(userId: UserId, seams: ContainerSeams = {}
     seams.tts ?? new TtsSynthesisAdapter(seams.ttsBackend ?? new HttpTtsBackend({ baseUrl: seams.baseUrl }));
   const sync = new JsonSyncAdapter(db);
   const now = seams.now ?? (() => Date.now());
+  // B-4: revive the CEFR vocabulary-profile gate in production. `main.tsx` builds the container
+  // without seams, so the default must be the real dictionary (undefined ⇒ the validator skips
+  // every token and the gate is silently dead). Tests still override via `seams.cefrOf`, and the
+  // `??` keeps the dictionary from being built when a seam is supplied.
+  const cefrOf = seams.cefrOf ?? createCefrDictionary();
 
   let counter = 0;
   const genId = (): string => `p_${now()}_${counter++}`;
@@ -114,17 +120,17 @@ export async function createContainer(userId: UserId, seams: ContainerSeams = {}
     session: seams.session ?? sessionStore,
     player: seams.player ?? playerStore,
     settings: seams.settings ?? settingsStore,
-    suggestions: createWordSuggestionService(content, { cefrOf: seams.cefrOf }),
+    suggestions: createWordSuggestionService(content, { cefrOf, proposalCache: repos.suggestionCache }),
     storyPlanner: createStoryPlanner({
       gateway: story,
       storyRepo: repos.stories,
       createOrchestrator: (passageId) =>
-        createGenerationOrchestrator({ gateway: content, cefrOf: seams.cefrOf, passageId }),
+        createGenerationOrchestrator({ gateway: content, cefrOf, passageId }),
       now,
     }),
     loadStates: (uid) => db.scheduling.where('userId').equals(uid).toArray(),
     createOrchestrator: (passageId) =>
-      createGenerationOrchestrator({ gateway: content, cefrOf: seams.cefrOf, passageId }),
+      createGenerationOrchestrator({ gateway: content, cefrOf, passageId }),
     genId,
     now,
     voiceId: seams.voiceId ?? DEFAULT_VOICE_ID,

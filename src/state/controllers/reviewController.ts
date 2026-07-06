@@ -33,7 +33,7 @@ export async function applyReviewRating(
   const scheduler = deps.scheduler ?? fsrs;
   const projector = deps.projector ?? masteryProjector;
 
-  const prior = (await deps.scheduling.get(userId, wordId)) ?? newSchedulingState(userId, wordId);
+  const prior = (await deps.scheduling.get(userId, wordId)) ?? newSchedulingState(userId, wordId, now);
   const rescheduled = scheduler.review(prior, rating, now);
   const mastery = projector.deriveMastery(rescheduled, { kind: 'review', rating });
   const next: WordSchedulingState = { ...rescheduled, mastery };
@@ -49,4 +49,63 @@ export async function applyReviewRating(
   });
 
   return next;
+}
+
+/**
+ * Reading-time「知らなかった」(F-3): the learner marks a word unknown while reading. The SRS effect
+ * is identical to an explicit Again (rating 1 reschedule — same interval reset), but the event is
+ * recorded with `source='passage'` (and denormalized `lastSource='passage'`) so that reading-time
+ * miss-marks count as reading activity, never inflating the weekly「復習」series nor masquerading as
+ * an explicit review. Mastery uses the passage event (a rating-1 grade never promotes regardless).
+ */
+export async function markUnknownFromReading(
+  deps: Pick<ReviewControllerDeps, 'scheduling' | 'reviewLog' | 'scheduler' | 'projector'>,
+  userId: UserId,
+  wordId: string,
+  now: number,
+): Promise<WordSchedulingState> {
+  const scheduler = deps.scheduler ?? fsrs;
+  const projector = deps.projector ?? masteryProjector;
+
+  const prior = (await deps.scheduling.get(userId, wordId)) ?? newSchedulingState(userId, wordId, now);
+  const rescheduled = scheduler.review(prior, 1, now);
+  const mastery = projector.deriveMastery(rescheduled, { kind: 'passage' });
+  const next: WordSchedulingState = { ...rescheduled, lastSource: 'passage', mastery };
+
+  await deps.scheduling.upsert(next);
+  await deps.reviewLog.append({
+    userId,
+    wordId,
+    rating: 1,
+    source: 'passage',
+    at: now,
+    ...(next.stability !== undefined ? { stabilityAfter: next.stability } : {}),
+  });
+
+  return next;
+}
+
+/**
+ * Undo the most recent rating (C-5c "1つ戻る"; the single shared Undo mechanism referenced by the
+ * toast/session Undo affordance). Restores the exact pre-rating `WordSchedulingState` and appends an
+ * offsetting `source:'undo'` ReviewLog row (carrying the undone rating) rather than deleting the
+ * original `review` row, so the log stays append-only and FSRS-replayable while the day's review
+ * tally nets back down. Idempotent at the data layer: re-running with the same prior state is a
+ * no-op reschedule plus one more audit row.
+ */
+export async function undoReviewRating(
+  deps: Pick<ReviewControllerDeps, 'scheduling' | 'reviewLog'>,
+  priorState: WordSchedulingState,
+  ratingUndone: Rating,
+  now: number,
+): Promise<void> {
+  await deps.scheduling.upsert(priorState);
+  await deps.reviewLog.append({
+    userId: priorState.userId,
+    wordId: priorState.wordId,
+    rating: ratingUndone,
+    source: 'undo',
+    at: now,
+    ...(priorState.stability !== undefined ? { stabilityAfter: priorState.stability } : {}),
+  });
 }
