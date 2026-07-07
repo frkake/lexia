@@ -615,6 +615,10 @@ describe('story flow through the real Setup route (6.3 gate → chapter, 18.3)',
     await waitFor(() => expect(screen.getAllByText('星の少女 第二章').length).toBeGreaterThan(0));
     // No regeneration happened — the existing chapter was reused.
     expect(generateCalls).toBe(0);
+    // The player resets to 'idle' (playable bar, ▶ synthesizes lazily) instead of the old
+    // 'unavailable' hide — no audio is persisted for a revisited chapter.
+    await waitFor(() => expect(container.player.getState().status).toBe('idle'));
+    expect(container.player.getState().loadedPassageId).toBeNull();
   });
 
   it('persists character images that finish AFTER confirmation instead of discarding them (E-3(d))', async () => {

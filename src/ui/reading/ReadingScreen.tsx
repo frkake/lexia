@@ -442,6 +442,16 @@ export function ReadingScreen({
               ) : null}
             </figure>
 
+            {/* 段階的生成: the body is readable while the annotation pass still runs — say so instead
+                of leaving the rail silently sparse; the cues stream in via replacePassage when ready. */}
+            {meta.annotationStatus === 'pending' ? (
+              <div data-testid="annotation-pending-banner" style={annotationBannerStyle}>
+                <span style={{ flex: 1, minWidth: 0, lineHeight: 1.5 }} aria-live="polite">
+                  解説（学習ガイドの気づき）を生成しています… 本文はこのまま読み進められます。
+                </span>
+              </div>
+            ) : null}
+
             {/* F-6: the annotation pass failed/partial for this passage — the body reads fine but the
                 「気づき」rail is empty/short. Make the loss visible and offer a one-tap recovery. */}
             {meta.annotationStatus === 'failed' || meta.annotationStatus === 'partial' ? (

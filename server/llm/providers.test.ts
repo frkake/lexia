@@ -112,6 +112,57 @@ describe('generatePassage — OpenAI provider (default)', () => {
     expect(res.passage.noticeCues).toEqual([]);
   });
 
+  it('re-anchors a collocation span to its reported FULL-PHRASE surface, not the head word (抽出範囲 fix)', async () => {
+    // Structured word data: the pattern's head form would collapse the tint to just "set"; the
+    // model's verbatim `surface` keeps the whole realized phrase "set an agenda".
+    const reqWithTargets: GenerationRequest = {
+      level: 'B1',
+      intent: 'business',
+      newWordRatio: 0.3,
+      wordTarget: 200,
+      contentType: 'article',
+      targetWords: [
+        {
+          wordId: 'agenda',
+          surface: 'agenda',
+          masteryDensity: 'new',
+          attributes: { core: { collocations: [{ id: 'set-agenda', pattern: 'set ＜議題・計画＞' }] } },
+        },
+      ],
+    };
+    const sentences = [{ tokens: ['We', 'set', 'an', 'agenda', 'for', 'the', 'team', 'meeting', '.'], translationJa: '' }];
+    const base = {
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 1, reviewCount: 0, approxWords: 9 },
+      sentences,
+      targetSpans: [],
+      noticeCues: [],
+    };
+    const withSurface = {
+      ...base,
+      collocationSpans: [
+        { sentenceIndex: 0, tokenStart: 0, tokenEnd: 1, headWordId: 'agenda', collocationId: 'set-agenda', surface: 'set an agenda' },
+      ],
+    };
+    const res = await generatePassage(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      reqWithTargets,
+      vi.fn(async () => openAiCompletion(withSurface)) as unknown as typeof fetch,
+    );
+    expect(res.passage.collocationSpans[0]).toMatchObject({ tokenStart: 1, tokenEnd: 4 }); // "set an agenda"
+
+    // Legacy reply without a surface still anchors — degrading to the pattern's head form ("set").
+    const withoutSurface = {
+      ...base,
+      collocationSpans: [{ sentenceIndex: 0, tokenStart: 0, tokenEnd: 1, headWordId: 'agenda', collocationId: 'set-agenda' }],
+    };
+    const legacy = await generatePassage(
+      { OPENAI_API_KEY: 'sk-real-key' },
+      reqWithTargets,
+      vi.fn(async () => openAiCompletion(withoutSurface)) as unknown as typeof fetch,
+    );
+    expect(legacy.passage.collocationSpans[0]).toMatchObject({ tokenStart: 1, tokenEnd: 2 }); // "set"
+  });
+
   it('carries paragraphIndex through and re-anchors expressionSpans by their surface (B-1/F-8②)', async () => {
     const passage = {
       meta: { title: 't', intent: 'business', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 12 },
@@ -941,6 +992,25 @@ describe('annotatePassage', () => {
       ['idiom', 1, 0, 3, 6], // "bite the bullet"
       ['phrasal_verb', 2, 1, 1, 3], // "paid off"
     ]);
+  });
+
+  it('carries meaningJa (本文中での意味) through to the grounded cue, dropping blank values', async () => {
+    const reply = {
+      noticeCues: [
+        {
+          span: { sentenceIndex: 0, tokenStart: 3, tokenEnd: 6 },
+          category: 'idiom',
+          anchorText: 'bite the bullet',
+          meaningJa: '思い切って決断する',
+          explanationJa: '嫌なことに正面から向き合う場面で使う。',
+        },
+        { span: { sentenceIndex: 1, tokenStart: 1, tokenEnd: 3 }, category: 'phrasal_verb', anchorText: 'paid off', meaningJa: '   ', explanationJa: '報われた' },
+      ],
+    };
+    const fetchImpl = vi.fn(async () => openAiCompletion(reply));
+    const { noticeCues } = await annotatePassage({ OPENAI_API_KEY: 'sk-real-key' }, { sentences, level: 'B1' }, fetchImpl as unknown as typeof fetch);
+    expect(noticeCues[0]).toMatchObject({ anchorText: 'bite the bullet', meaningJa: '思い切って決断する' });
+    expect(noticeCues[1]!.meaningJa).toBeUndefined(); // blank → omitted (UI falls back to explanationJa)
   });
 
   it('drops a cue whose anchorText does not occur in the passage', async () => {

@@ -6,7 +6,7 @@
  * feedback is surfaced by the route via the shared toast surface (design decision D6).
  */
 
-import { useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ModalOverlay } from '../shared/ModalOverlay';
 import { colors, fonts, radius } from '../theme/tokens';
 
@@ -17,6 +17,8 @@ export interface DataManagementScreenProps {
   onImport(file: File): void | Promise<void>;
   exporting?: boolean;
   importing?: boolean;
+  /** Extra settings sections rendered above the backup cards (inside the same page shell). */
+  children?: ReactNode;
 }
 
 export function DataManagementScreen({
@@ -24,6 +26,7 @@ export function DataManagementScreen({
   onImport,
   exporting = false,
   importing = false,
+  children,
 }: DataManagementScreenProps) {
   const [includeImages, setIncludeImages] = useState(true);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -48,11 +51,13 @@ export function DataManagementScreen({
     <div style={pageStyle}>
       <div style={shellStyle}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={titleStyle}>データ管理</h1>
+          <h1 style={titleStyle}>設定</h1>
           <p style={leadStyle}>
             学習データはこの端末のブラウザ内にのみ保存されています。定期的にバックアップを保存しておくと、ブラウザのデータ消去や端末の変更でも学習資産を失いません。
           </p>
         </header>
+
+        {children}
 
         <section style={cardStyle}>
           <h2 style={sectionTitleStyle}>バックアップをエクスポート</h2>

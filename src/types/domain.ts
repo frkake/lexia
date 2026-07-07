@@ -38,7 +38,7 @@ export type EnglishAccent = 'us' | 'gb' | 'au' | 'in';
 
 export type VoiceGender = 'female' | 'male';
 
-export type VoiceProvider = 'azure' | 'polly';
+export type VoiceProvider = 'azure' | 'polly' | 'openai';
 
 export type VoiceRole = 'narrator' | 'interviewer' | 'guest' | 'announcer';
 
@@ -53,7 +53,13 @@ export interface VoiceProfile {
   locale: string;
 }
 
-export type ListeningSceneKind = 'radio_news' | 'street_interview' | 'podcast_dialogue' | 'public_announcement';
+export type ListeningSceneKind =
+  | 'radio_news'
+  | 'street_interview'
+  | 'podcast_dialogue'
+  | 'public_announcement'
+  | 'casual_conversation'
+  | 'tv_broadcast';
 
 export type AmbientNoiseLevel = 'none' | 'low' | 'medium';
 
@@ -305,6 +311,13 @@ export interface CollocationSpan extends SpanRef {
    * prompt/validator rewrite.
    */
   collocationId: string;
+  /**
+   * The collocation as realized in the passage, copied verbatim by the model (the FULL phrase,
+   * e.g. "accept the new proposal"). The server re-derives the span from it, so the in-text tint
+   * covers the whole phrase instead of collapsing to the head word. Absent on legacy passages —
+   * those re-anchor from the collocationId's head form (often a single token).
+   */
+  surface?: string;
 }
 
 /** Self-reported idiom / phrasal verb / set phrase category (B-1 / B-2). */
@@ -363,6 +376,13 @@ export interface NoticeCue {
    * Invariant (enforced by PassageValidator): the tokens at `span` render exactly `anchorText`.
    */
   anchorText: string;
+  /**
+   * 本文中での意味: what the expression means AT THIS SPOT in the passage (one short Japanese
+   * gloss). Shown FIRST in the study guide — before the usage insight — because the learner's
+   * primary question is "この文の中でどういう意味か". Absent on legacy cues (pre-feature passages);
+   * the UI then falls back to leading with `explanationJa`.
+   */
+  meaningJa?: string;
   explanationJa: string;
   /**
    * Optional deeper explanation revealed only when the learner expands the cue (C-1 annotation side).
@@ -642,7 +662,7 @@ export interface AudioAsset {
   audioUrl: string;
   format: 'audio/mpeg' | 'audio/aac' | 'audio/wav';
   durationMs: number;
-  engine: 'polly' | 'azure';
+  engine: 'polly' | 'azure' | 'openai';
 }
 
 export interface WordMark {
@@ -820,6 +840,13 @@ export interface Settings {
    * Settable to 20–200; the review session caps its size at `min(SESSION_REVIEW_LIMIT, this − 当日評定数)`.
    */
   dailyReviewLimit?: number;
+  /**
+   * How a generation run delivers its pieces. `staged` (default): the passage opens as soon as the
+   * body validates; annotation (学習ガイドの気づき), audio and illustration then stream in as each
+   * finishes. `batch`: the pre-existing behavior — the reader opens only after the annotation pass
+   * also completed, so everything textual is present on first paint.
+   */
+  generationMode?: 'staged' | 'batch';
 }
 
 // ── Generation request/response (assembled by SessionPlanner) ────────────────
@@ -920,7 +947,9 @@ export interface PassageAnnotationRequest {
  * produced no cues. Recorded on `PassageMeta.annotationStatus` so the reader can surface a
  * banner + regenerate button instead of silently shipping a passage with no「気づき」.
  */
-export type AnnotationStatus = 'complete' | 'partial' | 'failed';
+/** `pending` = the staged pipeline deferred the annotation pass; it is being generated in the
+ * background (or awaits a backfill after a reload) and merges into the passage when it lands. */
+export type AnnotationStatus = 'complete' | 'partial' | 'failed' | 'pending';
 
 /** Result of the annotation pass: the grounded cues plus the outcome status (F-6). */
 export interface AnnotationResult {

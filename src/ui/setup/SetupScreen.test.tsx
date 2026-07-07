@@ -181,6 +181,22 @@ describe('<SetupScreen/> (overhauled: intent / exam / word target / content type
     expect(cfg.listeningOptions).toEqual({ sceneKind: 'street_interview', accent: 'in', noiseLevel: 'medium' });
   });
 
+  it.each(['casual_conversation', 'tv_broadcast'] as const)('round-trips the %s listening scene kind', (sceneKind) => {
+    const onGenerate = vi.fn<(s: SetupConfig) => void>();
+    const { getByTestId, getByText } = renderScreen({
+      candidates: [],
+      initial: { examTarget: { kind: 'eiken', value: '2' } },
+      onGenerate,
+    });
+
+    fireEvent.click(getByTestId('content-type-listening_scene'));
+    fireEvent.change(getByTestId('listening-scene-kind'), { target: { value: sceneKind } });
+    fireEvent.click(getByText('文章を生成する'));
+
+    const cfg = onGenerate.mock.calls[0]![0];
+    expect(cfg.listeningOptions?.sceneKind).toBe(sceneKind);
+  });
+
   it('clamps the emitted word target into the selected story range (7.3)', () => {
     const onGenerate = vi.fn<(s: SetupConfig) => void>();
     const { getByTestId, getByText } = renderScreen({

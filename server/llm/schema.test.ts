@@ -50,6 +50,23 @@ describe('PASSAGE_JSON_SCHEMA', () => {
     expect(sentence.required).toContain('paragraphIndex');
   });
 
+  it('requires the verbatim full-phrase surface on collocationSpans (抽出範囲 fix)', () => {
+    const coll = PASSAGE_JSON_SCHEMA.properties.collocationSpans.items;
+    expect('surface' in coll.properties).toBe(true);
+    expect(coll.required).toContain('surface');
+    // The prompt binds the surface to the COMPLETE realized phrase, never just the head word.
+    const { system } = buildPassageMessages({
+      level: 'B1',
+      intent: 'business',
+      newWordRatio: 0.3,
+      wordTarget: 200,
+      contentType: 'article',
+      targetWords: [],
+    } as GenerationRequest);
+    expect(system).toContain('collocationSpan.surface');
+    expect(system).toMatch(/COMPLETE contiguous phrase/);
+  });
+
   it('adds required syntaxSpans (B-3) with the self-report pattern enum', () => {
     expect('syntaxSpans' in PASSAGE_JSON_SCHEMA.properties).toBe(true);
     expect(PASSAGE_JSON_SCHEMA.required).toContain('syntaxSpans');
@@ -350,6 +367,19 @@ describe('buildPassageMessages — new fields (Requirement 7.4 / 8.3 / 8.4 / 6.6
     expect(user).toContain('target accent for TTS voices: in');
     expect(user).toContain('guest_1');
   });
+
+  it('describes the casual-conversation and TV-broadcast scene kinds with their speaker ids', () => {
+    const { system, user } = buildPassageMessages({
+      ...base,
+      contentType: 'listening_scene',
+      listeningOptions: { sceneKind: 'tv_broadcast', accent: 'gb', noiseLevel: 'low' },
+    });
+    expect(system).toContain('casual_conversation');
+    expect(system).toContain('tv_broadcast');
+    expect(user).toContain('"sceneKind": "tv_broadcast"');
+    expect(user).toContain('reporter');
+    expect(user).toContain('friend_1');
+  });
 });
 
 describe('maxTokensForWordTarget', () => {
@@ -642,6 +672,18 @@ describe('ANNOTATION_JSON_SCHEMA — cue + sentence-note shape (C-1 / C-4)', () 
     expect(cue.required).toContain('anchorTextParts');
     expect(cue.properties.detailJa.type).toEqual(['string', 'null']);
     expect(cue.properties.anchorTextParts.type).toEqual(['array', 'null']);
+  });
+
+  it('adds nullable meaningJa (本文中での意味) to each cue, and the prompt orders it before the insight', () => {
+    const cue = ANNOTATION_JSON_SCHEMA.properties.noticeCues.items;
+    expect(cue.required).toContain('meaningJa');
+    expect(cue.properties.meaningJa.type).toEqual(['string', 'null']);
+    const { system } = buildAnnotationMessages({ level: 'B1', sentences: [{ tokens: ['Hi', '.'], translationJa: '' }] });
+    expect(system).toContain('meaningJa');
+    expect(system).toContain('本文中での意味');
+    // The anchor-range rule (complete expression, never a fragment or a whole clause).
+    expect(system).toContain('ANCHOR RANGE');
+    expect(system).toMatch(/COMPLETE/);
   });
 
   it('adds a sentenceNotes array with labelled chunk ranges (C-4)', () => {

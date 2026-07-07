@@ -232,8 +232,12 @@ export const PASSAGE_JSON_SCHEMA = {
           ...SPAN_PROPS,
           headWordId: { type: 'string' },
           collocationId: { type: 'string' },
+          // The collocation AS REALIZED in the passage, copied verbatim (the whole phrase, e.g.
+          // "accept the proposal"). The server re-derives the span from it, so the highlighted
+          // range covers the full phrase instead of collapsing to the head word.
+          surface: { type: 'string' },
         },
-        required: ['sentenceIndex', 'tokenStart', 'tokenEnd', 'headWordId', 'collocationId'],
+        required: ['sentenceIndex', 'tokenStart', 'tokenEnd', 'headWordId', 'collocationId', 'surface'],
       },
     },
     noticeCues: {
@@ -522,7 +526,10 @@ const PASSAGE_SYSTEM = [
   '  utterance, keep turns short enough to follow by ear, and include natural spoken features',
   '  (brief acknowledgements, clarification, short pauses implied by punctuation) without heavy dialect spelling.',
   '  radio_news = anchor/report format; street_interview = interviewer plus multiple short answers;',
-  '  podcast_dialogue = host/guest exchange; public_announcement = clear public-service announcement.',
+  '  podcast_dialogue = host/guest exchange; public_announcement = clear public-service announcement;',
+  '  casual_conversation = informal everyday small talk between two friends (contractions, casual',
+  '  register, natural back-and-forth turns); tv_broadcast = TV news programme in a formal broadcast',
+  '  register where a studio anchor hands off to a field reporter and back.',
   '  Accents are handled by TTS voices, so keep the transcript standard and readable.',
   '',
   'Writing quality (as binding as the constraints above — a flat, mechanical passage is a FAILED',
@@ -552,6 +559,11 @@ const PASSAGE_SYSTEM = [
   '  plain strings, the collocation string itself) verbatim from that word\'s supplied',
   '  core.collocations — never invent one. Every target word that has supplied collocations MUST',
   '  appear inside at least one of them.',
+  '- collocationSpan.surface: the collocation AS YOU WROTE IT in the passage, copied VERBATIM — the',
+  '  COMPLETE contiguous phrase including the slot filler and any words inside it (articles,',
+  '  adjectives): pattern "accept ＜提案・招待＞" realized as "accept the new proposal" -> surface',
+  '  "accept the new proposal", never just "accept". The app re-derives the highlight range from',
+  '  this string, so a truncated surface mis-highlights the passage.',
   '',
   'Paragraph structure: split the passage into natural paragraphs of 2-5 sentences each, following',
   'the discourse flow (introduction, development, turn, conclusion). Set "paragraphIndex" on every',
@@ -627,7 +639,8 @@ function passageUser(req: GenerationRequest): string {
       `- sceneKind: ${req.listeningOptions.sceneKind}`,
       `- target accent for TTS voices: ${req.listeningOptions.accent}`,
       `- ambient noise level: ${req.listeningOptions.noiseLevel}`,
-      '- Use stable speakerId values such as "anchor", "interviewer", "guest_1", "guest_2", "announcer".',
+      '- Use stable speakerId values such as "anchor", "reporter", "interviewer", "host", "guest_1",',
+      '  "guest_2", "friend_1", "friend_2", "announcer".',
       '- Every sentence object MUST include a non-null speakerId.',
     );
   }
@@ -740,6 +753,9 @@ export const ANNOTATION_JSON_SCHEMA = {
           },
           category: { type: 'string', enum: [...ANNOTATION_CATEGORIES] },
           anchorText: { type: 'string' },
+          // 本文中での意味: what the expression means AT THIS SPOT in the passage (shown FIRST in
+          // the study guide). Null only for categories where a meaning gloss is beside the point.
+          meaningJa: { type: ['string', 'null'] },
           explanationJa: { type: 'string' },
           // C-1 annotation side: a deeper origin/parse explanation, null unless the cue category
           // warrants one (idiom / metaphor / grammar_pattern / sentence_structure).
@@ -748,7 +764,7 @@ export const ANNOTATION_JSON_SCHEMA = {
           // expression is split (e.g. "no sooner ... than"); null for a contiguous expression.
           anchorTextParts: { type: ['array', 'null'], items: { type: 'string' } },
         },
-        required: ['span', 'category', 'anchorText', 'explanationJa', 'detailJa', 'anchorTextParts'],
+        required: ['span', 'category', 'anchorText', 'meaningJa', 'explanationJa', 'detailJa', 'anchorTextParts'],
       },
     },
     // C-4 sentence-level syntax notes for hard-to-parse sentences.
@@ -796,10 +812,22 @@ const ANNOTATION_SYSTEM = [
   'For each, add a cue:',
   '- anchorText: the EXACT word(s) in the passage the note is about, copied VERBATIM from that',
   "  sentence's tokens (the joined surface). It MUST appear verbatim in the passage.",
+  '- ANCHOR RANGE (critical — a wrong range confuses the study guide): anchorText covers the COMPLETE',
+  '  expression the note is about and NOTHING MORE. For a collocation, the full phrase as written',
+  '  (verb + object with its article/adjectives: "accept the new proposal", not "accept"); for an',
+  '  idiom or phrasal verb, its complete form as it appears; NEVER a lone fragment of a multi-word',
+  '  expression, and NEVER a whole clause or sentence around it (whole-sentence anchors are for',
+  '  sentence_structure cues only). Trailing punctuation stays out of the anchor.',
   '- span: { sentenceIndex, tokenStart, tokenEnd } (half-open) for those tokens. Do NOT agonize over',
   '  exact indices — the app re-derives the span from anchorText — but point at the right sentence.',
   '- category: the single best fit from the list above.',
-  '- explanationJa: ONE plain-text Japanese sentence written in the EXPLANATION STYLE below (the actionable usage insight, not the dictionary meaning).',
+  '- meaningJa: 本文中での意味 — what this expression means AT THIS SPOT in the passage, as one short',
+  '  natural Japanese gloss/paraphrase (~10-25 characters), e.g. idiom "break the ice" in a meeting',
+  '  scene -> 「場の緊張をほぐす」, phrasal_verb "carry out" with an experiment -> 「(実験を)実施する」.',
+  '  Learners read meaningJa FIRST, before any usage insight, so it must let them re-read the sentence',
+  '  and understand it. REQUIRED (non-null) for collocation / idiom / phrasal_verb / phrase / metaphor /',
+  '  usage / connotation cues; for the other categories set null when a gloss adds nothing.',
+  '- explanationJa: ONE plain-text Japanese sentence written in the EXPLANATION STYLE below (the actionable usage insight; the in-context meaning already lives in meaningJa — do not repeat it).',
   '',
   `EXPLANATION STYLE (explanationJa) — every cue's explanationJa must read like these six models (the 'category "expr" ->' prefix is CONTEXT, not part of the field; output only the Japanese after the arrow):`,
   'collocation "leverage + reputation" -> 目的語には活かせる資産（reputation / resources / network）が来る。',

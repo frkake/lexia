@@ -30,6 +30,7 @@ import type {
   StoryPlanExtensionRequest,
   StoryPlanRequest,
   StoryRecord,
+  VoiceProfile,
 } from './domain';
 
 // ── Adjacent capability seams ────────────────────────────────────────────────
@@ -130,6 +131,11 @@ export interface TtsSynthesisPort {
   ): Promise<{ asset: AudioAsset; timing: TimingMap }>;
   /** Single-word pronunciation clip url (adjacent supply or pre-generated). */
   wordClipUrl(wordId: string, voiceId: string): Promise<string>;
+  /**
+   * Voice catalog with per-voice availability, decided by the server's .env (there is no
+   * cross-provider synthesis fallback). Undefined when the backend cannot report it.
+   */
+  voices?(): Promise<(VoiceProfile & { available: boolean })[] | undefined>;
 }
 
 /** Options for a backup export (F-5 第2段). */

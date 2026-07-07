@@ -14,6 +14,7 @@
  */
 
 import { sessionPlanner, type SessionPlanner } from '../../domain/session/sessionPlanner';
+import { readabilityForCefr } from '../../domain/difficulty/levelPreset';
 import type {
   GenerationOrchestrator,
   GenerationError,
@@ -21,6 +22,7 @@ import type {
 } from '../../domain/generation/generationOrchestrator';
 import { tokenizer } from '../../domain/tokenizer/joinService';
 import { persistImage } from '../../infra/persistence/imageStore';
+import { ttsUnavailableReasonJa } from '../../infra/tts/ttsBackendHttp';
 import { newSchedulingState } from './newState';
 import type { SessionStore } from '../stores/sessionStore';
 import type { PlayerStore } from '../stores/playerStore';
@@ -33,8 +35,11 @@ import type {
   ImageRepository,
 } from '../../types/ports';
 import type {
+  AnnotationResult,
   IndexedPassage,
+  PassageAnnotationRequest,
   PassageIllustrationRequest,
+  ReadabilityLevel,
   SetupConfig,
   StoryContext,
   UserId,
@@ -63,6 +68,14 @@ export interface GenerationControllerDeps {
   wordData?: Record<string, WordData>;
   /** Optional scene-illustration generator. Enrichment only; failures never block reading. */
   illustratePassage?: (req: PassageIllustrationRequest) => Promise<string>;
+  /**
+   * Staged delivery (設定「段階的に生成」): open the reader as soon as the body validates and run the
+   * annotation pass in the background via `annotatePassage`, merging cues in when they land. Absent /
+   * false ⇒ batch behavior (annotation awaited before the reader opens).
+   */
+  stagedGeneration?: boolean;
+  /** Background annotation for the staged pipeline (usually ContentGateway.annotatePassage). */
+  annotatePassage?: (req: PassageAnnotationRequest, signal?: AbortSignal) => Promise<AnnotationResult>;
   /** Cancels the in-flight generation (D-7): threaded to the orchestrator's ContentGateway calls. */
   signal?: AbortSignal;
   /** Reports the body-generation sub-phase (passage → repair → annotate) for the progress panel. */
@@ -81,6 +94,8 @@ export interface GenerationOutcome {
   audio?: Promise<boolean>;
   /** Resolves once scene illustration enrichment settles. Present only when configured. */
   illustration?: Promise<boolean>;
+  /** Resolves once the staged background annotation settles. Present only in staged mode. */
+  annotation?: Promise<boolean>;
 }
 
 export interface GenerationPipelineOptions {
@@ -116,9 +131,12 @@ export async function runGenerationPipeline(
   const req = planner.buildRequest(setup, states, deps.wordData, options.storyContext);
   for (const state of toSeed) state.level = req.level;
   const passageId = options.passageId ?? deps.genId();
+  // Staged mode (準備できたものから表示): the orchestrator returns as soon as the body validates
+  // (annotationStatus 'pending'); the annotation joins audio + illustration as background work.
+  const staged = Boolean(deps.stagedGeneration && deps.annotatePassage);
   const result = await deps
     .createOrchestrator(passageId)
-    .generate(req, { signal: deps.signal, onPhase: deps.onPhase });
+    .generate(req, { signal: deps.signal, onPhase: deps.onPhase, deferAnnotation: staged });
 
   if (!result.ok) {
     return { ok: false, error: result.error };
@@ -140,8 +158,11 @@ export async function runGenerationPipeline(
   const illustration = deps.illustratePassage
     ? enrichPassageIllustration(deps, record, passage, options.storyContext)
     : undefined;
+  const annotation = staged
+    ? enrichPassageAnnotation(deps, record, req.readabilityLevel ?? readabilityForCefr(req.level))
+    : undefined;
 
-  return { ok: true, passageId, passage, audio, illustration };
+  return { ok: true, passageId, passage, audio, illustration, annotation };
 }
 
 function attachStoryRef(passage: IndexedPassage, storyContext?: StoryContext): IndexedPassage {
@@ -168,9 +189,10 @@ async function synthesizeAudio(deps: GenerationControllerDeps, passage: IndexedP
     await deps.timingMaps.put(timing);
     deps.player.getState().load(asset, timing);
     return true;
-  } catch {
-    // Degrade: keep the text readable; the player is simply unavailable.
-    deps.player.getState().setStatus('unavailable');
+  } catch (error) {
+    // Degrade: keep the text readable; the listen bar says WHY narration is unavailable
+    // (e.g. the picked voice's provider is not configured — no silent voice swap exists).
+    deps.player.getState().setStatus('unavailable', ttsUnavailableReasonJa(error));
     return false;
   }
 }
@@ -184,16 +206,67 @@ async function enrichPassageIllustration(
   if (!deps.illustratePassage || passage.source.sentences.length === 0) return false;
   try {
     const illustrationUrl = await deps.illustratePassage(buildPassageIllustrationRequest(passage, storyContext));
+    // Staged enrichments run concurrently (annotation + illustration): merge onto the FRESH stored
+    // record, never the captured one, so this write cannot clobber cues that landed meanwhile.
+    const fresh = (await deps.passages.get(record.passageId)) ?? record;
     const enrichedSource = {
-      ...passage.source,
+      ...fresh.passage,
       meta: {
-        ...passage.source.meta,
+        ...fresh.passage.meta,
         sceneIllustrationUrl: illustrationUrl,
       },
     };
-    await deps.passages.put({ ...record, passage: enrichedSource });
+    await deps.passages.put({ ...record, ...fresh, passage: enrichedSource });
     deps.session.getState().replacePassage(tokenizer.index(record.passageId, enrichedSource));
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Staged-mode background annotation: annotate the persisted body, merge the cues / syntax notes /
+ * status onto the FRESH stored record (an illustration may have landed first), persist, and refresh
+ * the open reader via replacePassage. Failure stamps `annotationStatus: 'failed'` — visible in the
+ * reader's banner with its 再生成 button — and never disturbs the already-readable text.
+ */
+async function enrichPassageAnnotation(
+  deps: GenerationControllerDeps,
+  record: { passageId: string; userId: UserId; createdAt: number; passage: IndexedPassage['source'] },
+  readabilityLevel: ReadabilityLevel,
+): Promise<boolean> {
+  if (!deps.annotatePassage) return false;
+  const source = record.passage;
+  let result: AnnotationResult | null = null;
+  try {
+    const hardSentenceIndexes = source.syntaxSpans
+      ? [...new Set(source.syntaxSpans.map((s) => s.sentenceIndex))].sort((a, b) => a - b)
+      : undefined;
+    result = await deps.annotatePassage({
+      sentences: source.sentences,
+      level: source.meta.level,
+      readabilityLevel,
+      hardSentenceIndexes,
+      targetSpans: source.targetSpans,
+      collocationSpans: source.collocationSpans,
+      expressionSpans: source.expressionSpans,
+    });
+  } catch {
+    result = null;
+  }
+  try {
+    const fresh = (await deps.passages.get(record.passageId)) ?? record;
+    const enrichedSource = {
+      ...fresh.passage,
+      ...(result ? { noticeCues: result.noticeCues } : {}),
+      ...(result?.sentenceNotes && result.sentenceNotes.length > 0 ? { syntaxNotes: result.sentenceNotes } : {}),
+      meta: { ...fresh.passage.meta, annotationStatus: result ? result.status : ('failed' as const) },
+    };
+    await deps.passages.put({ ...record, ...fresh, passage: enrichedSource });
+    if (deps.session.getState().passage?.passageId === record.passageId) {
+      deps.session.getState().replacePassage(tokenizer.index(record.passageId, enrichedSource));
+    }
+    return result !== null && result.status !== 'failed';
   } catch {
     return false;
   }

@@ -120,8 +120,10 @@ const READABILITY_OPTIONS: { value: ReadabilityLevel; label: string }[] = [
 
 const LISTENING_SCENES: { value: ListeningSceneKind; label: string }[] = [
   { value: 'radio_news', label: 'ラジオニュース' },
+  { value: 'tv_broadcast', label: 'テレビ放送' },
   { value: 'street_interview', label: '街頭インタビュー' },
   { value: 'podcast_dialogue', label: 'ポッドキャスト' },
+  { value: 'casual_conversation', label: '日常会話' },
   { value: 'public_announcement', label: '公共アナウンス' },
 ];
 

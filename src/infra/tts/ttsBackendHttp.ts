@@ -7,8 +7,8 @@
  * unavailable). Credentials stay server-side; the client never sees the TTS engine key.
  */
 
-import type { TtsBackend, TtsSynthesisOptions, TtsSynthesisResult, TtsWordMark } from './ttsSynthesisAdapter';
-import type { AudioAsset } from '../../types/domain';
+import type { TtsBackend, TtsSynthesisOptions, TtsSynthesisResult, TtsWordMark, VoiceCatalogEntry } from './ttsSynthesisAdapter';
+import type { AudioAsset, VoiceProvider } from '../../types/domain';
 
 export interface HttpTtsBackendOptions {
   baseUrl?: string;
@@ -22,6 +22,39 @@ export interface TtsSynthesizeBody {
   durationMs: number;
   engine: AudioAsset['engine'];
   marks: TtsWordMark[];
+}
+
+/** Machine-readable cause codes the TTS proxy attaches to error bodies (server ProviderErrorCode). */
+export type TtsErrorCode = 'not_configured' | 'voice_unavailable' | 'rate_limited' | 'upstream_auth' | 'upstream_error';
+
+/** A non-2xx TTS proxy reply, keeping the typed `code` so the UI can say WHY narration failed. */
+export class TtsHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: TtsErrorCode,
+  ) {
+    super(message);
+    this.name = 'TtsHttpError';
+  }
+}
+
+/**
+ * User-facing Japanese reason for a failed synthesize. The unavailability cases are explicit —
+ * the server no longer falls back to a different voice, so the UI must say what cannot be
+ * generated (and why) instead of playing something the user did not choose.
+ */
+export function ttsUnavailableReasonJa(error: unknown): string {
+  if (error instanceof TtsHttpError) {
+    if (error.code === 'voice_unavailable')
+      return 'この話者の音声はこの環境では生成できません（.env のTTSプロバイダ設定を確認してください）。別の話者に切り替えると再生できます。';
+    if (error.code === 'not_configured')
+      return '音声合成が未設定です。.env に AZURE_SPEECH_KEY / AWS_REGION / OPENAI_API_KEY のいずれかを設定してください。';
+    if (error.code === 'rate_limited') return '音声合成のレート制限に達しました。しばらく待って再試行してください。';
+    if (error.code === 'upstream_auth') return '音声合成プロバイダの認証に失敗しました（APIキーを確認してください）。';
+    return '音声の生成に失敗しました。';
+  }
+  return '音声の生成に失敗しました。';
 }
 
 export class HttpTtsBackend implements TtsBackend {
@@ -62,10 +95,25 @@ export class HttpTtsBackend implements TtsBackend {
     return body.url;
   }
 
+  /** Voice catalog with per-voice availability, decided by the server's .env. */
+  async voices(): Promise<{ voices: VoiceCatalogEntry[]; providers: Record<VoiceProvider, boolean> }> {
+    return this.request(`/api/tts:voices`, { method: 'GET' });
+  }
+
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
     if (!response.ok) {
-      throw new Error(`TTS request failed (${response.status})`);
+      // The proxy replies { error, code? }; keep the code so the UI can name the cause.
+      let message = `TTS request failed (${response.status})`;
+      let code: TtsErrorCode | undefined;
+      try {
+        const body = (await response.json()) as { error?: string; code?: TtsErrorCode };
+        if (body.error) message = body.error;
+        code = body.code;
+      } catch {
+        // non-JSON error body — keep the generic message
+      }
+      throw new TtsHttpError(response.status, message, code);
     }
     return (await response.json()) as T;
   }

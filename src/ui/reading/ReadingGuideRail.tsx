@@ -395,7 +395,7 @@ function StudyGuideCard({
                   >
                     <span style={absorbedExpressionStyle}>{expression}</span>
                     <span style={{ ...noticeChipStyle, ...chipNowrapStyle, color: style.color, background: style.bg }}>{style.label}</span>
-                    <span style={absorbedExplanationStyle}>{cue.explanationJa}</span>
+                    <span style={absorbedExplanationStyle}>{cue.meaningJa ?? cue.explanationJa}</span>
                   </button>
                 );
               })}
@@ -529,12 +529,18 @@ function NoticeGuideCard({
         <span style={{ ...noticeNumberStyle, background: style.numberColor }}>{item.guideIndex}</span>
         <span style={compactExpressionStyle}>{item.expression}</span>
         <span style={{ ...noticeChipStyle, ...chipNowrapStyle, color: style.color, background: style.bg }}>{style.label}</span>
-        {!expanded ? <span style={compactMeaningStyle}>{item.cue.explanationJa}</span> : null}
+        {/* まず本文中での意味 (meaningJa) — 使い方の洞察より先。旧データは explanationJa で代替。 */}
+        {!expanded ? <span style={compactMeaningStyle}>{item.cue.meaningJa ?? item.cue.explanationJa}</span> : null}
         <span aria-hidden="true" style={chevronStyle(expanded)}>›</span>
       </button>
 
       {expanded ? (
         <div style={expandedBodyStyle}>
+          {item.cue.meaningJa ? (
+            <div data-testid={`guide-notice-meaning-${item.cue.index}`} style={noticeMeaningStyle}>
+              {item.cue.meaningJa}
+            </div>
+          ) : null}
           <div style={noticeExplanationStyle}>{item.cue.explanationJa}</div>
           {/* Collapse depth is capped at one level: detailJa renders directly in the expanded body
               instead of behind a second「詳しく」toggle. */}
@@ -997,6 +1003,15 @@ const noticeChipStyle: CSSProperties = {
   padding: '2px 7px',
 };
 
+/** 本文中での意味 — the first line of an expanded notice, visually the card's answer. */
+const noticeMeaningStyle: CSSProperties = {
+  marginTop: 7,
+  fontFamily: fonts.bodyJp,
+  fontSize: 12.5,
+  fontWeight: 600,
+  lineHeight: 1.6,
+  color: colors.ink,
+};
 const noticeExplanationStyle: CSSProperties = {
   marginTop: 7,
   fontFamily: fonts.bodyJp,

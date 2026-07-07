@@ -50,6 +50,12 @@ export interface GenerateOptions {
   signal?: AbortSignal;
   /** Called as the run enters each sub-phase (body generation → repair → annotation). */
   onPhase?: (phase: GenerationRunPhase) => void;
+  /**
+   * Staged delivery: skip the (otherwise awaited) annotation pass and return the passage with
+   * `meta.annotationStatus = 'pending'` as soon as the body validates. The caller then runs the
+   * annotation in the background and merges the cues in when they land (準備できたものから表示).
+   */
+  deferAnnotation?: boolean;
 }
 
 export interface GenerationOrchestrator {
@@ -166,6 +172,55 @@ function dropFailingCues(passage: PassageOutput, report: ValidationReport): Pass
 function defaultBuildRepair(req: GenerationRequest, report: ValidationReport): GenerationRequest {
   return { ...req, repairFeedback: report.violations.map(describeViolation) };
 }
+
+/**
+ * Final-resort salvage (after dropFailingCues): remove the individual target / collocation spans the
+ * validator flagged (by array index). The body text still contains the words — only the study-word
+ * highlight / collocation tint for the mislocated occurrence is lost — so shipping beats failing the
+ * whole generation over one drifted marker. Returns null when nothing span-local was flagged.
+ */
+function dropFailingSpans(passage: PassageOutput, report: ValidationReport): PassageOutput | null {
+  const badTargets = new Set(
+    report.violations.map((v) => v.targetSpanIndex).filter((i): i is number => i !== undefined),
+  );
+  const badCollocations = new Set(
+    report.violations.map((v) => v.collocationSpanIndex).filter((i): i is number => i !== undefined),
+  );
+  if (badTargets.size === 0 && badCollocations.size === 0) return null;
+  return {
+    ...passage,
+    targetSpans: passage.targetSpans.filter((_, i) => !badTargets.has(i)),
+    collocationSpans: passage.collocationSpans.filter((_, i) => !badCollocations.has(i)),
+  };
+}
+
+/** Gateway failures worth an automatic re-request: transient upstream/parse trouble, never a user
+ * cancel, timeout (its 2-minute budget is already spent), or a config error a retry cannot fix. */
+const TRANSIENT_GATEWAY_KINDS: ReadonlySet<string> = new Set(['unavailable', 'network', 'rate_limited']);
+
+function transientKindOf(error: unknown): string | undefined {
+  const kind = (error as { kind?: unknown } | null)?.kind;
+  return typeof kind === 'string' && TRANSIENT_GATEWAY_KINDS.has(kind) ? kind : undefined;
+}
+
+/** Abort-aware backoff sleep (used between transient-error retries). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Extra attempts for transient gateway failures (each retry is a fresh request + fresh timeout). */
+const TRANSIENT_RETRIES = 2;
 
 /** Quality-level violations that ship as `meta.qualityWarnings` rather than hard-failing (B-1 / R4). */
 const QUALITY_VIOLATION_KINDS: ReadonlySet<SpanViolationKind> = new Set<SpanViolationKind>([
@@ -335,6 +390,21 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
   ): Promise<Result<IndexedPassage, GenerationError>> {
     const { signal, onPhase } = options;
     const ctx = contextFor(req, deps.cefrOf);
+
+    // One generation attempt, retrying transient gateway failures (upstream 5xx / non-JSON reply /
+    // network blip / 429) instead of failing the whole run on the first hiccup. Each retry issues a
+    // fresh HTTP request with its own timeout budget; rate limits back off briefly first.
+    const callGenerate = async (attemptReq: GenerationRequest) => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await deps.gateway.generatePassage(attemptReq, signal);
+        } catch (error) {
+          const kind = transientKindOf(error);
+          if (!kind || attempt >= TRANSIENT_RETRIES || signal?.aborted) throw error;
+          if (kind === 'rate_limited') await sleep(1500 * (attempt + 1), signal);
+        }
+      }
+    };
     // Set when an adaptive retry retreats the word target after a max_tokens truncation, so the
     // accepted passage records the target actually used (`meta.effectiveWordTarget`).
     let effectiveWordTarget: number | undefined;
@@ -380,6 +450,12 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
       // Undefined ⇒ no annotation pass ran (gateway without the enrichment) → leave meta untouched.
       // Otherwise record complete/partial/failed so the reader can surface a banner + regenerate.
       let annotationStatus: AnnotationStatus | undefined;
+      // Staged delivery: hand the body back NOW; the caller annotates in the background and merges
+      // the cues via replacePassage. 'pending' keeps the deferral visible (banner + reload backfill).
+      if (options.deferAnnotation && deps.gateway.annotatePassage) {
+        const meta = { ...stamped.meta, annotationStatus: 'pending' as AnnotationStatus };
+        return ok(tokenizer.index(passageId, { ...stamped, meta }));
+      }
       try {
         onPhase?.('annotate');
         // Pass the body-mark spans (study words + collocations) as REQUIRED COVERAGE so the notice
@@ -416,10 +492,11 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
     };
 
     // Last-resort acceptance for a candidate whose validation `report` failed: drop the cue-local
-    // faults, then ship a residual whose only remaining faults are length + quality (recording the
-    // length shortfall + quality warnings on meta), else surface `validation_exhausted`. Shared by the
-    // single-shot loop (after its repair budget is spent) and the chunked path (which has no repair
-    // loop — it validates the concatenated body once).
+    // faults, then a residual whose only remaining faults are length + quality ships (recording the
+    // length shortfall + quality warnings on meta). As the FINAL resort, individually-flagged
+    // target / collocation markers are dropped too (the body keeps the words; only the mislocated
+    // highlights are lost) before surfacing `validation_exhausted`. Shared by the single-shot loop
+    // (after its repair budget is spent) and the chunked path (which validates the merged body once).
     const shipOrFail = async (
       candidate: PassageOutput,
       report: ValidationReport,
@@ -434,6 +511,17 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
       if (isShippableResidual(residualReport)) {
         return finalize(residual, residualReport, qualityWarningsFor(residualReport));
       }
+      // Final resort: shed the specific markers the validator flagged and re-judge what remains.
+      const shed = dropFailingSpans(residual, residualReport);
+      if (shed) {
+        const shedReport = validator.validate(shed, ctx);
+        const droppedNote =
+          'Some study-word / collocation highlights were dropped because their markers could not be placed reliably.';
+        if (shedReport.ok) return finalize(shed, shedReport, [droppedNote]);
+        if (isShippableResidual(shedReport)) {
+          return finalize(shed, shedReport, [droppedNote, ...qualityWarningsFor(shedReport)]);
+        }
+      }
       return err({ kind: 'validation_exhausted', lastReport: report });
     };
 
@@ -445,7 +533,7 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
       let regenLeft = maxRegenerations;
       for (;;) {
         onPhase?.('passage');
-        const resp = await deps.gateway.generatePassage(attemptReq, signal);
+        const resp = await callGenerate(attemptReq);
         if (resp.stopReason === 'refusal') {
           if (regenLeft <= 0) return err({ kind: 'refusal' });
           regenLeft -= 1;
@@ -503,7 +591,7 @@ export function createGenerationOrchestrator(deps: OrchestratorDeps): Generation
     // Each branch either returns or decrements a budget, so the loop terminates.
     for (;;) {
       onPhase?.(repairLeft < maxRepairs ? 'repair' : 'passage');
-      const resp = await deps.gateway.generatePassage(attemptReq, signal);
+      const resp = await callGenerate(attemptReq);
 
       if (resp.stopReason === 'refusal') {
         if (regenLeft <= 0) return err({ kind: 'refusal' });

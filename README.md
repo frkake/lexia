@@ -93,6 +93,12 @@ pnpm lint             # eslint
   - Anthropic: `ANTHROPIC_API_KEY`（任意で `ANTHROPIC_MODEL`、既定 `claude-opus-4-8`）
 - 生成APIが未設定・到達不可・エラーのときは**モックにフォールバックせずエラーを返す**。
   クライアントは「生成サービスに接続できませんでした」等のエラーを表示する。
+- 生成の届け方は設定（`/settings` →「文章の生成方法」）で選べる。既定は**段階的生成**：本文が
+  検証を通った時点で読解画面を開き、学習ガイドの解説（注釈パス）・イラスト・音声は準備でき次第
+  あとから流し込む（`annotationStatus: 'pending'` → 完了時にマージ）。**一括生成**を選ぶと従来どおり
+  注釈まで揃ってから開く。
+- 一時的な失敗（アップストリーム 5xx / 非JSON応答 / ネットワーク断 / 429）は自動リトライされる：
+  本文生成はクライアント側（試行ごとに新しいタイムアウト予算）、注釈チャンクと単語データはサーバ側。
 - 動作確認（`pnpm dev` 起動後、別ターミナルで最小リクエストを送る）:
 
 ```bash
@@ -103,14 +109,22 @@ curl -X POST http://localhost:5173/api/passages:generate \
 
 ## 音声API（TTS）
 
-読解画面の音声は `/api/tts:*` 経由で合成する。Azure Speech を優先し、未設定時は Amazon Polly を互換フォールバックとして使える。
-リスニング用シーンでは、文ごとに話者・アクセントを分けて合成し、返却された speech marks をトークン単位のハイライトに変換する。
+読解画面の音声は `/api/tts:*` 経由で合成する。**プロバイダをまたぐフォールバックはしない**：
+各話者（voice）はそれ自身のプロバイダでのみ合成され、そのプロバイダが `.env` で未設定なら
+`503 { code: "voice_unavailable" }` を返す。どの話者が生成可能かは `GET /api/tts:voices` が
+`available`（環境変数から判定）付きで返し、UIは生成不可の話者を「（生成不可）」と明示する。
+OpenAI TTS の話者は `OPENAI_API_KEY`（テキスト生成と共有）だけで朗読を有効化できる。
+リスニング用シーンでは、文ごとに話者・アクセントを分けて合成し（話者の割当は設定済みプロバイダの中から行う）、
+返却された speech marks をトークン単位のハイライトに変換する。
+Azure は WordBoundary による正確な単語タイミングを返すのに対し、OpenAI は speech marks を返さないため、
+単語ハイライトはクライアント側で語長から推定した近似タイミングになる。
 
-- 音声一覧: `GET /api/tts:voices`
+- 音声一覧: `GET /api/tts:voices`（各 voice に `available: boolean`、`providers` に判定結果）
 - 文章音声: `POST /api/tts:synthesize`（`text`, `voiceId`, 任意の `segments`）
 - 単語音声: `GET /api/tts/word?wordId=deal&voiceId=azure-us-jenny`
 - Azure Speech: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`
 - Amazon Polly: `AWS_REGION`（任意で `POLLY_ENGINE`）
+- OpenAI TTS: `OPENAI_API_KEY`（任意で `OPENAI_TTS_MODEL`、既定は `gpt-4o-mini-tts`）
 
 ### ユニット / 統合テスト（Vitest）
 

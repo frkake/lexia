@@ -45,6 +45,12 @@ export function InlineNoticePopover({ cue, displayIndex, onClose }: InlineNotice
           ×
         </button>
       </span>
+      {/* 本文中での意味を最初に (meaningJa); 使い方の洞察 (explanationJa) はその後。 */}
+      {cue.meaningJa ? (
+        <span data-testid={`inline-notice-meaning-${cue.index}`} style={meaningStyle}>
+          {cue.meaningJa}
+        </span>
+      ) : null}
       <span style={explanationStyle}>{cue.explanationJa}</span>
     </span>
   );
@@ -102,6 +108,18 @@ const closeStyle: CSSProperties = {
   fontSize: 14,
   lineHeight: 1,
   cursor: 'pointer',
+};
+
+/** 本文中での意味 — leads the popover body, above the usage insight. */
+const meaningStyle: CSSProperties = {
+  display: 'block',
+  fontFamily: fonts.bodyJp,
+  fontSize: 12.5,
+  fontWeight: 600,
+  lineHeight: 1.6,
+  color: colors.ink,
+  letterSpacing: 'normal',
+  marginBottom: 4,
 };
 
 const explanationStyle: CSSProperties = {

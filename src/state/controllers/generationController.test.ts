@@ -165,6 +165,104 @@ describe('runGenerationPipeline (Flow 1 staged readiness)', () => {
     expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.sceneIllustrationUrl).toBe('data:image/png;base64,SCENE');
   });
 
+  it('staged mode: opens the reader on body-ready, then merges background annotation into store + session', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    // A deferAnnotation-respecting orchestrator: returns the body with annotationStatus 'pending'.
+    const orchestrator: GenerationOrchestrator = {
+      generate: async (_req, options) => {
+        expect(options?.deferAnnotation).toBe(true);
+        const src = passageOutput();
+        return ok(tokenizer.index(PASSAGE_ID, { ...src, meta: { ...src.meta, annotationStatus: 'pending' } }));
+      },
+    };
+    const { deps, repos, session, userId } = await env(tts, orchestrator);
+    const gate = deferred<void>();
+    const cue = {
+      index: 1,
+      span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 2 },
+      category: 'usage' as const,
+      anchorText: 'deal',
+      meaningJa: '取引',
+      explanationJa: 'ビジネスの合意を指す。',
+    };
+
+    const outcome = await runGenerationPipeline(
+      {
+        ...deps,
+        stagedGeneration: true,
+        annotatePassage: async () => {
+          await gate.promise;
+          return { noticeCues: [cue], status: 'complete' as const };
+        },
+      },
+      SETUP,
+      userId,
+    );
+
+    // The reader is open while the annotation is still in flight (準備できたものから表示).
+    expect(outcome.ok).toBe(true);
+    expect(session.getState().passage?.source.meta.annotationStatus).toBe('pending');
+    expect(session.getState().passage?.source.noticeCues).toEqual([]);
+
+    gate.resolve();
+    expect(await outcome.annotation).toBe(true);
+
+    // Cues + status merged into both the persisted record and the live session passage.
+    expect(session.getState().passage?.source.meta.annotationStatus).toBe('complete');
+    expect(session.getState().passage?.source.noticeCues).toHaveLength(1);
+    const record = await repos.passages.get(PASSAGE_ID);
+    expect(record?.passage.meta.annotationStatus).toBe('complete');
+    expect(record?.passage.noticeCues[0]).toMatchObject({ anchorText: 'deal', meaningJa: '取引' });
+  });
+
+  it('staged mode: a failed background annotation stamps failed (banner + 再生成) and keeps the text', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    const orchestrator: GenerationOrchestrator = {
+      generate: async () => {
+        const src = passageOutput();
+        return ok(tokenizer.index(PASSAGE_ID, { ...src, meta: { ...src.meta, annotationStatus: 'pending' } }));
+      },
+    };
+    const { deps, repos, session, userId } = await env(tts, orchestrator);
+
+    const outcome = await runGenerationPipeline(
+      {
+        ...deps,
+        stagedGeneration: true,
+        annotatePassage: async () => {
+          throw new Error('annotation down');
+        },
+      },
+      SETUP,
+      userId,
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(await outcome.annotation).toBe(false);
+    expect(session.getState().passage?.source.meta.annotationStatus).toBe('failed');
+    expect((await repos.passages.get(PASSAGE_ID))?.passage.meta.annotationStatus).toBe('failed');
+    // The body itself is untouched — reading continues.
+    expect(session.getState().passage?.renderText).toContain('deal');
+  });
+
+  it('batch mode (stagedGeneration off): no deferAnnotation and no background annotation promise', async () => {
+    const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
+    const orchestrator: GenerationOrchestrator = {
+      generate: async (_req, options) => {
+        expect(options?.deferAnnotation ?? false).toBe(false);
+        return ok(indexedPassage());
+      },
+    };
+    const { deps, userId } = await env(tts, orchestrator);
+    const outcome = await runGenerationPipeline(
+      { ...deps, stagedGeneration: false, annotatePassage: async () => ({ noticeCues: [], status: 'complete' as const }) },
+      SETUP,
+      userId,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(outcome.annotation).toBeUndefined();
+  });
+
   it('degrades when passage illustration generation fails', async () => {
     const tts: Tts = { synthesize: async () => ({ asset: asset(), timing: timing() }), wordClipUrl: async () => '' };
     const { deps, repos, session, userId } = await env(tts);

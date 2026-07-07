@@ -181,13 +181,19 @@ describe('GenerationOrchestrator', () => {
     expect(calls()).toBe(2); // attempted once, repaired once, THEN dropped (not dropped immediately)
   });
 
-  it('does NOT salvage when a non-cue violation remains after repairs', async () => {
-    // A target span out of range is not droppable, so the orchestrator still fails as before.
+  it('drops a mislocated target-span marker as the FINAL resort and ships with a warning', async () => {
+    // A target span out of range survives the repair budget: rather than failing the whole
+    // generation, the orchestrator sheds just that marker (the body keeps the word — only the
+    // highlight is lost) and records the loss on meta.qualityWarnings.
     const { gateway } = queueGateway([invalidResponse]);
     const orch = createGenerationOrchestrator({ gateway, passageId: 'p1', maxRepairs: 1 });
     const result = await orch.generate(req);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.kind).toBe('validation_exhausted');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.source.targetSpans).toHaveLength(0); // the broken marker was shed
+      expect(result.value.renderText).toContain('negotiate'); // the body text is intact
+      expect(result.value.source.meta.qualityWarnings?.join(' ')).toMatch(/dropped/i);
+    }
   });
 
   // Requirement 7.4 degrade: a passage that is ONLY out of the length band (body text valid, just
@@ -219,8 +225,15 @@ describe('GenerationOrchestrator', () => {
   });
 
   it('returns validation_exhausted with the last report after exceeding repair attempts', async () => {
-    const { gateway } = queueGateway([invalidResponse]); // always invalid
-    const orch = createGenerationOrchestrator({ gateway, passageId: 'p1', maxRepairs: 1 });
+    // A passage-wide violation (every token judged out of the CEFR band) has no droppable marker,
+    // so once the repair budget is spent the failure surfaces as validation_exhausted.
+    const { gateway } = queueGateway([goodResponse]); // body fine — the CEFR profile is what fails
+    const orch = createGenerationOrchestrator({
+      gateway,
+      passageId: 'p1',
+      maxRepairs: 1,
+      cefrOf: () => 'C2' as Cefr,
+    });
     const result = await orch.generate(req);
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -238,6 +251,59 @@ describe('GenerationOrchestrator', () => {
     const result = await orch.generate(req);
     expect(result.ok).toBe(true);
     expect(calls()).toBe(2);
+  });
+
+  it('retries a transient gateway failure (upstream 5xx / network) before failing the run', async () => {
+    let calls = 0;
+    const gateway: ContentGateway = {
+      generatePassage: async () => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('server down'), { kind: 'unavailable' });
+        return goodResponse;
+      },
+      getWordData: async () => {
+        throw new Error('unused');
+      },
+    };
+    const orch = createGenerationOrchestrator({ gateway, passageId: 'p1' });
+    const result = await orch.generate(req);
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it('does NOT retry a user cancel / non-transient gateway failure', async () => {
+    let calls = 0;
+    const gateway: ContentGateway = {
+      generatePassage: async () => {
+        calls += 1;
+        throw Object.assign(new Error('aborted'), { kind: 'aborted' });
+      },
+      getWordData: async () => {
+        throw new Error('unused');
+      },
+    };
+    const orch = createGenerationOrchestrator({ gateway, passageId: 'p1' });
+    await expect(orch.generate(req)).rejects.toThrow('aborted');
+    expect(calls).toBe(1);
+  });
+
+  it('defers the annotation pass and stamps annotationStatus pending when deferAnnotation is set (staged)', async () => {
+    let annotateCalls = 0;
+    const gateway: ContentGateway = {
+      generatePassage: async () => goodResponse,
+      getWordData: async () => {
+        throw new Error('unused');
+      },
+      annotatePassage: async (_r: PassageAnnotationRequest) => {
+        annotateCalls += 1;
+        return { noticeCues: [], status: 'complete' as const };
+      },
+    };
+    const orch = createGenerationOrchestrator({ gateway, passageId: 'p1' });
+    const result = await orch.generate(req, { deferAnnotation: true });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.source.meta.annotationStatus).toBe('pending');
+    expect(annotateCalls).toBe(0); // the caller runs annotation in the background instead
   });
 
   it('returns a refusal error once regeneration attempts are exhausted', async () => {

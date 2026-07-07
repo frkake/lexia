@@ -81,4 +81,23 @@ describe('settingsStore', () => {
     expect(s.theme).toBe('dark');
     expect(s.locale).toBe('en');
   });
+
+  it('defaults generationMode to staged, persists changes, and hydrates a stored batch preference', async () => {
+    const { repo, userId } = await freshRepo();
+    const store = createSettingsStore({ storage: memoryStorage() });
+    store.getState().configure(repo, userId);
+    await store.getState().hydrate();
+    expect(store.getState().generationMode).toBe('staged');
+
+    store.getState().setGenerationMode('batch');
+    expect(store.getState().generationMode).toBe('batch');
+    await store.getState().persist();
+    expect((await repo.get(userId))?.generationMode).toBe('batch');
+
+    // A fresh session hydrates the stored preference.
+    const revisit = createSettingsStore({ storage: memoryStorage() });
+    revisit.getState().configure(repo, userId);
+    await revisit.getState().hydrate();
+    expect(revisit.getState().generationMode).toBe('batch');
+  });
 });

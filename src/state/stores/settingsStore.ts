@@ -47,6 +47,8 @@ export interface SettingsState {
   lastSetup: SetupConfig;
   /** Per-day review-card ceiling (C-5c); default `DAILY_REVIEW_LIMIT`, settable 20–200. */
   dailyReviewLimit: number;
+  /** 段階的生成 (staged, default) vs 一括生成 (batch) — see Settings['generationMode']. */
+  generationMode: NonNullable<Settings['generationMode']>;
 
   /** Bind the repository + namespace (after the DB opens). */
   configure(repo: SettingsRepository, userId: UserId): void;
@@ -64,6 +66,8 @@ export interface SettingsState {
   setLocale(locale: string): void;
   /** Set the per-day review ceiling; the value is clamped to [20, 200]. */
   setDailyReviewLimit(limit: number): void;
+  /** Choose staged (準備できたものから表示) or batch (一括生成) delivery for new generations. */
+  setGenerationMode(mode: NonNullable<Settings['generationMode']>): void;
 }
 
 export interface SettingsStoreDeps {
@@ -99,6 +103,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
         locale: s.locale,
         lastSetup: s.lastSetup,
         dailyReviewLimit: s.dailyReviewLimit,
+        generationMode: s.generationMode,
       };
     };
 
@@ -123,6 +128,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
       locale: 'ja',
       lastSetup: DEFAULT_SETUP,
       dailyReviewLimit: DAILY_REVIEW_LIMIT,
+      generationMode: 'staged',
 
       configure(nextRepo, nextUserId) {
         repo = nextRepo;
@@ -145,6 +151,7 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
                 rate: stored.rate,
                 lastSetup: stored.lastSetup,
                 ...(stored.dailyReviewLimit !== undefined ? { dailyReviewLimit: stored.dailyReviewLimit } : {}),
+                ...(stored.generationMode !== undefined ? { generationMode: stored.generationMode } : {}),
               }
             : {}),
         });
@@ -179,6 +186,9 @@ export function createSettingsStore(deps: SettingsStoreDeps = {}) {
       setDailyReviewLimit(limit) {
         const clamped = Math.round(Math.min(DAILY_REVIEW_LIMIT_MAX, Math.max(DAILY_REVIEW_LIMIT_MIN, limit)));
         update({ dailyReviewLimit: clamped });
+      },
+      setGenerationMode(mode) {
+        update({ generationMode: mode });
       },
     };
   });

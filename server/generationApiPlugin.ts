@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { type Plugin, loadEnv } from 'vite';
 import { createApiHandler } from './llm/handler';
 import { type Env, describeImageConfig } from './llm/providers';
+import { ttsProviderAvailability } from './tts/availability';
 
 export function generationApiPlugin(): Plugin {
   let env: Env = {};
@@ -86,6 +87,21 @@ function logKeySource(env: Env): void {
   const suffix = flags.length ? ` [${flags.join('; ')}]` : '';
   console.log(`[generation-api] provider=${provider}, ${keyName}=${detail}${suffix} (source: .env files)`);
   logImageConfig(env);
+  logTtsConfig(env);
+}
+
+/**
+ * Third masked line for the TTS axis: which voice providers this .env can drive. Synthesis no
+ * longer falls back across providers, so an all-unavailable (or unexpectedly-narrow) line here is
+ * the first place to look when 朗読/voices are reported unavailable in the UI.
+ */
+function logTtsConfig(env: Env): void {
+  const avail = ttsProviderAvailability(env);
+  const parts = (Object.keys(avail) as (keyof typeof avail)[]).map((p) => `${p}=${avail[p] ? 'available' : 'off'}`);
+  const none = Object.values(avail).every((v) => !v);
+  console.log(
+    `[generation-api] tts: ${parts.join(', ')}${none ? ' [no TTS provider configured — narration will report unavailable]' : ''} (source: .env files)`,
+  );
 }
 
 /**

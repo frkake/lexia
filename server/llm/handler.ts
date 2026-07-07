@@ -78,7 +78,7 @@ async function route(req: IncomingMessage, res: ServerResponse, path: string, en
 
   if (path === TTS_VOICES_PATH) {
     if (req.method !== 'GET') return sendStatus(res, 405, 'method not allowed');
-    return sendJson(res, 200, voiceCatalogResponse());
+    return sendJson(res, 200, voiceCatalogResponse(env));
   }
 
   if (path === TTS_SYNTHESIZE_PATH) {

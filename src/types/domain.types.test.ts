@@ -158,7 +158,7 @@ describe('domain types', () => {
 
   it('VoiceProfile captures accent, provider voice id and role', () => {
     expectTypeOf<VoiceProfile['accent']>().toEqualTypeOf<'us' | 'gb' | 'au' | 'in'>();
-    expectTypeOf<VoiceProfile['provider']>().toEqualTypeOf<'azure' | 'polly'>();
+    expectTypeOf<VoiceProfile['provider']>().toEqualTypeOf<'azure' | 'polly' | 'openai'>();
   });
 
   it('Settings.translationMode is the three reading modes', () => {
@@ -211,7 +211,13 @@ describe('domain types', () => {
     expectTypeOf<PassageMeta['sceneIllustrationUrl']>().toEqualTypeOf<string | undefined>();
     expectTypeOf<PassageMeta['listeningScene']>().toEqualTypeOf<
       | {
-          sceneKind: 'radio_news' | 'street_interview' | 'podcast_dialogue' | 'public_announcement';
+          sceneKind:
+            | 'radio_news'
+            | 'street_interview'
+            | 'podcast_dialogue'
+            | 'public_announcement'
+            | 'casual_conversation'
+            | 'tv_broadcast';
           noiseLevel: 'none' | 'low' | 'medium';
           accent: 'us' | 'gb' | 'au' | 'in';
           speakers: {

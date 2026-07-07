@@ -4,14 +4,22 @@
  */
 
 import type { PollyClient as PollyClientType, VoiceId } from '@aws-sdk/client-polly';
-import type { AmbientNoiseLevel, AudioAsset, ListeningSceneKind } from '../../src/types/domain';
+import type {
+  AmbientNoiseLevel,
+  AudioAsset,
+  EnglishAccent,
+  ListeningSceneKind,
+  VoiceProfile,
+  VoiceProvider,
+} from '../../src/types/domain';
 import {
   compatibleVoiceForProvider,
   resolveVoiceProfile,
   VOICE_PROFILES,
 } from '../../src/domain/audio/voiceCatalog';
 import type { TtsWordMark } from '../../src/infra/tts/ttsSynthesisAdapter';
-import { ProviderError, type Env } from '../llm/providers';
+import { ProviderError, type Env, type ProviderErrorCode } from '../llm/providers';
+import { availableTtsProviders, TTS_PROVIDER_REQUIREMENT, ttsProviderAvailability } from './availability';
 
 export interface TtsSegmentRequest {
   text: string;
@@ -46,8 +54,42 @@ interface SegmentAudio {
 
 const encoder = new TextEncoder();
 
-export function voiceCatalogResponse() {
-  return { voices: VOICE_PROFILES };
+const OPENAI_TTS_URL = 'https://api.openai.com/v1/audio/speech';
+
+/**
+ * Voice catalog + per-voice availability, decided by the server .env (the client cannot know
+ * which providers are configured). `available: false` voices are selectable nowhere and the
+ * UI says so instead of silently synthesizing with a different voice.
+ */
+export function voiceCatalogResponse(env: Env) {
+  const avail = ttsProviderAvailability(env);
+  return {
+    voices: VOICE_PROFILES.map((v) => ({ ...v, available: avail[v.provider] })),
+    providers: avail,
+  };
+}
+
+/**
+ * Strict availability gate: the requested voice's own provider must be configured. There is
+ * deliberately NO cross-provider fallback — synthesizing with a different voice than the one
+ * the user picked hides the misconfiguration; a typed 503 surfaces it instead.
+ */
+function requireVoiceAvailable(env: Env, voiceId: string | undefined): ReturnType<typeof resolveVoiceProfile> {
+  const profile = resolveVoiceProfile(voiceId);
+  const avail = ttsProviderAvailability(env);
+  if (avail[profile.provider]) return profile;
+  if (availableTtsProviders(env).length === 0) {
+    throw new ProviderError(
+      503,
+      'TTS API not configured: set AZURE_SPEECH_KEY/AZURE_SPEECH_REGION, AWS Polly credentials, or OPENAI_API_KEY.',
+      'not_configured',
+    );
+  }
+  throw new ProviderError(
+    503,
+    `Voice "${profile.labelJa}" (${profile.id}) needs the ${profile.provider} provider, which is not configured: set ${TTS_PROVIDER_REQUIREMENT[profile.provider]} in .env.`,
+    'voice_unavailable',
+  );
 }
 
 export function utf16RangeToUtf8ByteRange(text: string, charStart: number, charLength: number, baseByteStart = 0): { start: number; end: number } {
@@ -70,15 +112,23 @@ export function parsePollyMarks(text: string, baseByteStart: number, timeOffsetM
     .map((m) => ({ start: baseByteStart + m.start!, end: baseByteStart + m.end!, timeMs: timeOffsetMs + m.time! }));
 }
 
-export async function synthesizeSpeech(env: Env, req: TtsSynthesizeRequest): Promise<TtsSynthesizeResponse> {
+export async function synthesizeSpeech(
+  env: Env,
+  req: TtsSynthesizeRequest,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<TtsSynthesizeResponse> {
   const segments = normalizedSegments(req);
-  const firstProfile = resolveVoiceProfile(segments[0]?.voiceId ?? req.voiceId);
+  // The request's primary voice decides the engine, strictly: unavailable ⇒ typed 503, never a
+  // silent swap. Stray segments from ANOTHER provider (legacy persisted scenes) are unified onto
+  // the primary provider for format/mark consistency — new scenes are assigned availability-aware
+  // voices at generation time, so this remap is a legacy-only path.
+  const firstProfile = requireVoiceAvailable(env, segments[0]?.voiceId ?? req.voiceId);
 
-  if (firstProfile.provider === 'azure' && hasAzure(env)) {
+  if (firstProfile.provider === 'azure') {
     const rendered = await Promise.all(
       segments.map((segment) => synthesizeAzureSegment(env, providerSegment(segment, 'azure'))),
     );
-    const joined = concatAzureWav(rendered);
+    const joined = concatWav(rendered);
     const audio = applySceneEffectToWav(joined.audio, req.scene);
     return {
       audioUrl: dataUrl(audio, 'audio/wav'),
@@ -89,7 +139,7 @@ export async function synthesizeSpeech(env: Env, req: TtsSynthesizeRequest): Pro
     };
   }
 
-  if (firstProfile.provider === 'polly' && hasPolly(env)) {
+  if (firstProfile.provider === 'polly') {
     const rendered = await synthesizePollyWhole(env, req.text, compatibleVoiceForProvider(req.voiceId, 'polly').id);
     return {
       audioUrl: dataUrl(rendered.audio, 'audio/mpeg'),
@@ -100,62 +150,31 @@ export async function synthesizeSpeech(env: Env, req: TtsSynthesizeRequest): Pro
     };
   }
 
-  if (hasAzure(env)) {
-    const rendered = await Promise.all(
-      segments.map((segment) => synthesizeAzureSegment(env, providerSegment(segment, 'azure'))),
-    );
-    const joined = concatAzureWav(rendered);
-    const audio = applySceneEffectToWav(joined.audio, req.scene);
-    return {
-      audioUrl: dataUrl(audio, 'audio/wav'),
-      format: 'audio/wav',
-      durationMs: joined.durationMs,
-      engine: 'azure',
-      marks: joined.marks,
-    };
-  }
-
-  if (hasPolly(env)) {
-    const rendered = await synthesizePollyWhole(env, req.text, compatibleVoiceForProvider(req.voiceId, 'polly').id);
-    return {
-      audioUrl: dataUrl(rendered.audio, 'audio/mpeg'),
-      format: 'audio/mpeg',
-      durationMs: rendered.durationMs,
-      engine: 'polly',
-      marks: rendered.marks,
-    };
-  }
-
-  throw new ProviderError(503, 'TTS API not configured: set AZURE_SPEECH_KEY/AZURE_SPEECH_REGION or AWS Polly credentials.');
+  return synthesizeOpenAiSpeech(env, req, segments, fetchImpl);
 }
 
-export async function synthesizeWordClip(env: Env, wordId: string, voiceId: string): Promise<{ url: string }> {
-  const profile = resolveVoiceProfile(voiceId);
-  if (profile.provider === 'azure' && hasAzure(env)) {
-    const rendered = await synthesizeAzureSegment(env, {
-      text: wordId,
-      byteStart: 0,
-      voiceId: compatibleVoiceForProvider(voiceId, 'azure').id,
-    });
+export async function synthesizeWordClip(
+  env: Env,
+  wordId: string,
+  voiceId: string,
+  fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+): Promise<{ url: string }> {
+  const profile = requireVoiceAvailable(env, voiceId);
+  if (profile.provider === 'azure') {
+    const rendered = await synthesizeAzureSegment(env, { text: wordId, byteStart: 0, voiceId: profile.id });
     return { url: dataUrl(rendered.audio, 'audio/wav') };
   }
-  if (profile.provider === 'polly' && hasPolly(env)) {
-    const rendered = await synthesizePollyAudio(env, wordId, compatibleVoiceForProvider(voiceId, 'polly').id);
+  if (profile.provider === 'polly') {
+    const rendered = await synthesizePollyAudio(env, wordId, profile.id);
     return { url: dataUrl(rendered, 'audio/mpeg') };
   }
-  if (hasAzure(env)) {
-    const rendered = await synthesizeAzureSegment(env, {
-      text: wordId,
-      byteStart: 0,
-      voiceId: compatibleVoiceForProvider(voiceId, 'azure').id,
-    });
-    return { url: dataUrl(rendered.audio, 'audio/wav') };
-  }
-  if (hasPolly(env)) {
-    const rendered = await synthesizePollyAudio(env, wordId, compatibleVoiceForProvider(voiceId, 'polly').id);
-    return { url: dataUrl(rendered, 'audio/mpeg') };
-  }
-  throw new ProviderError(503, 'TTS API not configured.');
+  const rendered = await synthesizeOpenAiSegment(
+    env,
+    { text: wordId, byteStart: 0, voiceId: profile.id },
+    undefined,
+    fetchImpl,
+  );
+  return { url: dataUrl(rendered.audio, 'audio/wav') };
 }
 
 function normalizedSegments(req: TtsSynthesizeRequest): TtsSegmentRequest[] {
@@ -163,16 +182,8 @@ function normalizedSegments(req: TtsSynthesizeRequest): TtsSegmentRequest[] {
   return valid.length > 0 ? valid : [{ text: req.text, byteStart: 0, voiceId: req.voiceId }];
 }
 
-function providerSegment(segment: TtsSegmentRequest, provider: 'azure' | 'polly'): TtsSegmentRequest {
+function providerSegment(segment: TtsSegmentRequest, provider: VoiceProvider): TtsSegmentRequest {
   return { ...segment, voiceId: compatibleVoiceForProvider(segment.voiceId, provider).id };
-}
-
-function hasAzure(env: Env): boolean {
-  return Boolean((env.AZURE_SPEECH_KEY || env.SPEECH_KEY)?.trim() && (env.AZURE_SPEECH_REGION || env.SPEECH_REGION)?.trim());
-}
-
-function hasPolly(env: Env): boolean {
-  return Boolean(env.AWS_REGION?.trim() || env.AWS_DEFAULT_REGION?.trim());
 }
 
 async function synthesizeAzureSegment(env: Env, segment: TtsSegmentRequest): Promise<SegmentAudio> {
@@ -209,7 +220,113 @@ async function synthesizeAzureSegment(env: Env, segment: TtsSegmentRequest): Pro
   }
 }
 
-function concatAzureWav(segments: SegmentAudio[]): SegmentAudio {
+async function synthesizeOpenAiSpeech(
+  env: Env,
+  req: TtsSynthesizeRequest,
+  segments: TtsSegmentRequest[],
+  fetchImpl: typeof fetch,
+): Promise<TtsSynthesizeResponse> {
+  const rendered = await Promise.all(
+    segments.map((segment) => synthesizeOpenAiSegment(env, providerSegment(segment, 'openai'), req.scene?.sceneKind, fetchImpl)),
+  );
+  const joined = concatWav(rendered);
+  const audio = applySceneEffectToWav(joined.audio, req.scene);
+  return {
+    audioUrl: dataUrl(audio, 'audio/wav'),
+    format: 'audio/wav',
+    durationMs: joined.durationMs,
+    engine: 'openai',
+    // OpenAI returns no word timestamps; the client estimates highlight timing.
+    marks: [],
+  };
+}
+
+async function synthesizeOpenAiSegment(
+  env: Env,
+  segment: TtsSegmentRequest,
+  sceneKind: ListeningSceneKind | undefined,
+  fetchImpl: typeof fetch,
+): Promise<SegmentAudio> {
+  const key = (env.OPENAI_API_KEY || '').trim();
+  if (!key || key.includes('...')) {
+    throw new ProviderError(503, 'TTS API not configured: OPENAI_API_KEY is missing. Set it in .env.', 'not_configured');
+  }
+  const profile = resolveVoiceProfile(segment.voiceId);
+  const model = env.OPENAI_TTS_MODEL?.trim() || 'gpt-4o-mini-tts';
+  const body: Record<string, unknown> = {
+    model,
+    voice: profile.providerVoiceId,
+    input: segment.text,
+    // WAV keeps the 24 kHz/16-bit/mono pipeline (segment concat + scene texture) applicable.
+    response_format: 'wav',
+  };
+  // Only the gpt-4o TTS family accepts `instructions`; tts-1 / tts-1-hd reject the field.
+  if (model.startsWith('gpt-4o')) body.instructions = openAiInstructions(profile, sceneKind);
+
+  let response: Response;
+  try {
+    response = await fetchImpl(OPENAI_TTS_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify(body),
+    });
+  } catch (cause) {
+    throw new ProviderError(
+      503,
+      `TTS API unreachable: ${cause instanceof Error ? cause.message : 'network error'}`,
+      'upstream_error',
+    );
+  }
+  if (!response.ok) {
+    const detail = await safeText(response);
+    const mapped = mapUpstream(response.status);
+    throw new ProviderError(mapped.status, `openai TTS API error ${response.status}: ${detail}`, mapped.code);
+  }
+  const audio = Buffer.from(await response.arrayBuffer());
+  // No word timestamps from OpenAI: marks stay empty and the client estimates timing.
+  return { audio, marks: [], durationMs: wavDurationMs(audio) };
+}
+
+/** OpenAI voices are accent-neutral, so accent (and scene delivery) rides on instructions. */
+function openAiInstructions(profile: VoiceProfile, sceneKind?: ListeningSceneKind): string {
+  const parts = [OPENAI_ACCENT_INSTRUCTIONS[profile.accent]];
+  if (sceneKind) parts.push(OPENAI_SCENE_INSTRUCTIONS[sceneKind]);
+  return parts.join(' ');
+}
+
+const OPENAI_ACCENT_INSTRUCTIONS: Record<EnglishAccent, string> = {
+  us: 'Speak with a General American English accent.',
+  gb: 'Speak with a British English accent.',
+  au: 'Speak with an Australian English accent.',
+  in: 'Speak with an Indian English accent.',
+};
+
+const OPENAI_SCENE_INSTRUCTIONS: Record<ListeningSceneKind, string> = {
+  radio_news: 'Deliver it like a radio news anchor.',
+  street_interview: 'Deliver it like a spontaneous street interview answer.',
+  podcast_dialogue: 'Deliver it like a relaxed podcast conversation.',
+  public_announcement: 'Deliver it like a public address announcement.',
+  casual_conversation: 'Speak casually, like friends chatting.',
+  tv_broadcast: 'Deliver it like a TV news broadcast.',
+};
+
+/** Mirrors server/llm/providers mapUpstream (not exported there). */
+function mapUpstream(status: number): { status: number; code: ProviderErrorCode } {
+  if (status === 429) return { status: 429, code: 'rate_limited' };
+  if (status === 401 || status === 403) return { status: 503, code: 'upstream_auth' };
+  return { status: 503, code: 'upstream_error' };
+}
+
+async function safeText(response: Response): Promise<string> {
+  try {
+    return (await response.text()).slice(0, 500);
+  } catch {
+    return '(no body)';
+  }
+}
+
+/** Joins rendered segments; assumes the shared 24 kHz/16-bit/mono RIFF format (Azure and OpenAI). */
+function concatWav(segments: SegmentAudio[]): SegmentAudio {
   if (segments.length === 1) return segments[0]!;
   const chunks = segments.map((s) => wavDataChunk(s.audio));
   const data = Buffer.concat(chunks);
@@ -241,7 +358,10 @@ export function applySceneEffectToWav(
 
 function sceneTextureSample(i: number, sceneKind: ListeningSceneKind): number {
   const white = deterministicNoise(i);
-  if (sceneKind === 'radio_news') return white * 0.35 + Math.sin((2 * Math.PI * 120 * i) / 24_000) * 0.18;
+  // tv_broadcast shares the radio_news broadcast hum; casual_conversation stays on the quiet
+  // indoor fallback like podcast_dialogue.
+  if (sceneKind === 'radio_news' || sceneKind === 'tv_broadcast')
+    return white * 0.35 + Math.sin((2 * Math.PI * 120 * i) / 24_000) * 0.18;
   if (sceneKind === 'street_interview') return white * 0.75 + Math.sin((2 * Math.PI * 180 * i) / 24_000) * 0.12;
   if (sceneKind === 'public_announcement') return white * 0.28 + Math.sin((2 * Math.PI * 90 * i) / 24_000) * 0.15;
   return white * 0.45;

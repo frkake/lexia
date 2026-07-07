@@ -63,7 +63,8 @@ import {
 } from './schema';
 import { tokenizer } from '../../src/domain/tokenizer/joinService';
 import { structureCollocations, structureMore } from '../../src/domain/wordData/structuredWordData';
-import { defaultVoiceForAccent } from '../../src/domain/audio/voiceCatalog';
+import { defaultVoiceFromProviders } from '../../src/domain/audio/voiceCatalog';
+import { availableTtsProviders } from '../tts/availability';
 
 export type Env = Record<string, string | undefined>;
 
@@ -71,9 +72,15 @@ export type Env = Record<string, string | undefined>;
  * Machine-readable failure code the proxy attaches to error responses so the client can show a
  * cause-specific message instead of a generic "try again later". `not_configured` = the API key is
  * missing; `rate_limited` = upstream 429; `upstream_auth` = upstream rejected the key (401/403);
- * `upstream_error` = any other upstream/transport failure.
+ * `upstream_error` = any other upstream/transport failure; `voice_unavailable` = the requested
+ * TTS voice's provider is not configured (other TTS providers may be).
  */
-export type ProviderErrorCode = 'not_configured' | 'rate_limited' | 'upstream_auth' | 'upstream_error';
+export type ProviderErrorCode =
+  | 'not_configured'
+  | 'rate_limited'
+  | 'upstream_auth'
+  | 'upstream_error'
+  | 'voice_unavailable';
 
 /** HTTP status the proxy will return; mirrors HttpContentGateway.kindForStatus. */
 export class ProviderError extends Error {
@@ -274,6 +281,28 @@ async function safeText(response: Response): Promise<string> {
   }
 }
 
+/**
+ * Retry a SHORT upstream call once (or `retries` times) on transient trouble: 429, upstream 5xx,
+ * or a malformed reply (502 parse). Auth/config failures never retry. Reserved for quick tasks
+ * (annotation chunks, word data) whose retry fits comfortably inside the client's request timeout;
+ * passage generation retries client-side instead, where each attempt gets a fresh timeout budget.
+ */
+async function withUpstreamRetry<T>(fn: () => Promise<T>, retries = 1, baseDelayMs = 1000): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      const transient =
+        error instanceof ProviderError &&
+        error.code !== 'not_configured' &&
+        error.code !== 'upstream_auth' &&
+        (error.status === 429 || error.status === 502 || error.status === 503);
+      if (!transient || attempt >= retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (attempt + 1)));
+    }
+  }
+}
+
 function parseJson<T>(text: string, what: string): T {
   try {
     return JSON.parse(text) as T;
@@ -356,14 +385,20 @@ function normalizeSentence(raw: Raw): Sentence {
   };
 }
 
-function listeningSpeakers(req: GenerationRequest): NonNullable<PassageOutput['meta']['listeningScene']>['speakers'] {
+function listeningSpeakers(
+  req: GenerationRequest,
+  env: Env,
+): NonNullable<PassageOutput['meta']['listeningScene']>['speakers'] {
   if (!req.listeningOptions) return [];
   const accent = req.listeningOptions.accent;
+  // Assign speakers ONLY voices whose provider the .env can drive (no synthesis-time fallback
+  // exists any more, so an unavailable assignment would fail the whole scene's narration).
+  const providers = availableTtsProviders(env);
   const mk = (speakerId: string, label: string, role: VoiceRole, gender: 'female' | 'male') => ({
     speakerId,
     label,
     role,
-    voiceProfileId: defaultVoiceForAccent(accent, gender, role).id,
+    voiceProfileId: defaultVoiceFromProviders(providers, accent, gender, role).id,
   });
   switch (req.listeningOptions.sceneKind) {
     case 'radio_news':
@@ -378,12 +413,16 @@ function listeningSpeakers(req: GenerationRequest): NonNullable<PassageOutput['m
       return [mk('host', 'Host', 'interviewer', 'female'), mk('guest_1', 'Guest', 'guest', 'male')];
     case 'public_announcement':
       return [mk('announcer', 'Announcer', 'announcer', 'female')];
+    case 'casual_conversation':
+      return [mk('friend_1', 'Friend 1', 'guest', 'female'), mk('friend_2', 'Friend 2', 'guest', 'male')];
+    case 'tv_broadcast':
+      return [mk('anchor', 'Anchor', 'announcer', 'female'), mk('reporter', 'Field Reporter', 'interviewer', 'male')];
   }
   return [];
 }
 
 /** Ensure arrays exist and request-owned meta stays authoritative for the validator/UI. */
-function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
+function normalizePassage(core: Raw, req: GenerationRequest, env: Env): PassageOutput {
   const sentences = asArray<Raw>(core.sentences).map(normalizeSentence);
   const targetSpans = asArray<PassageOutput['targetSpans'][number]>(core.targetSpans);
   const collocationSpans = asArray<PassageOutput['collocationSpans'][number]>(core.collocationSpans);
@@ -412,7 +451,7 @@ function normalizePassage(core: Raw, req: GenerationRequest): PassageOutput {
             sceneKind: req.listeningOptions.sceneKind,
             noiseLevel: req.listeningOptions.noiseLevel,
             accent: req.listeningOptions.accent,
-            speakers: listeningSpeakers(req),
+            speakers: listeningSpeakers(req, env),
           },
         }
       : {}),
@@ -648,8 +687,13 @@ function reanchorSpans(
   const usedColl = new Set<string>();
   const collocationSpans = passage.collocationSpans
     .map((span) => {
-      const surface = collocationSurfaceFor(span.collocationId, targetWords);
-      const loc = locate(passage.sentences, surface, span.sentenceIndex, usedColl);
+      // Prefer the model's verbatim full-phrase surface ("accept the new proposal"): it covers the
+      // whole collocation. The head form resolved from collocationId ("accept") is the fallback for
+      // legacy replies without a surface — a one-token span beats dropping the collocation.
+      const reported = typeof span.surface === 'string' ? span.surface.trim() : '';
+      const loc =
+        (reported ? locate(passage.sentences, reported, span.sentenceIndex, usedColl) : null) ??
+        locate(passage.sentences, collocationSurfaceFor(span.collocationId, targetWords), span.sentenceIndex, usedColl);
       if (!loc) return null;
       usedColl.add(`${loc.sentenceIndex}:${loc.tokenStart}`);
       return { ...span, ...loc };
@@ -694,16 +738,16 @@ export async function generatePassage(
   );
   // Pass refusal/max_tokens straight through so the orchestrator can regenerate.
   if (stopReason === 'refusal' || stopReason === 'max_tokens') {
-    return { passage: emptyPassage(req), stopReason };
+    return { passage: emptyPassage(req, env), stopReason };
   }
   const core = unwrapPassage(parseJson<Raw>(text, 'passage'));
   if (!Array.isArray(core.sentences) || core.sentences.length === 0) {
     throw new ProviderError(502, 'Generation API returned a passage with no sentences.');
   }
-  return { passage: normalizePassage(core, req), stopReason };
+  return { passage: normalizePassage(core, req, env), stopReason };
 }
 
-function emptyPassage(req: GenerationRequest): PassageOutput {
+function emptyPassage(req: GenerationRequest, env: Env): PassageOutput {
   return {
     meta: {
       title: '',
@@ -718,7 +762,7 @@ function emptyPassage(req: GenerationRequest): PassageOutput {
               sceneKind: req.listeningOptions.sceneKind,
               noiseLevel: req.listeningOptions.noiseLevel,
               accent: req.listeningOptions.accent,
-              speakers: listeningSpeakers(req),
+              speakers: listeningSpeakers(req, env),
             },
           }
         : {}),
@@ -739,16 +783,18 @@ export async function getWordData(
   fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 ): Promise<WordData> {
   const { system, user } = buildWordMessages(wordId);
-  // Larger budget than before: the rich `more` attributes need more output tokens.
-  const { text } = await callModel(env, fetchImpl, system, user, 1800, WORD_DATA_JSON_SCHEMA, 'word_data', {
-    temperature: 0.4,
-    task: 'wordpack',
+  return withUpstreamRetry(async () => {
+    // Larger budget than before: the rich `more` attributes need more output tokens.
+    const { text } = await callModel(env, fetchImpl, system, user, 1800, WORD_DATA_JSON_SCHEMA, 'word_data', {
+      temperature: 0.4,
+      task: 'wordpack',
+    });
+    const parsed = parseJson<Partial<WordData>>(text, 'word data');
+    if (!parsed.headword || !parsed.core) {
+      throw new ProviderError(502, 'Generation API returned incomplete word data.');
+    }
+    return normalizeWordData(parsed, wordId);
   });
-  const parsed = parseJson<Partial<WordData>>(text, 'word data');
-  if (!parsed.headword || !parsed.core) {
-    throw new ProviderError(502, 'Generation API returned incomplete word data.');
-  }
-  return normalizeWordData(parsed, wordId);
 }
 
 const MEMORY_TIP_KINDS = new Set(['image', 'etymology', 'collocation', 'contrast', 'sound', 'mistake']);
@@ -1270,6 +1316,7 @@ type RawCue = {
   span?: { sentenceIndex?: number; tokenStart?: number; tokenEnd?: number };
   category?: NoticeCue['category'];
   anchorText?: string;
+  meaningJa?: string | null;
   explanationJa?: string;
   detailJa?: string | null;
   anchorTextParts?: string[] | null;
@@ -1318,6 +1365,7 @@ function anchorCues(sentences: PassageOutput['sentences'], raw: RawCue[]): Notic
       if (!anchorText || !category || !ANNOTATION_CATEGORY_SET.has(category)) return null;
       const loc = locateAnchor(sentences, anchorText, cue.span?.sentenceIndex ?? 0, cue.span?.tokenStart ?? 0);
       if (!loc) return null;
+      const meaningJa = typeof cue.meaningJa === 'string' && cue.meaningJa.trim() ? cue.meaningJa.trim() : undefined;
       const detailJa = typeof cue.detailJa === 'string' && cue.detailJa.trim() ? cue.detailJa.trim() : undefined;
       const extraSpans = Array.isArray(cue.anchorTextParts)
         ? resolveExtraSpans(sentences, loc, anchorText, cue.anchorTextParts)
@@ -1327,6 +1375,7 @@ function anchorCues(sentences: PassageOutput['sentences'], raw: RawCue[]): Notic
         span: loc,
         category,
         anchorText,
+        ...(meaningJa ? { meaningJa } : {}),
         explanationJa: typeof cue.explanationJa === 'string' ? cue.explanationJa : '',
         ...(detailJa ? { detailJa } : {}),
         ...(extraSpans.length > 0 ? { extraSpans } : {}),
@@ -1511,15 +1560,19 @@ async function annotateChunk(
   chunk: PassageAnnotationRequest,
 ): Promise<{ raw: RawCue[]; notes: RawSentenceNote[]; status: AnnotationStatus }> {
   const { system, user } = buildAnnotationMessages(chunk);
-  const { text, stopReason } = await callModel(
-    env,
-    fetchImpl,
-    system,
-    user,
-    annotationMaxTokens(chunk.sentences.length),
-    ANNOTATION_JSON_SCHEMA,
-    'passage_annotation',
-    { temperature: 0.3, task: 'annotation' },
+  // A chunk is small (≤20 sentences), so a transient upstream failure retries once instead of
+  // silently costing the reader this slice's cues.
+  const { text, stopReason } = await withUpstreamRetry(() =>
+    callModel(
+      env,
+      fetchImpl,
+      system,
+      user,
+      annotationMaxTokens(chunk.sentences.length),
+      ANNOTATION_JSON_SCHEMA,
+      'passage_annotation',
+      { temperature: 0.3, task: 'annotation' },
+    ),
   );
   const base = chunk.sentenceIndexBase ?? 0;
   if (stopReason === 'refusal') {
@@ -1557,7 +1610,14 @@ export async function annotatePassage(
   }
   const chunks = planAnnotationChunks(req, ANNOTATION_CHUNK_SENTENCES);
   const results = await mapWithConcurrency(chunks, ANNOTATION_CHUNK_CONCURRENCY, (chunk) =>
-    annotateChunk(env, fetchImpl, chunk),
+    // One slice's (post-retry) failure must not 503 the whole annotation — the other slices'
+    // cues still reach the reader; the merged status degrades to 'partial' instead.
+    annotateChunk(env, fetchImpl, chunk).catch((error) => {
+      console.warn(
+        `[annotate] chunk failed (base=${chunk.sentenceIndexBase ?? 0}): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { raw: [], notes: [], status: 'failed' as AnnotationStatus };
+    }),
   );
   const raw = results.flatMap((r) => r.raw);
   // sentenceNotes carry absolute indices; merge across slices and ground against the full passage.

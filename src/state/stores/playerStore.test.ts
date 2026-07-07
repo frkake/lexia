@@ -114,4 +114,49 @@ describe('PlayerStore', () => {
     store.getState().setStatus('unavailable');
     expect(store.getState().status).toBe('unavailable');
   });
+
+  it('tracks which passage is loaded and clears it on unload', () => {
+    const audio = mockAudio();
+    const store = createPlayerStore();
+    store.getState().attach(audio);
+    expect(store.getState().loadedPassageId).toBeNull();
+
+    store.getState().load(asset, timing);
+    expect(store.getState().loadedPassageId).toBe('p1');
+
+    store.getState().unload();
+    expect(store.getState().loadedPassageId).toBeNull();
+  });
+
+  it('unloads back to idle, stopping playback and keeping the rate/voice preferences', () => {
+    const audio = mockAudio();
+    const store = createPlayerStore();
+    store.getState().attach(audio);
+    store.getState().setRate(1.5);
+    store.getState().load(asset, timing);
+    store.getState().play();
+
+    store.getState().unload();
+
+    expect(audio.pause).toHaveBeenCalled();
+    expect(audio.src).toBe(''); // the stale source can never resume over another passage
+    const state = store.getState();
+    expect(state.status).toBe('idle');
+    expect(state.playing).toBe(false);
+    expect(state.asset).toBeNull();
+    expect(state.timing).toBeNull();
+    expect(state.durationMs).toBe(0);
+    expect(state.positionMs).toBe(0);
+    expect(state.progress).toBe(0);
+    expect(state.currentTokenId).toBeNull();
+    // User preferences survive the reset.
+    expect(state.rate).toBe(1.5);
+    expect(state.voiceId).toBe('joanna');
+  });
+
+  it('unloads safely before any element is attached', () => {
+    const store = createPlayerStore();
+    expect(() => store.getState().unload()).not.toThrow();
+    expect(store.getState().status).toBe('idle');
+  });
 });

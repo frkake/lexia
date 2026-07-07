@@ -8,6 +8,7 @@
 
 import { colors, fonts, radius, shadow } from './theme/tokens';
 import { usePlayerStore, playerStore } from '../state/stores/playerStore';
+import { useSessionStore } from '../state/stores/sessionStore';
 import { nextVoiceProfileId, resolveVoiceProfile } from '../domain/audio/voiceCatalog';
 
 const RATES = [1, 1.25, 1.5, 0.75] as const;
@@ -25,6 +26,17 @@ export interface BottomPlayerProps {
   nowReading?: string;
   onRateChange?: (rate: number) => void;
   onVoiceChange?: (voiceId: string) => void;
+  /**
+   * Invoked instead of toggle() when ▶ is pressed with nothing playable loaded for the
+   * current passage (revisit / restored session — audio is synthesized on demand upstream).
+   */
+  onRequestAudio?: () => void;
+  /**
+   * Voice ids the server .env can synthesize (from /api/tts:voices). The 声 chip cycles only
+   * these, and a current voice outside the set is marked 生成不可. Undefined = unknown →
+   * the chip cycles the whole catalog.
+   */
+  availableVoiceIds?: readonly string[];
 }
 
 const chip = (active = false): React.CSSProperties => ({
@@ -39,14 +51,32 @@ const chip = (active = false): React.CSSProperties => ({
   cursor: 'pointer',
 });
 
-export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: BottomPlayerProps) {
+export function BottomPlayer({
+  nowReading,
+  onRateChange,
+  onVoiceChange,
+  onRequestAudio,
+  availableVoiceIds,
+}: BottomPlayerProps) {
   const status = usePlayerStore((s) => s.status);
   const playing = usePlayerStore((s) => s.playing);
   const rate = usePlayerStore((s) => s.rate);
   const voiceId = usePlayerStore((s) => s.voiceId);
+  const unavailableReason = usePlayerStore((s) => s.unavailableReason);
   const positionMs = usePlayerStore((s) => s.positionMs);
   const durationMs = usePlayerStore((s) => s.durationMs);
   const progress = usePlayerStore((s) => s.progress);
+  const loadedPassageId = usePlayerStore((s) => s.loadedPassageId);
+  const passageId = useSessionStore((s) => s.passage?.passageId ?? null);
+
+  // Nothing playable is loaded for the passage on screen (never after a load(); audio is a
+  // data: URL and not persisted, so a revisit needs an upstream on-demand synthesize).
+  const needsAudio = status === 'idle' || (passageId != null && loadedPassageId !== passageId);
+
+  const pressPlay = (): void => {
+    if (onRequestAudio && !playing && needsAudio) onRequestAudio();
+    else playerStore.getState().toggle(); // pause keeps toggling — never re-synthesizes mid-listen
+  };
 
   const label =
     status === 'loading'
@@ -63,11 +93,14 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
   };
 
   const cycleVoice = (): void => {
-    const next = nextVoiceProfileId(voiceId);
+    const next = nextVoiceProfileId(voiceId, availableVoiceIds);
     playerStore.getState().setVoice(next);
     onVoiceChange?.(next);
   };
   const voice = resolveVoiceProfile(voiceId);
+  // Explicit unavailability marker: the server no longer swaps in another provider's voice, so a
+  // voice outside the available set is called out here instead of playing something else.
+  const voiceUnavailable = availableVoiceIds != null && !availableVoiceIds.includes(voice.id);
 
   return (
     <div
@@ -86,7 +119,7 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
         type="button"
         aria-label={playing ? '一時停止' : '再生'}
         disabled={status === 'unavailable'}
-        onClick={() => playerStore.getState().toggle()}
+        onClick={pressPlay}
         style={{
           flex: 'none',
           width: 44,
@@ -106,7 +139,14 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
         <div style={{ fontFamily: fonts.ui, fontSize: 13, fontWeight: 600, color: colors.ink }}>
           {label} <span style={{ color: colors.faint, fontWeight: 400 }}>· Listen</span>
         </div>
-        {nowReading ? (
+        {status === 'unavailable' && unavailableReason ? (
+          <div
+            data-testid="tts-unavailable-reason"
+            style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, marginTop: 2 }}
+          >
+            {unavailableReason}
+          </div>
+        ) : nowReading ? (
           <div style={{ fontFamily: fonts.ui, fontSize: 11.5, color: colors.faint, marginTop: 2 }}>
             いま読んでいる:{' '}
             <span style={{ color: colors.primary, fontStyle: 'italic', fontFamily: fonts.serif }}>
@@ -140,6 +180,7 @@ export function BottomPlayer({ nowReading, onRateChange, onVoiceChange }: Bottom
         </button>
         <button type="button" aria-label={`声を切り替え 現在 ${voice.labelJa}`} onClick={cycleVoice} style={chip()}>
           声: {voice.labelJa}
+          {voiceUnavailable ? <span style={{ color: colors.faint, fontWeight: 400 }}>（生成不可）</span> : null}
         </button>
       </div>
     </div>

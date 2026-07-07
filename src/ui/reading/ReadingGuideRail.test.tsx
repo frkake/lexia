@@ -379,3 +379,49 @@ describe('ReadingGuideRail — C-1 detailJa block', () => {
     expect(queryByTestId('guide-notice-detail-1')).toBeNull();
   });
 });
+
+describe('ReadingGuideRail — 本文中での意味 (meaningJa) leads the cue', () => {
+  function makeMeaningPassage() {
+    const source: PassageOutput = {
+      meta: { title: 't', intent: 'business', level: 'B1', newCount: 0, reviewCount: 0, approxWords: 5 },
+      sentences: [{ tokens: ['They', 'broke', 'the', 'ice', '.'], translationJa: '彼らは緊張をほぐした。' }],
+      targetSpans: [],
+      collocationSpans: [],
+      noticeCues: [
+        {
+          index: 1,
+          span: { sentenceIndex: 0, tokenStart: 1, tokenEnd: 4 },
+          category: 'idiom',
+          anchorText: 'broke the ice',
+          meaningJa: '場の緊張をほぐした',
+          explanationJa: '初対面や会議の冒頭で使う固定表現。',
+        },
+      ],
+    };
+    return tokenizer.index('p-meaning', source);
+  }
+
+  it('shows meaningJa in the collapsed summary and FIRST in the expanded body, before the usage insight', () => {
+    const { getByTestId } = render(<ReadingGuideRail passage={makeMeaningPassage()} words={[]} />);
+    const notice = getByTestId('guide-item-notice:1');
+    // Collapsed one-liner is the in-context meaning, not the usage note.
+    expect(notice.textContent).toContain('場の緊張をほぐした');
+    expect(notice.textContent).not.toContain('初対面や会議の冒頭');
+    fireEvent.click(notice);
+    // Expanded: meaning first, insight after (DOM order).
+    const meaning = getByTestId('guide-notice-meaning-1');
+    expect(meaning.textContent).toBe('場の緊張をほぐした');
+    expect(notice.textContent).toContain('初対面や会議の冒頭で使う固定表現。');
+    expect(
+      meaning.compareDocumentPosition(within(notice).getByText('初対面や会議の冒頭で使う固定表現。')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('falls back to explanationJa in the collapsed row for legacy cues without meaningJa', () => {
+    const { getByTestId, queryByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
+    expect(getByTestId('guide-item-notice:1').textContent).toContain('取引を成立させる定型表現。');
+    fireEvent.click(getByTestId('guide-item-notice:1'));
+    expect(queryByTestId('guide-notice-meaning-1')).toBeNull();
+  });
+});

@@ -12,13 +12,14 @@ import { HttpContentGateway } from '../../infra/content/contentGatewayHttp';
 import { LexiaDb } from '../../infra/persistence/lexiaDb';
 import { createRepositories } from '../../infra/persistence/repositories';
 import { isImageRef } from '../../infra/persistence/imageStore';
-import { createPlayerStore } from '../../state/stores/playerStore';
-import { createSessionStore } from '../../state/stores/sessionStore';
+import { createPlayerStore, playerStore } from '../../state/stores/playerStore';
+import type { ControllableAudio } from '../../state/stores/playerStore';
+import { createSessionStore, sessionStore } from '../../state/stores/sessionStore';
 import { createSettingsStore, settingsStore } from '../../state/stores/settingsStore';
 import { generationProgressStore } from '../../state/stores/generationProgressStore';
 import { toastStore } from '../../state/stores/toastStore';
 import { tokenizer } from '../../domain/tokenizer/joinService';
-import type { ContentGateway } from '../../types/ports';
+import type { ContentGateway, TtsSynthesisPort } from '../../types/ports';
 import type { PassageOutput, UserId, WordData, WordSchedulingState, WordSuggestionRequest } from '../../types/domain';
 
 const wordData: WordData = {
@@ -96,6 +97,34 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function mockControllableAudio(): ControllableAudio {
+  return {
+    src: '',
+    currentTime: 0,
+    duration: 0,
+    playbackRate: 1,
+    preservesPitch: true,
+    play: () => Promise.resolve(),
+    pause: () => {},
+  };
+}
+
+/** The bar renders from the SINGLETON stores (AppShell/BottomPlayer), so on-demand-playback
+ *  tests run on them; reset whatever earlier tests in this file left behind. */
+function resetPlayerSingletons(): void {
+  act(() => {
+    sessionStore.setState({ passage: null });
+    playerStore.setState({
+      status: 'idle',
+      playing: false,
+      asset: null,
+      timing: null,
+      loadedPassageId: null,
+      audio: null,
+    });
+  });
 }
 
 describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
@@ -478,6 +507,190 @@ describe('route wiring (tasks 10.1 / 10.4 through the real screens)', () => {
     expect(await repos.images.all(userId)).toHaveLength(1);
     // Exactly one backfill call — the per-session guard prevents re-firing on re-render.
     expect(calls).toBe(1);
+  });
+
+  it('revisits a stored passage with an idle bar whose ▶ synthesizes audio on demand', async () => {
+    const userId = 'route_revisit_audio_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    // A stored passage — its audio was a data: URL at generation time and is NOT persisted,
+    // so a revisit can only replay it by re-synthesizing.
+    await repos.passages.put({ passageId: 'p1', userId, createdAt: 1_000, passage: validPassage() });
+
+    let synthCalls = 0;
+    const tts: TtsSynthesisPort = {
+      async synthesize(passage, voiceId) {
+        synthCalls += 1;
+        return {
+          asset: {
+            passageId: passage.passageId,
+            voiceId,
+            audioUrl: 'data:audio/wav;base64,AA==',
+            format: 'audio/wav',
+            durationMs: 1_200,
+            engine: 'azure',
+          },
+          timing: { passageId: passage.passageId, voiceId, marks: [] },
+        };
+      },
+      async wordClipUrl() {
+        throw new Error('unused');
+      },
+    };
+    const gateway: ContentGateway = {
+      async generatePassage() {
+        throw new Error('unused');
+      },
+      async getWordData() {
+        return wordData;
+      },
+    };
+    resetPlayerSingletons();
+    const container = await createContainer(userId, {
+      db,
+      content: gateway,
+      tts,
+      now: () => 2_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/p/p1'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    // The revisited passage opens with the bar in 'idle' — playable, nothing loaded yet.
+    await waitFor(() => expect(screen.getAllByText('取引の成立').length).toBeGreaterThan(0), { timeout: 5_000 });
+    expect(container.player.getState().status).toBe('idle');
+    expect(synthCalls).toBe(0);
+    const audio = mockControllableAudio();
+    act(() => playerStore.getState().attach(audio)); // mock element: jsdom media has no playback
+
+    // ▶ synthesizes on demand, loads the asset+timing and starts playing.
+    fireEvent.click(await screen.findByRole('button', { name: '再生' }));
+    await waitFor(() => expect(container.player.getState().status).toBe('ready'));
+    expect(container.player.getState().loadedPassageId).toBe('p1');
+    expect(container.player.getState().playing).toBe(true);
+    expect(synthCalls).toBe(1);
+    // The fresh timing map is persisted alongside, like every synthesize call site.
+    expect(await repos.timingMaps.get('p1', container.voiceId)).toBeTruthy();
+
+    act(() => playerStore.getState().unload()); // stop the singleton for sibling tests
+  });
+
+  it('resets stale audio to an idle bar when navigating from one stored passage to another', async () => {
+    const userId = 'route_stale_audio_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    await repos.passages.put({ passageId: 'p1', userId, createdAt: 1_000, passage: validPassage() });
+    await repos.passages.put({ passageId: 'p2', userId, createdAt: 1_100, passage: validPassage() });
+
+    resetPlayerSingletons();
+    const container = await createContainer(userId, {
+      db,
+      content: {
+        async generatePassage() {
+          throw new Error('unused');
+        },
+        async getWordData() {
+          return wordData;
+        },
+      },
+      tts: degradingTts,
+      now: () => 2_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/p/p1'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(container.session.getState().passage?.passageId).toBe('p1'), { timeout: 5_000 });
+    // p1's audio is resident and playing (as if ▶ had synthesized it earlier in the session).
+    const audio = mockControllableAudio();
+    act(() => {
+      playerStore.getState().attach(audio);
+      playerStore
+        .getState()
+        .load(
+          { passageId: 'p1', voiceId: 'v1', audioUrl: 'data:audio/wav;base64,AA==', format: 'audio/wav', durationMs: 1_200, engine: 'azure' },
+          { passageId: 'p1', voiceId: 'v1', marks: [] },
+        );
+      playerStore.getState().play();
+    });
+
+    await act(async () => {
+      await router.navigate('/p/p2');
+    });
+
+    // The open effect unloaded p1's stale audio: idle bar, nothing playing, source cleared.
+    await waitFor(() => expect(container.session.getState().passage?.passageId).toBe('p2'), { timeout: 5_000 });
+    expect(container.player.getState().status).toBe('idle');
+    expect(container.player.getState().loadedPassageId).toBeNull();
+    expect(container.player.getState().playing).toBe(false);
+    expect(audio.src).toBe('');
+  });
+
+  it('restores the idle bar on the next passage after a failed on-demand synthesize', async () => {
+    const userId = 'route_failed_ondemand_user' as UserId;
+    const db = new LexiaDb(userId);
+    await db.open();
+    const repos = createRepositories(db);
+    await repos.passages.put({ passageId: 'p1', userId, createdAt: 1_000, passage: validPassage() });
+    await repos.passages.put({ passageId: 'p2', userId, createdAt: 1_100, passage: validPassage() });
+
+    resetPlayerSingletons();
+    const container = await createContainer(userId, {
+      db,
+      content: {
+        async generatePassage() {
+          throw new Error('unused');
+        },
+        async getWordData() {
+          return wordData;
+        },
+      },
+      tts: degradingTts,
+      now: () => 2_000,
+      settings: createSettingsStore(),
+    });
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/p/p1'] });
+
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppProvider container={container}>
+          <RouterProvider router={router} />
+        </AppProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(container.session.getState().passage?.passageId).toBe('p1'), { timeout: 5_000 });
+    const audio = mockControllableAudio();
+    act(() => playerStore.getState().attach(audio));
+
+    // ▶ fails (no TTS backend): p1 degrades to text-only and the bar hides — on p1.
+    fireEvent.click(await screen.findByRole('button', { name: '再生' }));
+    await waitFor(() => expect(container.player.getState().status).toBe('unavailable'));
+
+    await act(async () => {
+      await router.navigate('/p/p2');
+    });
+
+    // The failure must not follow the learner: p2 gets its own idle bar and ▶ retries on demand.
+    await waitFor(() => expect(container.session.getState().passage?.passageId).toBe('p2'), { timeout: 5_000 });
+    expect(container.player.getState().status).toBe('idle');
+    expect(container.player.getState().loadedPassageId).toBeNull();
   });
 
   it('auto-proposes new words when none are selected, weaving + seeding them into the SRS', async () => {

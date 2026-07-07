@@ -51,6 +51,31 @@ describe('TtsSynthesisAdapter.synthesize', () => {
     expect(timing.marks[2]!.endMs).toBe(1200);
   });
 
+  it('estimates length-weighted word marks when the engine returns no timestamps', async () => {
+    const idx = indexed();
+    const adapter = new TtsSynthesisAdapter(
+      backend({ audioUrl: 'data:audio/wav;base64,', format: 'audio/wav', durationMs: 1800, engine: 'openai', marks: [] }),
+    );
+    const { asset, timing } = await adapter.synthesize(idx, 'openai-us-nova');
+
+    expect(asset.engine).toBe('openai');
+    // every word token is covered, in token order (She=3, stayed=6, resilient=9 → weights 3:6:9).
+    expect(timing.marks.map((m) => m.tokenId)).toEqual(['p1:0:0', 'p1:0:1', 'p1:0:2']);
+    expect(timing.marks.map((m) => m.startMs)).toEqual([0, 300, 900]);
+    // contiguous windows: each mark ends where the next starts and the last spans to the duration.
+    expect(timing.marks.map((m) => m.endMs)).toEqual([300, 900, 1800]);
+  });
+
+  it('rejects an empty mark set from a mark-capable engine instead of estimating', async () => {
+    const idx = indexed();
+    // Polly/Azure always produce word marks; zero marks there is an engine fault, not the
+    // OpenAI estimation path — it must fail the coverage check and degrade to text-only.
+    const adapter = new TtsSynthesisAdapter(
+      backend({ audioUrl: 'u', format: 'audio/mpeg', durationMs: 1_000, engine: 'polly', marks: [] }),
+    );
+    await expect(adapter.synthesize(idx, 'joanna')).rejects.toMatchObject({ kind: 'coverage_mismatch' });
+  });
+
   it('rejects a mark set that does not cover every word token', async () => {
     const idx = indexed();
     const partial = marksFor(idx).slice(0, 2); // drops "resilient"

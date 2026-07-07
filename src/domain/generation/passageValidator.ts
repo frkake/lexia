@@ -63,6 +63,14 @@ export interface SpanViolation {
    * so the orchestrator can drop just that emphasis as a last resort, leaving the body intact.
    */
   translationSpan?: TranslationSpanRef;
+  /**
+   * Set when the violation belongs to a single TargetSpan (its array index). Final-resort salvage:
+   * the orchestrator drops just the mislocated study-word marker — the body text keeps the word,
+   * only the highlight is lost — instead of failing the whole generation.
+   */
+  targetSpanIndex?: number;
+  /** Like `targetSpanIndex`, for a single CollocationSpan (its array index). */
+  collocationSpanIndex?: number;
 }
 
 export interface ValidationTarget {
@@ -246,35 +254,46 @@ function validate(candidate: PassageOutput, ctx: ValidationContext): ValidationR
   const { sentences } = candidate;
   const targetById = new Map(ctx.targets.map((t) => [t.wordId, t]));
 
-  // TargetSpans: range + surface fidelity + inflection.
-  for (const span of candidate.targetSpans) {
+  // TargetSpans: range + surface fidelity + inflection. Each violation carries `targetSpanIndex`
+  // so the orchestrator can drop just the offending marker as a final resort.
+  candidate.targetSpans.forEach((span, targetSpanIndex) => {
     if (!spanInRange(span, sentences)) {
-      violations.push({ kind: 'span_out_of_range', detail: `target ${span.wordId} @${span.sentenceIndex}` });
-      continue;
+      violations.push({
+        kind: 'span_out_of_range',
+        detail: `target ${span.wordId} @${span.sentenceIndex}`,
+        targetSpanIndex,
+      });
+      return;
     }
     const rendered = renderSpan(sentences[span.sentenceIndex]!, span);
     if (rendered.toLowerCase() !== span.surface.toLowerCase()) {
       violations.push({
         kind: 'surface_mismatch',
         detail: `declared "${span.surface}" ≠ tokens "${rendered}"`,
+        targetSpanIndex,
       });
-      continue;
+      return;
     }
     const target = targetById.get(span.wordId);
     if (target && !isInflectionOf(span.surface, target.surface, target.inflections)) {
       violations.push({
         kind: 'surface_mismatch',
         detail: `"${span.surface}" is not an inflection of "${target.surface}"`,
+        targetSpanIndex,
       });
     }
-  }
+  });
 
   // CollocationSpans: range only.
-  for (const span of candidate.collocationSpans) {
+  candidate.collocationSpans.forEach((span, collocationSpanIndex) => {
     if (!spanInRange(span, sentences)) {
-      violations.push({ kind: 'span_out_of_range', detail: `collocation ${span.collocationId}` });
+      violations.push({
+        kind: 'span_out_of_range',
+        detail: `collocation ${span.collocationId}`,
+        collocationSpanIndex,
+      });
     }
-  }
+  });
 
   // NoticeCues: range + anchor fidelity + grounding + category consistency. Every violation here
   // carries `cueIndex` so the orchestrator can drop just this cue as a last resort.

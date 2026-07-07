@@ -38,11 +38,18 @@ export interface PlayerState {
   progress: number;
   asset: AudioAsset | null;
   timing: TimingMap | null;
+  /** passageId of the loaded AudioAsset (null when nothing playable is loaded). */
+  loadedPassageId: string | null;
+  /** Why status is 'unavailable' (user-facing, e.g. この話者の音声はこの環境では生成できません); null otherwise. */
+  unavailableReason: string | null;
 
   /** Bind the resident element once (AppShell). Applies the current rate/pitch. */
   attach(audio: ControllableAudio): void;
-  setStatus(status: PlayerStatus): void;
+  /** `reason` is shown in the listen bar when `status` is 'unavailable'; ignored otherwise. */
+  setStatus(status: PlayerStatus, reason?: string): void;
   load(asset: AudioAsset, timing: TimingMap): void;
+  /** Back to the empty 'idle' bar: drop the loaded asset/timing (keeps rate/voice prefs). */
+  unload(): void;
   toggle(): void;
   play(): void;
   pause(): void;
@@ -96,6 +103,8 @@ export function createPlayerStore(deps: PlayerStoreDeps = {}) {
       progress: 0,
       asset: null,
       timing: null,
+      loadedPassageId: null,
+      unavailableReason: null,
 
       attach(audio) {
         audio.playbackRate = get().rate;
@@ -103,8 +112,8 @@ export function createPlayerStore(deps: PlayerStoreDeps = {}) {
         set({ audio });
       },
 
-      setStatus(status) {
-        set({ status });
+      setStatus(status, reason) {
+        set({ status, unavailableReason: status === 'unavailable' ? (reason ?? null) : null });
       },
 
       load(asset, timing) {
@@ -116,10 +125,34 @@ export function createPlayerStore(deps: PlayerStoreDeps = {}) {
         set({
           asset,
           timing,
+          loadedPassageId: asset.passageId,
+          unavailableReason: null,
           voiceId: asset.voiceId,
           durationMs: asset.durationMs,
           status: 'ready',
           playing: false,
+          positionMs: 0,
+          progress: 0,
+          currentTokenId: null,
+        });
+      },
+
+      unload() {
+        // Stale-passage cleanup: pause and clear the source so the previous passage's audio
+        // can never keep playing (or be resumed) over another passage's text.
+        const { audio } = get();
+        if (audio) {
+          audio.pause();
+          audio.src = '';
+        }
+        set({
+          asset: null,
+          timing: null,
+          loadedPassageId: null,
+          unavailableReason: null,
+          status: 'idle',
+          playing: false,
+          durationMs: 0,
           positionMs: 0,
           progress: 0,
           currentTokenId: null,

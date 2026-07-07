@@ -27,6 +27,7 @@ import { ReviewSession, type ReviewItem } from '../review/ReviewSession';
 import { ReviewStartGate } from '../review/ReviewStartGate';
 import { WordbookScreen, type WordbookEntry, type WordSort } from '../wordbook/WordbookScreen';
 import { DataManagementScreen } from '../settings/DataManagementScreen';
+import { GenerationSettingsScreen } from '../settings/GenerationSettingsScreen';
 import { WordDetailCard } from '../wordcard/WordDetailCard';
 import { ModalOverlay } from '../shared/ModalOverlay';
 import { DUE_LIST_LIMIT } from '../dashboard/DashboardScreen';
@@ -534,6 +535,10 @@ export function HomeRoute() {
         voiceId: voiceId || c.voiceId,
         wordData,
         illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
+        // 段階的生成 (settings.generationMode, default staged): open the reader on body-ready and
+        // stream the annotation in afterwards; 'batch' restores the wait-for-everything gate.
+        stagedGeneration: (c.settings.getState().generationMode ?? 'staged') === 'staged',
+        annotatePassage: c.content.annotatePassage?.bind(c.content),
         signal,
         onPhase: (phase) => gp().setPhase(phase),
       },
@@ -685,6 +690,10 @@ export function HomeRoute() {
           voiceId: voiceId || c.voiceId,
           wordData,
           illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
+          // 段階的生成 (settings.generationMode, default staged): open the reader on body-ready and
+          // stream the annotation in afterwards; 'batch' restores the wait-for-everything gate.
+          stagedGeneration: (c.settings.getState().generationMode ?? 'staged') === 'staged',
+          annotatePassage: c.content.annotatePassage?.bind(c.content),
           signal,
           onPhase: (phase) => gp().setPhase(phase),
         },
@@ -859,6 +868,17 @@ export function ReadingRoute() {
 
   useEffect(() => {
     if (!targetPassageId) return;
+    // Stale-audio guard: audio loaded for a previous passage must not keep playing (or stay
+    // resumable) over this one — back to 'idle' so ▶ re-synthesizes on demand. An
+    // 'unavailable' left by another passage's failed synthesize (nothing loaded) resets the
+    // same way: only the passage that failed stays degraded, not every passage after it.
+    const player = c.player.getState();
+    if (
+      (player.loadedPassageId != null && player.loadedPassageId !== targetPassageId) ||
+      (player.status === 'unavailable' && passage?.passageId !== targetPassageId)
+    ) {
+      player.unload();
+    }
     if (passage?.passageId === targetPassageId) {
       setNotFound(false);
       return;
@@ -952,6 +972,20 @@ export function ReadingRoute() {
       storyContext,
     );
   }, [c, passageIllustrations, passage, targetPassageId, storyDetails]);
+
+  // 段階的生成 rescue: a passage stored with annotationStatus 'pending' whose background annotation
+  // never landed (the tab closed / reloaded mid-run) would sit annotation-less forever. On revisit,
+  // run the same annotate-merge-persist path as the manual 再生成 button, once per session per passage.
+  const backfilledAnnotationsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!c.content.annotatePassage) return;
+    if (!passage || passage.passageId !== targetPassageId) return;
+    if (passage.source.meta.annotationStatus !== 'pending') return;
+    if (passage.passageId !== openedFromStoreRef.current) return; // fresh generations annotate themselves
+    if (backfilledAnnotationsRef.current.has(passage.passageId)) return;
+    backfilledAnnotationsRef.current.add(passage.passageId);
+    void regenerateAnnotation();
+  }, [c, passage, targetPassageId]);
 
   const playStudyWord = (wordId: string): void => {
     void (async () => {
@@ -1052,7 +1086,9 @@ export function ReadingRoute() {
         c.session.getState().startPassage(indexed, c.now());
         const progress = c.session.getState().toReadingProgress(c.userId);
         if (progress) await c.repos.progress.upsert(progress);
-        c.player.getState().setStatus('unavailable');
+        // Back to 'idle' (not 'unavailable'): the bar stays visible on the revisited chapter and
+        // ▶ synthesizes its audio on demand instead of hiding the player outright.
+        c.player.getState().unload();
         // Sync the address bar to the already-generated chapter so a reload/share reopens the right
         // one (the reader is URL-addressable now). The session already holds this chapter, so the
         // ReadingRoute open-effect's guard short-circuits — no redundant re-open.
@@ -1098,6 +1134,8 @@ export function ReadingRoute() {
           voiceId: voiceId || c.voiceId,
           wordData,
           illustratePassage: passageIllustrations ? c.content.illustratePassage?.bind(c.content) : undefined,
+          stagedGeneration: (c.settings.getState().generationMode ?? 'staged') === 'staged',
+          annotatePassage: c.content.annotatePassage?.bind(c.content),
         },
         effectiveSetup,
         c.userId,
@@ -1901,6 +1939,7 @@ export function SettingsRoute(): ReactNode {
   const c = useContainer();
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const generationMode = useStore(c.settings, (s) => s.generationMode);
 
   const onExport = async (includeImages: boolean): Promise<void> => {
     setExporting(true);
@@ -1938,7 +1977,9 @@ export function SettingsRoute(): ReactNode {
       onImport={(file) => void onImport(file)}
       exporting={exporting}
       importing={importing}
-    />
+    >
+      <GenerationSettingsScreen mode={generationMode} onModeChange={(mode) => c.settings.getState().setGenerationMode(mode)} />
+    </DataManagementScreen>
   );
 }
 
