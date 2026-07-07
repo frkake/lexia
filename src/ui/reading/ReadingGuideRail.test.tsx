@@ -193,17 +193,48 @@ describe('<ReadingGuideRail/>', () => {
   });
 
   it('renders cards collapsed and expands the detail on click (D-1 compact cards)', () => {
-    const { getByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
+    const { getByTestId, queryByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
     const notice = getByTestId('guide-item-notice:1');
-    // Collapsed: the explanation is not rendered until the card is opened.
+    // Collapsed: the one-line in-context meaning is already visible, but the actions are not.
     expect(notice.getAttribute('aria-expanded')).toBe('false');
-    expect(notice.textContent).not.toContain('取引を成立させる定型表現。');
+    expect(notice.textContent).toContain('取引を成立させる定型表現。');
+    expect(queryByTestId('guide-notice-jump-1')).toBeNull();
     fireEvent.click(notice);
     expect(notice.getAttribute('aria-expanded')).toBe('true');
-    expect(notice.textContent).toContain('取引を成立させる定型表現。');
+    expect(getByTestId('guide-notice-jump-1')).toBeTruthy();
     // Clicking again collapses it.
     fireEvent.click(notice);
     expect(notice.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('shows a one-line in-context meaning on collapsed notice cards (phrases / idioms / grammar)', () => {
+    const { getByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
+    // Every standalone notice card carries its explanationJa in the collapsed summary row,
+    // mirroring how study-word cards show their gloss before expanding.
+    expect(getByTestId('guide-item-notice:1').textContent).toContain('取引を成立させる定型表現。');
+    expect(getByTestId('guide-item-notice:2').textContent).toContain('短い文で場面を進める。');
+    expect(getByTestId('guide-item-notice:3').textContent).toContain('文法上の主語。');
+  });
+
+  it('auto-expands a card on hover and collapses it again on leave, keeping clicked cards open', () => {
+    const { getByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
+    const notice = getByTestId('guide-item-notice:1');
+    const study = getByTestId('guide-item-word:deal');
+
+    // Hover expands without a click; leaving collapses again.
+    fireEvent.mouseEnter(notice);
+    expect(notice.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.mouseLeave(notice);
+    expect(notice.getAttribute('aria-expanded')).toBe('false');
+
+    // A click pins the expansion: it survives the pointer leaving the card.
+    fireEvent.mouseEnter(study);
+    fireEvent.click(study);
+    fireEvent.mouseLeave(study);
+    expect(study.getAttribute('aria-expanded')).toBe('true');
+    // A second click unpins; the already-departed pointer leaves it collapsed.
+    fireEvent.click(study);
+    expect(study.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('auto-expands the guide card whose cue gets pinned so the spotlight reveals its detail (D-1)', () => {
@@ -300,7 +331,7 @@ describe('<ReadingGuideRail/>', () => {
   });
 });
 
-// ── C-1 annotation side: the cue「詳しく」detail toggle (origin / parse explanation) ──────
+// ── C-1 annotation side: the cue detailJa block (origin / parse explanation) ──────
 function makeDetailPassage(): IndexedPassage {
   const source: PassageOutput = {
     meta: { title: 't', intent: 'business', level: 'C1', newCount: 0, reviewCount: 0, approxWords: 6 },
@@ -321,30 +352,30 @@ function makeDetailPassage(): IndexedPassage {
   return tokenizer.index('p-detail', source);
 }
 
-describe('ReadingGuideRail — C-1 detailJa toggle', () => {
-  it('reveals detailJa behind a 詳しく toggle inside an expanded cue card', () => {
+describe('ReadingGuideRail — C-1 detailJa block', () => {
+  it('reveals detailJa directly inside an expanded cue card — collapse depth is capped at one level', () => {
     const { getByTestId, queryByTestId } = render(<ReadingGuideRail passage={makeDetailPassage()} words={[]} />);
     const notice = getByTestId('guide-item-notice:1');
-    // The detail toggle only exists once the card is expanded.
+    // Collapsed: no detail block yet (and no second-level 詳しく toggle exists at all).
+    expect(queryByTestId('guide-notice-detail-1')).toBeNull();
     expect(queryByTestId('guide-notice-detail-toggle-1')).toBeNull();
     fireEvent.click(notice);
-    // Compact explanationJa is shown; detailJa is hidden until the toggle is opened.
+    // Expanding the card reveals both explanationJa and detailJa with no further toggle.
     expect(notice.textContent).toContain('場の緊張をほぐす固定表現。');
-    expect(queryByTestId('guide-notice-detail-1')).toBeNull();
-    fireEvent.click(getByTestId('guide-notice-detail-toggle-1'));
     expect(getByTestId('guide-notice-detail-1').textContent).toContain('氷を割って');
+    expect(queryByTestId('guide-notice-detail-toggle-1')).toBeNull();
   });
 
-  it('auto-opens detailJa when the cue is pinned (spotlight)', () => {
+  it('shows detailJa when the cue is pinned (spotlight)', () => {
     const { getByTestId } = render(<ReadingGuideRail passage={makeDetailPassage()} words={[]} />);
     act(() => readingUiStore.getState().setPinned(1));
     expect(getByTestId('guide-item-notice:1').getAttribute('aria-expanded')).toBe('true');
     expect(getByTestId('guide-notice-detail-1').textContent).toContain('氷を割って');
   });
 
-  it('renders no 詳しく toggle for a cue without detailJa (back-compat)', () => {
+  it('renders no detail block for a cue without detailJa (back-compat)', () => {
     const { getByTestId, queryByTestId } = render(<ReadingGuideRail passage={makePassage()} words={words} />);
     fireEvent.click(getByTestId('guide-item-notice:1'));
-    expect(queryByTestId('guide-notice-detail-toggle-1')).toBeNull();
+    expect(queryByTestId('guide-notice-detail-1')).toBeNull();
   });
 });

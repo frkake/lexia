@@ -278,6 +278,7 @@ function StudyGuideCard({
   active,
   expanded,
   onToggle,
+  onHoverChange,
   placedTop,
   registerRef,
   onSelectWord,
@@ -289,6 +290,8 @@ function StudyGuideCard({
   active: boolean;
   expanded: boolean;
   onToggle: () => void;
+  /** Hover/focus intent: the rail auto-expands the hovered card and collapses it on leave. */
+  onHoverChange: (hovering: boolean) => void;
   placedTop?: number;
   registerRef: (node: HTMLDivElement | null) => void;
   onSelectWord?: (wordId: string) => void;
@@ -316,8 +319,14 @@ function StudyGuideCard({
       data-guide-kind="study"
       aria-current={active ? 'true' : undefined}
       aria-expanded={expanded}
-      onMouseEnter={() => setHover(firstCue)}
-      onMouseLeave={() => setHover(null)}
+      onMouseEnter={() => {
+        setHover(firstCue);
+        onHoverChange(true);
+      }}
+      onMouseLeave={() => {
+        setHover(null);
+        onHoverChange(false);
+      }}
       onClick={onToggle}
       style={guideCardStyle(active, placedTop)}
     >
@@ -331,8 +340,14 @@ function StudyGuideCard({
         aria-expanded={expanded}
         aria-label={`${label} の学習ガイド`}
         onClick={(event) => stopAndRun(event, onToggle)}
-        onFocus={() => setHover(firstCue)}
-        onBlur={() => setHover(null)}
+        onFocus={() => {
+          setHover(firstCue);
+          onHoverChange(true);
+        }}
+        onBlur={() => {
+          setHover(null);
+          onHoverChange(false);
+        }}
         style={summaryButtonStyle}
       >
         <span style={{ ...guideNumberStyle, background: colors.primary }}>{item.guideIndex}</span>
@@ -442,8 +457,8 @@ function NoticeGuideCard({
   item,
   active,
   expanded,
-  autoDetail,
   onToggle,
+  onHoverChange,
   placedTop,
   registerRef,
   onMarkUnknown,
@@ -452,9 +467,9 @@ function NoticeGuideCard({
   item: ReadingGuideNoticeItem;
   active: boolean;
   expanded: boolean;
-  /** True when this cue is pinned (C-1): its detailJa auto-opens rather than needing a second click. */
-  autoDetail: boolean;
   onToggle: () => void;
+  /** Hover/focus intent: the rail auto-expands the hovered card and collapses it on leave. */
+  onHoverChange: (hovering: boolean) => void;
   placedTop?: number;
   registerRef: (node: HTMLDivElement | null) => void;
   onMarkUnknown?: (targetId: string) => void | Promise<void>;
@@ -465,19 +480,15 @@ function NoticeGuideCard({
   const isUnknownPending = markingUnknownId !== null;
   const isMarkingUnknown = markingUnknownId === markTargetId;
   const detailJa = item.cue.detailJa;
-  const [detailOpen, setDetailOpen] = useState(false);
-  // Pinning the cue (in-text badge / jump) reveals its deeper explanation automatically (C-1).
-  useEffect(() => {
-    if (autoDetail && detailJa) setDetailOpen(true);
-  }, [autoDetail, detailJa]);
   const setHover = readingUiStore.getState().setHover;
   const jumpToProse = (): void => {
     readingUiStore.getState().setPinned(item.cue.index);
     jumpToBadge(item.cue.index);
   };
 
-  // D-1 compact card: the summary shows number · expression · category chip; the explanation and
-  // the actions (jump to the prose, mark unknown) live in the expand-on-click detail.
+  // D-1 compact card: the summary shows number · expression · category chip · one-line in-context
+  // meaning; the full explanation and the actions (jump to the prose, mark unknown) live in the
+  // expand-on-hover/click detail.
   return (
     <article
       ref={registerRef}
@@ -486,8 +497,14 @@ function NoticeGuideCard({
       data-guide-kind="notice"
       aria-current={active ? 'true' : undefined}
       aria-expanded={expanded}
-      onMouseEnter={() => setHover(item.cue.index)}
-      onMouseLeave={() => setHover(null)}
+      onMouseEnter={() => {
+        setHover(item.cue.index);
+        onHoverChange(true);
+      }}
+      onMouseLeave={() => {
+        setHover(null);
+        onHoverChange(false);
+      }}
       onClick={onToggle}
       style={guideCardStyle(active, placedTop)}
     >
@@ -499,36 +516,31 @@ function NoticeGuideCard({
         aria-controls={`notice-badge-${item.cue.index}`}
         aria-label={`${item.expression} の学習ガイド`}
         onClick={(event) => stopAndRun(event, onToggle)}
-        onFocus={() => setHover(item.cue.index)}
-        onBlur={() => setHover(null)}
+        onFocus={() => {
+          setHover(item.cue.index);
+          onHoverChange(true);
+        }}
+        onBlur={() => {
+          setHover(null);
+          onHoverChange(false);
+        }}
         style={summaryButtonStyle}
       >
         <span style={{ ...noticeNumberStyle, background: style.numberColor }}>{item.guideIndex}</span>
         <span style={compactExpressionStyle}>{item.expression}</span>
         <span style={{ ...noticeChipStyle, ...chipNowrapStyle, color: style.color, background: style.bg }}>{style.label}</span>
+        {!expanded ? <span style={compactMeaningStyle}>{item.cue.explanationJa}</span> : null}
         <span aria-hidden="true" style={chevronStyle(expanded)}>›</span>
       </button>
 
       {expanded ? (
         <div style={expandedBodyStyle}>
           <div style={noticeExplanationStyle}>{item.cue.explanationJa}</div>
+          {/* Collapse depth is capped at one level: detailJa renders directly in the expanded body
+              instead of behind a second「詳しく」toggle. */}
           {detailJa ? (
-            <div style={detailBlockStyle}>
-              <button
-                type="button"
-                data-testid={`guide-notice-detail-toggle-${item.cue.index}`}
-                aria-expanded={detailOpen}
-                onClick={(event) => stopAndRun(event, () => setDetailOpen((v) => !v))}
-                onKeyDown={(event) => event.stopPropagation()}
-                style={detailToggleStyle}
-              >
-                {detailOpen ? '詳しく ▾' : '詳しく ▸'}
-              </button>
-              {detailOpen ? (
-                <div data-testid={`guide-notice-detail-${item.cue.index}`} style={detailTextStyle}>
-                  {detailJa}
-                </div>
-              ) : null}
+            <div data-testid={`guide-notice-detail-${item.cue.index}`} style={detailTextStyle}>
+              {detailJa}
             </div>
           ) : null}
           <div style={actionRowStyle}>
@@ -591,6 +603,9 @@ export function ReadingGuideRail({
   // re-triggers the measure→place pass even when the prose anchors did not move.
   const [measureTick, setMeasureTick] = useState(0);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  // Card currently hovered (or keyboard-focused): it auto-expands without needing a click, and
+  // collapses again on leave unless the click-pinned `expandedIds` also holds it.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const railBodyRef = useRef<HTMLDivElement | null>(null);
   const activeCueIndex = useEffectiveCue();
@@ -600,6 +615,7 @@ export function ReadingGuideRail({
   // Cards collapse back to their compact summary when the passage changes.
   useEffect(() => {
     setExpandedIds(new Set());
+    setHoveredId(null);
   }, [passage.passageId]);
 
   // Preserve the spotlight flow: pinning a cue (clicking its in-text badge or a jump action) auto-opens
@@ -638,7 +654,7 @@ export function ReadingGuideRail({
       const origin = body.getBoundingClientRect().top - frameTop;
       setRailOriginTop((prev) => (prev === origin ? prev : origin));
     }
-  }, [aligned, builtGuide, anchors, measureTick, expandedIds]);
+  }, [aligned, builtGuide, anchors, measureTick, expandedIds, hoveredId]);
 
   // Remeasure on any width/height change of the rail body or an individual card (reflow / expand).
   useEffect(() => {
@@ -649,7 +665,7 @@ export function ReadingGuideRail({
     observer.observe(body);
     for (const node of itemRefs.current.values()) observer.observe(node);
     return () => observer.disconnect();
-  }, [aligned, builtGuide, expandedIds]);
+  }, [aligned, builtGuide, expandedIds, hoveredId]);
 
   const toggleExpand = (id: string): void => {
     setExpandedIds((prev) => {
@@ -704,7 +720,10 @@ export function ReadingGuideRail({
             if (node) itemRefs.current.set(item.id, node);
             else itemRefs.current.delete(item.id);
           };
-          const expanded = expandedIds.has(item.id);
+          const expanded = expandedIds.has(item.id) || hoveredId === item.id;
+          const onHoverChange = (hovering: boolean): void => {
+            setHoveredId((prev) => (hovering ? item.id : prev === item.id ? null : prev));
+          };
           return item.kind === 'study' ? (
             <StudyGuideCard
               key={item.id}
@@ -712,6 +731,7 @@ export function ReadingGuideRail({
               active={active}
               expanded={expanded}
               onToggle={() => toggleExpand(item.id)}
+              onHoverChange={onHoverChange}
               placedTop={placedTop}
               registerRef={registerRef}
               onSelectWord={onSelectWord}
@@ -725,8 +745,8 @@ export function ReadingGuideRail({
               item={item}
               active={active}
               expanded={expanded}
-              autoDetail={pinnedCueIndex === item.cue.index}
               onToggle={() => toggleExpand(item.id)}
+              onHoverChange={onHoverChange}
               placedTop={placedTop}
               registerRef={registerRef}
               onMarkUnknown={onMarkUnknown ? markUnknown : undefined}
@@ -985,24 +1005,9 @@ const noticeExplanationStyle: CSSProperties = {
   color: colors.inkSoft,
 };
 
-/** C-1: the expandable「詳しく」detail block (origin / parse explanation) under a cue's explanationJa. */
-const detailBlockStyle: CSSProperties = {
-  marginTop: 8,
-};
-
-const detailToggleStyle: CSSProperties = {
-  fontFamily: fonts.ui,
-  fontSize: 11,
-  fontWeight: 600,
-  color: colors.primary,
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  cursor: 'pointer',
-};
-
+/** C-1: the deeper detailJa block (origin / parse explanation) shown directly under explanationJa. */
 const detailTextStyle: CSSProperties = {
-  marginTop: 6,
+  marginTop: 8,
   padding: '8px 10px',
   background: colors.surfaceSubtle,
   border: `1px solid ${colors.borderCard}`,
